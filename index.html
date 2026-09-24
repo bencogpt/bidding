@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OBMS · Organizational Bid Management System</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%23d8a23a'/><text x='50' y='70' font-size='58' font-family='sans-serif' font-weight='700' fill='%23231706' text-anchor='middle'>O</text></svg>">
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">O</div>
+      <div>
+        <div class="name">OBMS</div>
+        <div class="sub">Bid Management</div>
+      </div>
+    </div>
+    <nav class="nav">
+      <div class="group-label">Workspace</div>
+      <button class="navitem active" data-view="dashboard"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/></svg> Dashboard</button>
+      <button class="navitem" data-view="bids"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v4H4zM4 10h10M4 14h16M4 18h10"/></svg> All Bids <span class="badge">4</span></button>
+      <button class="navitem" data-view="review"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> Review Queue <span class="badge">2</span></button>
+
+      <div class="group-label">Suppliers & Evaluation</div>
+      <button class="navitem" data-view="suppliers"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l1-5h16l1 5M3 9v11h18V9M3 9h18M9 13h6"/></svg> Suppliers</button>
+      <button class="navitem" data-view="ai"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M3 12h3M18 12h3M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/><circle cx="12" cy="12" r="3.2"/></svg> AI Evaluation <span class="badge">1</span></button>
+
+      <div class="group-label">Governance</div>
+      <button class="navitem" data-view="audit"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 13h6M9 17h4"/></svg> Audit Trail</button>
+      <a href="supplier.html" target="_blank"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg> Supplier Portal ↗</a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="role-card">
+        <div class="lbl">Viewing as (RBAC)</div>
+        <select id="role-select">
+          <option value="bid_manager">Dana Reyes · Bid Manager</option>
+          <option value="internal_customer">Marcus Hale · Internal Customer</option>
+          <option value="legal">Priya Nandakumar · Legal</option>
+          <option value="finance">Sven Olsson · Finance</option>
+          <option value="inspection">Lena Fischer · Inspection</option>
+        </select>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <div class="main">
+    <header class="topbar">
+      <div class="crumbs" id="crumbs"><span>OBMS</span><span class="sep">/</span><b>Dashboard</b></div>
+      <div class="search"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg><input placeholder="Search bids, suppliers, documents…"></div>
+      <div class="who">
+        <div class="meta" style="text-align:right"><b id="who-name">Dana Reyes</b><br><span id="who-title">Bid Manager</span></div>
+        <div class="avatar" id="who-avatar">DR</div>
+      </div>
+    </header>
+
+    <div class="content">
+
+      <!-- ===== DASHBOARD ===== -->
+      <section class="view active" id="view-dashboard">
+        <div class="page-head">
+          <div>
+            <div class="eyebrow">Procurement Office</div>
+            <h1>Bid Operations Dashboard</h1>
+            <p>Single source of truth across the full bid lifecycle — from internal initiation and cross-departmental review to public solicitation and AI-assisted evaluation.</p>
+          </div>
+          <div class="actions">
+            <button class="btn ghost" onclick="nav('audit')">Audit trail</button>
+            <button class="btn gold" onclick="newBid()"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg> New Bid</button>
+          </div>
+        </div>
+
+        <div class="grid kpi" id="kpis"></div>
+
+        <h3 style="font-size:15px;margin:30px 0 14px">Lifecycle Pipeline</h3>
+        <div class="grid" id="pipeline" style="grid-template-columns:repeat(6,1fr);gap:12px"></div>
+
+        <h3 style="font-size:15px;margin:30px 0 14px">Recent Bid Projects</h3>
+        <div class="card">
+          <table class="tbl">
+            <thead><tr><th>Bid</th><th>Category</th><th>Status</th><th>Responses</th><th>Deadline</th><th>Est. Value</th><th></th></tr></thead>
+            <tbody id="bid-table-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ===== ALL BIDS ===== -->
+      <section class="view" id="view-bids">
+        <div class="page-head">
+          <div><div class="eyebrow">Portfolio</div><h1>All Bids</h1><p>Every bid project and its lifecycle status. Select a row to open the collaborative workspace.</p></div>
+          <div class="actions"><button class="btn gold" onclick="newBid()"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg> New Bid</button></div>
+        </div>
+        <div class="card">
+          <table class="tbl">
+            <thead><tr><th>Bid</th><th>Category</th><th>Status</th><th>Responses</th><th>Deadline</th><th>Est. Value</th><th></th></tr></thead>
+            <tbody id="bid-table-body-all"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ===== REVIEW QUEUE ===== -->
+      <section class="view" id="view-review">
+        <div class="page-head">
+          <div><div class="eyebrow">Internal Collaboration</div><h1>Review Queue</h1><p>Cross-departmental review status per bid. Legal, Finance, and Inspection collaborate in a shared, non-siloed workspace.</p></div>
+        </div>
+        <div id="review-queue"></div>
+      </section>
+
+      <!-- ===== WORKSPACE ===== -->
+      <section class="view" id="view-workspace"></section>
+
+      <!-- ===== SUPPLIERS ===== -->
+      <section class="view" id="view-suppliers">
+        <div class="page-head">
+          <div><div class="eyebrow">External Vendors</div><h1>Suppliers</h1><p>Registered suppliers require Bid Manager approval before access is granted (FR-08). Each is strictly isolated from the others.</p></div>
+        </div>
+        <div class="notice info" style="margin-bottom:18px"><svg class="ni" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg><div><b>Supplier isolation (FR-09 / §6).</b> Suppliers can never discover, infer, or access any information about other suppliers — identity, submission, pricing, or participation. Codes shown here are visible to internal staff only.</div></div>
+        <div class="card">
+          <table class="tbl">
+            <thead><tr><th>Supplier</th><th>Blind Code</th><th>Registration</th><th>Participation</th><th></th></tr></thead>
+            <tbody id="supplier-table-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ===== AI EVALUATION ===== -->
+      <section class="view" id="view-ai"></section>
+
+      <!-- ===== AUDIT ===== -->
+      <section class="view" id="view-audit">
+        <div class="page-head">
+          <div><div class="eyebrow">Compliance</div><h1>Audit Trail</h1><p>Immutable log of all system actions with actor identity, timestamp, and detail (FR-14). Exportable for compliance review.</p></div>
+          <div class="actions"><button class="btn ghost" onclick="toast('Exported audit log (CSV) — demo','audit')">Export CSV</button><button class="btn ghost" onclick="toast('Exported audit log (PDF) — demo','audit')">Export PDF</button></div>
+        </div>
+        <div class="card">
+          <table class="tbl">
+            <thead><tr><th>Timestamp</th><th>Actor</th><th>Action</th><th>Detail</th></tr></thead>
+            <tbody id="audit-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<script src="assets/data.js"></script>
+<script src="assets/app.js"></script>
+<script>
+  // Mirror bid table into "All Bids" + new-bid modal
+  function newBid() {
+    openModal(`
+      <div class="modal-head">${icon('plus')}<h3>Create New Bid Project</h3><button class="x" onclick="closeModal()">✕</button></div>
+      <div class="modal-body">
+        <div class="field"><label>Bid Title</label><input placeholder="e.g. Data Center Cooling Upgrade"></div>
+        <div class="field"><label>Originating Business Unit</label><input value="Information Systems"></div>
+        <div class="row gap12"><div class="field" style="flex:1"><label>Category</label><select><option>IT Infrastructure</option><option>Security Infrastructure</option><option>Facilities</option><option>Logistics</option></select></div>
+        <div class="field" style="flex:1"><label>Response Deadline</label><input type="date" value="2026-08-15"></div></div>
+        <div class="field"><label>Description / Scope</label><textarea style="min-height:70px" placeholder="Base scope, specifications, business context…"></textarea></div>
+        <div class="notice info">${icon('bid','ni')}<div>A unique Bid ID is auto-generated and the project opens in <b>Draft</b>. The Bid Manager is notified and assumes ownership (FR-01).</div></div>
+      </div>
+      <div class="modal-foot"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn gold" onclick="closeModal();toast('Bid <b>BID-2026-0154</b> created in Draft','plus')">Create Bid</button></div>`);
+  }
+  // populate "All Bids" table after data loads
+  document.addEventListener('DOMContentLoaded', () => setTimeout(() => renderBidTable('bid-table-body-all'), 0));
+</script>
+</body>
+</html>

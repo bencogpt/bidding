@@ -1,0 +1,21 @@
+{
+  "name": "obms-tender-system",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OBMS — Organizational Bid Management / Tender System on Firebase",
+  "workspaces": [
+    "shared",
+    "functions",
+    "web"
+  ],
+  "scripts": {
+    "build:shared": "npm run build --workspace shared",
+    "build:functions": "npm run build --workspace functions",
+    "build:web": "npm run build --workspace web",
+    "build": "npm run build:shared && npm run build:functions && npm run build:web",
+    "dev:web": "npm run dev --workspace web",
+    "emulators": "firebase emulators:start",
+    "seed": "node functions/lib/seed.js",
+    "test:rules": "npm run test --workspace functions"
+  }
+}

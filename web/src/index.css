@@ -1,0 +1,76 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: theme('colors.paper.DEFAULT');
+  color: theme('colors.tx.DEFAULT');
+  font-family: theme('fontFamily.sans');
+}
+
+@layer components {
+  .card {
+    @apply bg-surface border border-paper-2 rounded-lg shadow-card;
+  }
+  .btn {
+    @apply inline-flex items-center gap-2 rounded px-4 py-2 text-sm font-semibold
+      border border-paper-2 bg-surface text-tx transition hover:bg-paper-2 cursor-pointer
+      disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-gold {
+    @apply bg-gold text-ink-900 border-gold hover:bg-gold-deep hover:text-white;
+  }
+  .btn-sm {
+    @apply px-3 py-1 text-xs;
+  }
+  .btn-primary {
+    @apply bg-ink-800 text-white border-ink-800 hover:bg-ink-700;
+  }
+  .input {
+    @apply w-full rounded border border-paper-2 bg-surface px-3 py-2 text-sm
+      outline-none focus:border-teal focus:ring-2 focus:ring-teal-soft;
+  }
+  .label {
+    @apply block text-sm font-semibold text-tx-soft mb-1;
+  }
+  .chip {
+    @apply inline-flex items-center rounded-full bg-paper-2 px-2.5 py-0.5 text-xs font-medium text-tx-soft;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold;
+  }
+}
+
+/* Print: show only the report area (used by the "download PDF" action). */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .print-area,
+  .print-area * {
+    visibility: visible;
+  }
+  .print-area {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    padding: 0 12px;
+  }
+  .no-print {
+    display: none !important;
+  }
+  @page {
+    margin: 14mm;
+  }
+}

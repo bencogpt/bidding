@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Supplier Portal · OBMS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%23d8a23a'/><text x='50' y='70' font-size='58' font-family='sans-serif' font-weight='700' fill='%23231706' text-anchor='middle'>O</text></svg>">
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body class="supplier-shell">
+
+  <!-- ===== TOP ===== -->
+  <div class="sup-top">
+    <div class="inner">
+      <div class="logo" style="width:32px;height:32px;border-radius:8px;background:linear-gradient(145deg,#d8a23a,#a9781f);display:grid;place-items:center;color:#231706;font-family:var(--font-display);font-weight:700">O</div>
+      <div>
+        <div style="font-family:var(--font-display);font-weight:600;font-size:15px">OBMS Supplier Portal</div>
+        <div style="font-size:11px;color:var(--text-inv-soft);letter-spacing:.12em;text-transform:uppercase">Northbridge Authority · Procurement</div>
+      </div>
+      <div class="right">
+        <span class="iso-badge"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg> Private &amp; Isolated Session</span>
+        <div class="avatar" id="sup-av">AI</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sup-wrap">
+
+    <!-- ===== Identity / isolation note ===== -->
+    <div class="row spread center wrap gap16" style="margin-bottom:24px">
+      <div>
+        <div class="eyebrow" style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--gold-deep);font-weight:600">Invitation to Bid</div>
+        <h1 style="font-size:26px;margin-top:6px" id="bid-title"></h1>
+        <div class="row gap12 center wrap mt8">
+          <span class="tag" id="bid-id"></span>
+          <span class="chip" id="bid-cat"></span>
+          <span class="chip" id="bid-org"></span>
+        </div>
+      </div>
+      <div class="card pad" style="text-align:right">
+        <div class="muted" style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:600">Signed in as</div>
+        <div style="font-weight:600;font-size:15px;margin-top:4px" id="sup-name"></div>
+        <div class="muted mono" style="font-size:12px" id="sup-contact"></div>
+      </div>
+    </div>
+
+    <!-- ===== Isolation guarantee banner ===== -->
+    <div class="notice ok" style="margin-bottom:22px"><svg class="ni" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>
+      <div><b>You are the only participant you can see.</b> This portal shows no other supplier's identity, submission, pricing, count, or participation status. Your response is stored in a partitioned private space and is invisible to the buyer until the deadline passes.</div>
+    </div>
+
+    <!-- ===== Countdown ===== -->
+    <div class="card pad" style="margin-bottom:22px">
+      <div class="row spread center wrap gap16">
+        <div>
+          <div class="row gap8 center" style="color:var(--gold-deep);font-weight:600;font-size:13px"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> Submission window closes in</div>
+          <div class="muted" style="font-size:12.5px;margin-top:4px">Deadline: <b id="deadline-str"></b> · identical for all suppliers</div>
+        </div>
+        <div class="countdown" id="countdown">
+          <div class="cd-unit"><div class="cd-num" id="cd-d">00</div><div class="cd-lbl">Days</div></div>
+          <div class="cd-unit"><div class="cd-num" id="cd-h">00</div><div class="cd-lbl">Hours</div></div>
+          <div class="cd-unit"><div class="cd-num" id="cd-m">00</div><div class="cd-lbl">Mins</div></div>
+          <div class="cd-unit"><div class="cd-num" id="cd-s">00</div><div class="cd-lbl">Secs</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid c2" style="align-items:start">
+
+      <!-- ===== LEFT: submission ===== -->
+      <div>
+        <div class="card">
+          <div class="panel-head"><h3>Your Submission</h3><span class="badge-st st-reviewing" style="margin-left:auto" id="sub-status"><span class="dot"></span>Editable until deadline</span></div>
+          <div style="padding:18px">
+            <div class="dropzone" id="dropzone" onclick="addFile()">
+              <div class="dz-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="width:24px;height:24px"><path d="M12 16V4M6 10l6-6 6 6M4 20h16"/></svg></div>
+              <h4>Upload response documents</h4>
+              <p>Technical response, pricing sheet, supporting files · PDF, DOCX, XLSX, ZIP · up to 50 MB</p>
+            </div>
+            <div id="file-list" style="margin-top:16px"></div>
+            <div class="row gap8 mt16 wrap">
+              <button class="btn gold" onclick="submitNow()"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/></svg> Save Submission</button>
+              <button class="btn ghost" onclick="toast('Submission revised — previous version retained','upload')">Revise</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card mt24">
+          <div class="panel-head"><h3>Ask a Question</h3><span class="chip" style="margin-left:auto">Supplier Q&amp;A · AI</span></div>
+          <div style="padding:18px">
+            <div class="notice info" style="margin-bottom:14px"><svg class="ni" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M3 12h3M18 12h3M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/><circle cx="12" cy="12" r="3.2"/></svg><div>The Q&amp;A assistant answers using <b>only the published bid document</b> — no internal information is ever revealed (v2 preview).</div></div>
+            <div class="field mb0"><textarea placeholder="e.g. What is the required enclosure rating for exterior units?" style="min-height:60px"></textarea></div>
+            <button class="btn sm mt12" onclick="toast('Question submitted — answered from public bid only','ai')">Send question</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== RIGHT: public docs + status ===== -->
+      <div>
+        <div class="card">
+          <div class="panel-head"><h3>Published Bid Documents</h3></div>
+          <div id="public-docs"></div>
+        </div>
+
+        <div class="card pad mt24">
+          <h3 style="font-size:14px;margin-bottom:12px">Submission Checklist</h3>
+          <div class="stack gap12">
+            <div class="row gap8 center"><span class="comp-ico comp-met"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span><span style="font-size:13px">Technical response uploaded</span></div>
+            <div class="row gap8 center"><span class="comp-ico comp-met"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span><span style="font-size:13px">Pricing sheet uploaded</span></div>
+            <div class="row gap8 center"><span class="comp-ico comp-met"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span><span style="font-size:13px">Compliance matrix uploaded</span></div>
+            <div class="row gap8 center"><span class="comp-ico comp-partial"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01M10.3 3.9l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3l-8-14a2 2 0 0 0-3.4 0z"/></svg></span><span style="font-size:13px">References (optional)</span></div>
+          </div>
+        </div>
+
+        <div class="card pad mt24" style="background:var(--surface-2)">
+          <div class="row gap8 center" style="color:var(--text-soft);font-weight:600;font-size:13px"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v4H4zM4 10h10M4 14h16M4 18h10"/></svg> What happens after the deadline?</div>
+          <p class="muted" style="font-size:12.5px;margin:10px 0 0">At the deadline your submission locks automatically — no further edits. The buyer's evaluation team then reviews all sealed responses together, assisted by the AI comparison engine. You will be notified of the award decision.</p>
+        </div>
+      </div>
+    </div>
+
+    <p class="muted" style="text-align:center;font-size:12px;margin-top:40px">OBMS Prototype · Confidential — Internal Use Only · <a href="index.html" style="color:var(--gold-deep);font-weight:600">← Back to internal portal (demo)</a></p>
+  </div>
+
+<script src="assets/data.js"></script>
+<script src="assets/app.js"></script>
+<script>
+  const ctx = SUPPLIER_CTX;
+  document.getElementById('bid-title').textContent = ctx.bid.title;
+  document.getElementById('bid-id').textContent = ctx.bid.id;
+  document.getElementById('bid-cat').textContent = ctx.bid.category;
+  document.getElementById('bid-org').textContent = ctx.bid.org;
+  document.getElementById('sup-name').textContent = ctx.account;
+  document.getElementById('sup-contact').textContent = ctx.contact;
+  document.getElementById('sup-av').textContent = ctx.account.split(' ').map(w => w[0]).slice(0,2).join('');
+  document.getElementById('deadline-str').textContent = fmtDateTime(ctx.bid.deadline);
+
+  // public docs
+  document.getElementById('public-docs').innerHTML = ctx.publicDocs.map(d => `
+    <div class="doc-row">${fileIco(d.type)}
+      <div class="d-main"><div class="d-name">${d.name}</div><div class="d-meta">${d.size} · published ${fmtDate(ctx.bid.published)}</div></div>
+      <button class="btn sm ghost" onclick="toast('Opening document (demo)','doc')">View</button>
+    </div>`).join('');
+
+  // submission files
+  let files = [...ctx.submission];
+  function renderFiles() {
+    document.getElementById('file-list').innerHTML = files.length ? files.map((f, i) => `
+      <div class="doc-row" style="border:1px solid var(--line);border-radius:10px;margin-bottom:8px;padding:11px 14px">
+        ${fileIco(f.type)}
+        <div class="d-main"><div class="d-name" style="font-size:13px">${f.name}</div><div class="d-meta">${f.size} · uploaded ${f.at}</div></div>
+        <button class="btn sm ghost" onclick="removeFile(${i})">Remove</button>
+      </div>`).join('') : '<div class="muted" style="font-size:12.5px;padding:8px 2px">No files uploaded yet.</div>';
+  }
+  function addFile() {
+    const n = files.length + 1;
+    files.push({ name: 'Supporting_Document_' + n + '.pdf', type: 'pdf', size: (Math.floor(2 + n) ) + '.1 MB', at: 'just now' });
+    renderFiles(); toast('File added to your private submission','upload');
+  }
+  function removeFile(i) { files.splice(i, 1); renderFiles(); toast('File removed','x'); }
+  function submitNow() { toast('Submission saved — editable until the deadline','check'); }
+  renderFiles();
+
+  // countdown
+  const target = new Date(ctx.bid.deadline).getTime();
+  function pad(n) { return String(n).padStart(2, '0'); }
+  function tickCountdown() {
+    const now = Date.now(); let diff = Math.max(0, target - now);
+    const d = Math.floor(diff / 86400000); diff -= d * 86400000;
+    const h = Math.floor(diff / 3600000); diff -= h * 3600000;
+    const m = Math.floor(diff / 60000); diff -= m * 60000;
+    const s = Math.floor(diff / 1000);
+    document.getElementById('cd-d').textContent = pad(d);
+    document.getElementById('cd-h').textContent = pad(h);
+    document.getElementById('cd-m').textContent = pad(m);
+    document.getElementById('cd-s').textContent = pad(s);
+    if (target - now <= 0) {
+      document.getElementById('sub-status').outerHTML = '<span class="badge-st st-blocking" style="margin-left:auto"><span class="dot"></span>Locked — deadline passed</span>';
+      document.getElementById('dropzone').style.pointerEvents = 'none';
+      document.getElementById('dropzone').style.opacity = '.5';
+    }
+  }
+  tickCountdown(); setInterval(tickCountdown, 1000);
+</script>
+</body>
+</html>

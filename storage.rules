@@ -1,0 +1,26 @@
+rules_version = '2';
+
+// Storage is private by default. Sensitive documents (exported tender PDFs) are served
+// only via short-lived signed URLs issued by a Cloud Function — never public.
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() { return request.auth != null; }
+    function role() { return isSignedIn() ? request.auth.token.role : ''; }
+    function supplierId() { return isSignedIn() ? request.auth.token.supplierId : ''; }
+
+    // Supplier submission uploads: a supplier may write only under their own folder.
+    match /tenders/{tenderId}/submissions/{ownerSupplierId}/{fileName} {
+      allow read: if role() == 'tender_manager'
+        || (role() == 'supplier' && supplierId() == ownerSupplierId);
+      allow write: if role() == 'supplier'
+        && supplierId() == ownerSupplierId
+        && request.resource.size < 50 * 1024 * 1024;
+    }
+
+    // Everything else (exported tender PDFs, templates) is function-only via signed URLs.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

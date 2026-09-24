@@ -1,0 +1,136 @@
+rules_version = '2';
+
+// OBMS Tender System — Firestore Security Rules
+// Principle (from procurement constitution): security rules are a HARD GATE.
+// All status transitions / privileged writes go through Cloud Functions (Admin SDK
+// bypasses these rules). The client may only do the narrow reads/writes allowed below.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---- helpers ----
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function role() {
+      return isSignedIn() ? request.auth.token.role : '';
+    }
+    function isInternal() {
+      return role() in ['tender_manager', 'requester', 'legal', 'security', 'finance'];
+    }
+    function isManager() {
+      return role() == 'tender_manager';
+    }
+    function isSupplier() {
+      return role() == 'supplier';
+    }
+    function supplierId() {
+      return isSignedIn() ? request.auth.token.supplierId : '';
+    }
+    // a supplier has access to a tender iff an access doc keyed by their supplierId exists
+    function supplierHasAccess(tenderId) {
+      return isSupplier()
+        && supplierId() != ''
+        && exists(/databases/$(database)/documents/tenders/$(tenderId)/access/$(supplierId()));
+    }
+    function canSeeTender(tenderId) {
+      return isInternal() || supplierHasAccess(tenderId);
+    }
+
+    // ---- users ----
+    match /users/{uid} {
+      allow read: if isSignedIn() && (request.auth.uid == uid || isManager());
+      allow write: if false; // function-only (setUserRole / seed)
+    }
+
+    // ---- suppliers (master data) ----
+    match /suppliers/{supplierDocId} {
+      allow read: if isInternal() || (isSupplier() && supplierId() == supplierDocId);
+      allow write: if false; // function-only
+    }
+
+    // ---- templates ----
+    match /templates/{templateId} {
+      allow read: if isInternal();
+      allow write: if false; // function-only (seed / manager via function)
+    }
+
+    // ---- tenders ----
+    match /tenders/{tenderId} {
+      allow read: if canSeeTender(tenderId);
+      allow write: if false; // function-only (FSM, audit)
+
+      // access grants. Read authorizes on the principalId FIELD (not the doc id) so the
+      // supplier portal's collectionGroup query `where('principalId','==', myId)` is allowed.
+      match /access/{principalId} {
+        allow read: if isInternal()
+          || (isSupplier() && resource.data.principalId == supplierId());
+        allow write: if false; // function-only (grantAccess / revokeAccess)
+      }
+
+      // clarification questions — authorized suppliers see each other's questions, but these
+      // documents are ANONYMOUS: the asker's identity lives in /questionAuthors below. Rules
+      // cannot hide fields from a read, so identity must not be stored here at all.
+      match /questions/{questionId} {
+        allow read: if canSeeTender(tenderId);
+        // function-only (askQuestion). Client creation is denied: it was the one path by which a
+        // supplier could write identity fields back into an anonymous question document.
+        allow write: if false;
+      }
+
+      // who asked each question. Internal users see all; a supplier sees ONLY their own, which
+      // lets the UI mark their question without revealing any competitor's participation.
+      // Authorized on the principal FIELD (like /access above) so the supplier's
+      // where('supplierId','==',me) query is allowed.
+      match /questionAuthors/{questionId} {
+        allow read: if isInternal()
+          || (isSupplier() && resource.data.supplierId == supplierId());
+        allow write: if false; // function-only (askQuestion)
+      }
+
+      // manager answers — visible to all authorized principals
+      match /answers/{answerId} {
+        allow read: if canSeeTender(tenderId);
+        allow write: if false; // function-only (answerQuestions)
+      }
+
+      // submissions — supplier owns their own private space; status is function-only
+      match /submissions/{ownerSupplierId} {
+        allow read: if isManager()
+          || (isSupplier() && supplierId() == ownerSupplierId);
+        // supplier may write file metadata to own submission; status stays function-only
+        allow create: if isSupplier()
+          && supplierId() == ownerSupplierId
+          && supplierHasAccess(tenderId)
+          && (!('status' in request.resource.data) || request.resource.data.status == 'editable');
+        allow update: if isSupplier()
+          && supplierId() == ownerSupplierId
+          && supplierHasAccess(tenderId)
+          && !('status' in request.resource.data.diff(resource.data).affectedKeys());
+        allow delete: if false;
+      }
+    }
+
+    // ---- audit log (immutable, append-only via functions) ----
+    match /auditLog/{entryId} {
+      allow read: if isInternal();
+      allow write: if false; // function-only
+    }
+
+    // Collection-group reads. Nested match rules above secure direct gets/writes; these
+    // additional rules authorize collectionGroup() queries (supplier portal + reports).
+    match /{path=**}/access/{accessId} {
+      allow read: if isInternal()
+        || (isSupplier() && resource.data.principalId == supplierId());
+    }
+    match /{path=**}/submissions/{ownerSupplierId} {
+      allow read: if isManager()
+        || (isSupplier() && supplierId() == ownerSupplierId);
+    }
+
+    // default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

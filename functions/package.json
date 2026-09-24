@@ -1,0 +1,31 @@
+{
+  "name": "functions",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && npm run bundle",
+    "bundle": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=lib/index.js --external:firebase-admin --external:firebase-functions --external:googleapis --external:@anthropic-ai/sdk --external:zod",
+    "build:watch": "tsc -w -p tsconfig.json",
+    "serve": "npm run build && firebase emulators:start --only functions",
+    "seed": "node lib/seed.js",
+    "test": "npm run build && node --test lib/test/*.test.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.65.0",
+    "firebase-admin": "^12.6.0",
+    "firebase-functions": "^5.1.1",
+    "googleapis": "^144.0.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^3.0.4",
+    "esbuild": "^0.23.1",
+    "firebase": "^10.13.0",
+    "typescript": "^5.5.4"
+  }
+}
