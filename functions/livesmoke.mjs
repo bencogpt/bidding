@@ -29,7 +29,9 @@ try {
   });
   console.log('✓ createTender live →', JSON.stringify(r.data));
   const doc = await httpsCallable(fns, 'getTenderDocument')({ tenderId: r.data.id });
-  console.log('✓ getTenderDocument live → kind:', doc.data.kind, '| length:', (doc.data.content || '').length);
+  // dev/HTML mode returns `content`; real Google Docs mode returns `dataBase64`.
+  const payload = doc.data.kind === 'pdf' ? doc.data.dataBase64 : doc.data.content;
+  console.log('✓ getTenderDocument live → kind:', doc.data.kind, '| length:', (payload || '').length);
   console.log('\n✅ LIVE STACK OK (auth + functions + firestore + storage)');
   process.exit(0);
 } catch (e) {

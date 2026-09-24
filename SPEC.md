@@ -521,8 +521,8 @@ native mobile.
 ## 10. Known gaps, blockers, and environment constraints
 
 **G-1 [D]** `beforesignin` blocking function disabled — needs Identity Platform (GCIP) enabled by the
-project owner. While it is exported, *every* full functions deploy aborts, so deploys must be scoped
-(`--only functions:<name>,hosting`).
+project owner. It is currently **commented out**, so a full `--only functions` deploy works fine
+(confirmed 2026-09-24, 22 functions). Scoped deploys are only required while it is exported.
 
 **G-2 ~~[D]~~ resolved/incorrect** — Google Docs real mode is **on** in production; see FR-D6.
 The remaining Google risk is token durability: `GOOGLE_OAUTH_REFRESH_TOKEN` is still at secret
@@ -589,7 +589,9 @@ requirement is settled it also gets promoted into the matching `6.x` / `7` / `8`
 
 | Date | ID | Type | Status | Description |
 |---|---|---|---|---|
-| 2026-09-24 | REV-015 | task | [D] | **Migration pending.** `functions/migrate-anonymize-questions.mjs` must run (with `--apply`) before the new rules deploy. Dry run against live found **4 existing questions still carrying asker names**, from two suppliers on the same tender — the exact exposure this change closes. |
+| 2026-09-24 | REV-017 | correction | [B] | The 4 questions found carrying asker names were **seeded demo data** (`sup_aegis`/`sup_meridian` from `seed.ts`), not real suppliers, and all 6 live tenders are test artifacts. Earlier framing of this as a live confidentiality incident was wrong. |
+| 2026-09-24 | REV-016 | deploy | [B] | **REV-002…REV-014 deployed to production.** Order: migration → rules/storage/hosting → all 22 functions. Verified live: supplier sees 4 questions with zero identity fields and is denied listing `questionAuthors`; manager resolves all 4 askers; `createTender` returns `docsSkipped` for the 5 internal users lacking a `googleEmail`; timeouts confirmed at 300s on the four AI callables. |
+| 2026-09-24 | REV-015 | task | [B] | Anonymisation migration applied to production — 4 questions migrated, identity moved (not lost) into `questionAuthors`; re-run confirms idempotency. |
 | 2026-09-24 | REV-014 | requirement | [B] | Clarification questions are anonymous to suppliers (FR-Q6). Identity split into `questionAuthors`; client-side question creation denied; manager retains full visibility. |
 | 2026-09-24 | REV-013 | task | [D] | **Previous bid documents are not actually used** (FR-T7). Decide how to ingest them: distil each reference bid to a summary at upload time, or attach them only to a dedicated retrieval step. Inlining raw overflows context (measured ~279k tokens for 3 bids + template vs a 200k window). |
 | 2026-09-24 | REV-012 | requirement | [B] | Template writes are size-guarded against Firestore's 1 MiB document cap (FR-T6). |
@@ -607,12 +609,12 @@ requirement is settled it also gets promoted into the matching `6.x` / `7` / `8`
 
 ### Open tasks
 
-- **REV-015** — run the question-anonymisation migration before deploying the new rules; until
-  then existing questions still expose their asker.
 - **REV-013** — decide how previous bid documents should feed the drafting agent (FR-T7). They are
   stored as links today and contribute nothing.
 - **REV-008** — validate the suggest-don't-edit trade-off with real reviewers.
-- Deploy REV-002…REV-006 to production (scoped deploy; see §10 G-1).
-- Live-verify Docs permissions with a real Google account and live-verify web-search sourcing —
-  neither can be exercised on the emulator (AI is hermetic there, and Docs runs in dev/HTML mode).
+- Live-verify Docs permissions with a **real Google account** (add one via `googleEmail`) and
+  live-verify web-search supplier sourcing — neither can be exercised on the emulator (AI is
+  hermetic there, and Docs runs in dev/HTML mode). Everything else is deployed (REV-016).
+- Load a real 80-page template and run one bid end to end; the Google Docs **copy** path and the
+  80-page PDF export/cache are the parts no synthetic test covered.
 
