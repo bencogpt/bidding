@@ -6,6 +6,20 @@ export interface TemplateParam {
   labelHe: string;
   type: 'text' | 'number' | 'date' | 'textarea';
   required: boolean;
+  // Confidential value (e.g. the estimate / אומדן, GLOBAL_RULES G6): kept internal, never filled
+  // into the published document.
+  internal?: boolean;
+}
+
+const CONFIDENTIAL_KEY_RE = /budget|estimate|אומדן|תקציב/i;
+
+/**
+ * Whether a template param holds a confidential value that must never reach the published
+ * document. Explicit `internal` wins; otherwise estimate-like keys are confidential by default,
+ * since templates bound from Google Docs carry no flags.
+ */
+export function isConfidentialParam(p: { key: string; internal?: boolean }): boolean {
+  return p.internal ?? CONFIDENTIAL_KEY_RE.test(p.key);
 }
 
 // Unicode-aware so Hebrew placeholders like {{גוף_מזמין}} are supported and become the label.

@@ -24,3 +24,6 @@ ui-debug.log
 
 # misc
 .DS_Store
+
+# skills/ bundled into functions at build time (functions/scripts/copy-skills.mjs)
+functions/skills/

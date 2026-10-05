@@ -67,6 +67,18 @@ npx firebase emulators:exec --only auth,firestore,functions,storage \
   "npm run seed && node functions/lib/test/e2e.js"
 ```
 
+### Supervisor agent
+Inspects every bid document from the AI draft to publication: right template, required skills
+(`skills/` — bundled into `functions/skills` by the `prebuild` step), and no unsourced values.
+A BLOCK verdict refuses publish unless the manager overrides with a reason (audited).
+Suppliers can only be shared after publication.
+```bash
+node --test functions/lib/test/supervisor.test.js   # deterministic checks, no emulator needed
+node functions/verifysupervisor.mjs                  # live: draft → create → supervise → publish
+```
+Model: `ANTHROPIC_SUPERVISOR_MODEL` (defaults to `ANTHROPIC_COMPARE_MODEL`). Under the emulator
+the AI review layer is skipped (verdict WARN); in production a missing key/failed review BLOCKs.
+
 ## Running against the LIVE project
 - Seed live: `SEED_TARGET=real GOOGLE_APPLICATION_CREDENTIALS=... npm run seed`
 - Web against live: `VITE_USE_EMULATOR=false npm run dev:web`

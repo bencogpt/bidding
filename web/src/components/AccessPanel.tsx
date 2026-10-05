@@ -5,15 +5,17 @@ import type {
   SupplierDoc,
   UserDoc,
   TenderType,
+  TenderStatus,
   ExternalSupplierSuggestion,
 } from '@obms/shared';
-import { isInternalRole } from '@obms/shared';
+import { isInternalRole, isSupplierVisible } from '@obms/shared';
 import { api } from '../lib/api';
 import SupplierForm from './SupplierForm';
 
 export default function AccessPanel({
   tenderId,
   tenderType,
+  tenderStatus,
   tenderDomainTags,
   access,
   suppliers,
@@ -22,6 +24,7 @@ export default function AccessPanel({
 }: {
   tenderId: string;
   tenderType: TenderType;
+  tenderStatus: TenderStatus;
   tenderDomainTags: string[];
   access: AccessDoc[];
   suppliers: SupplierDoc[];
@@ -32,6 +35,9 @@ export default function AccessPanel({
   const [selSuppliers, setSelSuppliers] = useState<Set<string>>(new Set());
   const [selUsers, setSelUsers] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  // Suppliers may only see a document the supervisor passed, i.e. after publication.
+  const canShareSuppliers = isSupplierVisible(tenderStatus);
   const [external, setExternal] = useState<ExternalSupplierSuggestion[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [prefill, setPrefill] = useState<{
@@ -63,10 +69,13 @@ export default function AccessPanel({
 
   const grant = async () => {
     setBusy(true);
+    setError('');
     try {
       await api.grantAccess({ tenderId, supplierIds: [...selSuppliers], internalUids: [...selUsers] });
       setSelSuppliers(new Set());
       setSelUsers(new Set());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -92,12 +101,15 @@ export default function AccessPanel({
               {t('ws.matchedBy')}: {tenderDomainTags.join(', ')}
             </div>
           )}
+          {!canShareSuppliers && (
+            <div className="mb-2 rounded bg-amber-100 p-2 text-xs text-amber-700">{t('ws.shareAfterPublish')}</div>
+          )}
           <div className="space-y-2">
             {ranked.map(({ s, matched }) => (
               <label key={s.id} className="flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"
-                  disabled={granted.has(s.id)}
+                  disabled={granted.has(s.id) || !canShareSuppliers}
                   checked={granted.has(s.id) || selSuppliers.has(s.id)}
                   onChange={() => toggle(selSuppliers, s.id, setSelSuppliers)}
                 />
@@ -145,6 +157,7 @@ export default function AccessPanel({
           >
             {t('ws.grant')}
           </button>
+          {error && <div className="mt-2 text-sm text-red-600">{error}</div>}
         </div>
       )}
 

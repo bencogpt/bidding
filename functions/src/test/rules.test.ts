@@ -26,7 +26,16 @@ before(async () => {
   // Seed a tender + an access grant for supplier "sup_a" using admin (bypasses rules).
   await env.withSecurityRulesDisabled(async (ctx) => {
     const db = ctx.firestore();
-    await setDoc(doc(db, 'tenders/t1'), { id: 't1', title: 'T1', status: 'draft' });
+    await setDoc(doc(db, 'tenders/t1'), { id: 't1', title: 'T1', status: 'published' });
+    // An unpublished tender the supplier somehow holds access to (defense in depth).
+    await setDoc(doc(db, 'tenders/t2'), { id: 't2', title: 'T2', status: 'ready' });
+    await setDoc(doc(db, 'tenders/t2/access/sup_a'), {
+      principalId: 'sup_a',
+      kind: 'supplier',
+      level: 'view',
+    });
+    await setDoc(doc(db, 'tenders/t1/internal/provenance'), { templateType: 'goods' });
+    await setDoc(doc(db, 'tenders/t1/supervision/r1'), { runId: 'r1', verdict: 'PASS' });
     await setDoc(doc(db, 'tenders/t1/access/sup_a'), {
       principalId: 'sup_a',
       kind: 'supplier',
@@ -86,6 +95,21 @@ test('internal manager can read any tender', async () => {
 
 test('supplier WITH access can read the tender', async () => {
   await assertSucceeds(getDoc(doc(supplierA(), 'tenders/t1')));
+});
+
+test('supplier WITH access cannot read a tender before it is published', async () => {
+  await assertFails(getDoc(doc(supplierA(), 'tenders/t2')));
+});
+
+test('supplier cannot read internal provenance or supervisor reports', async () => {
+  await assertFails(getDoc(doc(supplierA(), 'tenders/t1/internal/provenance')));
+  await assertFails(getDoc(doc(supplierA(), 'tenders/t1/supervision/r1')));
+});
+
+test('internal user can read provenance and supervisor reports; nobody writes them', async () => {
+  await assertSucceeds(getDoc(doc(legal(), 'tenders/t1/internal/provenance')));
+  await assertSucceeds(getDoc(doc(legal(), 'tenders/t1/supervision/r1')));
+  await assertFails(setDoc(doc(manager(), 'tenders/t1/supervision/r2'), { verdict: 'PASS' }));
 });
 
 test('supplier WITHOUT access is denied (isolation)', async () => {

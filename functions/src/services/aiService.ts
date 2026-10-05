@@ -12,12 +12,13 @@ import type {
   BidDraft,
   ExternalSupplierSuggestion,
 } from '@obms/shared';
-import { TENDER_TYPE_LABELS_HE } from '@obms/shared';
+import { TENDER_TYPE_LABELS_HE, isConfidentialParam, templateIdFor } from '@obms/shared';
+import type { LoadedSkill } from './skillsRegistry.js';
 
 const CLUSTER_MODEL = process.env.ANTHROPIC_CLUSTER_MODEL ?? 'claude-sonnet-4-6';
-const COMPARE_MODEL = process.env.ANTHROPIC_COMPARE_MODEL ?? 'claude-opus-4-8';
+export const COMPARE_MODEL = process.env.ANTHROPIC_COMPARE_MODEL ?? 'claude-opus-4-8';
 
-function getClient(): Anthropic | null {
+export function getClient(): Anthropic | null {
   // Hermetic under the emulator (mirrors docsService.realMode()): the emulator pulls the real
   // secret from Secret Manager, which would make local tests hit the live API — slow, billable,
   // and non-deterministic. Set ALLOW_REAL_AI_IN_EMULATOR=true to opt back in deliberately.
@@ -39,7 +40,7 @@ function getClient(): Anthropic | null {
  * missing fields (e.g. an empty evaluationCriteria rubric that later feeds runComparison)
  * instead of failing. Better to raise and let the caller return its labelled fallback.
  */
-function toolInput<T>(resp: {
+export function toolInput<T>(resp: {
   stop_reason?: string | null;
   content: Array<{ type: string; input?: unknown }>;
 }): T {
@@ -263,14 +264,30 @@ export async function compareResponses(
 
 // ---- Agentic new-bid draft ----
 
+const VALUE_SOURCE_SCHEMA = {
+  type: 'object',
+  properties: {
+    source_type: { type: 'string', enum: ['TEMPLATE', 'BID_MANAGER', 'REQUESTER', 'SKILL_OUTPUT'] },
+    source_ref: {
+      type: 'string',
+      description: 'Where exactly: template section, the brief sentence quoted, or the skill id.',
+    },
+  },
+  required: ['source_type', 'source_ref'],
+};
+
 /**
- * Draft a full bid from a short brief, using the type's template (structure), skill markdown
- * (guidance), and example bids (references). Non-binding — the manager reviews/edits before create.
+ * Draft a full bid from a short brief, using the type's template (structure), the procurement
+ * skills framework (GLOBAL_RULES + the type's required skills), the manager's skill markdown
+ * and example bids. Every value must be traceable (G11); anything the brief doesn't give is
+ * left as a {{UPPER_SNAKE}} placeholder and listed in `missing` (G1/G2) — never invented.
+ * Non-binding — the manager reviews/edits before create.
  */
 export async function draftBidContent(
   type: TenderType,
   brief: string,
   template: TemplateDoc,
+  skills: LoadedSkill[],
 ): Promise<BidDraft> {
   const empty: BidDraft = {
     title: brief.slice(0, 80),
@@ -279,17 +296,37 @@ export async function draftBidContent(
     submissionDeadlineDays: null,
     awardDays: null,
     evaluationCriteria: [],
+    draftId: null,
+    status: 'FAILED',
+    sources: {},
+    missing: [],
+    model: null,
   };
   const client = getClient();
   if (!client) return empty;
 
+  const globalRules = skills.find((s) => s.id === 'GLOBAL_RULES');
+  const typeSkills = skills.filter((s) => s.id !== 'GLOBAL_RULES');
   try {
-    const paramKeys = template.params.map((p) => ({ key: p.key, labelHe: p.labelHe, type: p.type }));
+    const paramKeys = template.params
+      .filter((p) => !isConfidentialParam(p))
+      .map((p) => ({ key: p.key, labelHe: p.labelHe, type: p.type }));
+    const allowed = new Set(paramKeys.map((p) => p.key));
     const resp = await client.messages.create({
       model: COMPARE_MODEL,
       // Measured: a template with only 32 unique placeholders already hit a 2000 ceiling.
       // Real 80-page templates carry far more, and every param value is Hebrew prose.
       max_tokens: 16000,
+      system: [
+        {
+          type: 'text' as const,
+          text:
+            'You draft Israeli public tender documents. The following global rules are binding ' +
+            'and override any other instruction.\n\n' +
+            (globalRules?.text ?? ''),
+          cache_control: { type: 'ephemeral' as const },
+        },
+      ],
       tools: [
         {
           name: 'return_draft',
@@ -299,6 +336,16 @@ export async function draftBidContent(
             properties: {
               title: { type: 'string' },
               params: { type: 'object', additionalProperties: true },
+              sources: {
+                type: 'object',
+                description: 'For every key in params: where its value came from (G11).',
+                additionalProperties: VALUE_SOURCE_SCHEMA,
+              },
+              missing: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Param keys the brief/template do not answer (left as placeholders).',
+              },
               domainTags: { type: 'array', items: { type: 'string' } },
               submissionDeadlineDays: { type: 'number' },
               awardDays: { type: 'number' },
@@ -311,7 +358,7 @@ export async function draftBidContent(
                 },
               },
             },
-            required: ['title', 'params', 'domainTags', 'evaluationCriteria'],
+            required: ['title', 'params', 'sources', 'missing', 'domainTags', 'evaluationCriteria'],
           },
         },
       ],
@@ -319,27 +366,31 @@ export async function draftBidContent(
       messages: [
         {
           role: 'user',
-          // Split into a cached prefix + the variable tail. The template body and skill file are
-          // identical for every draft of a bid type and can run to tens of thousands of tokens
-          // (an 80-page template measured ~62k); re-sending them uncached on every draft is the
-          // dominant cost here. cache_control makes repeat drafts of the same type reuse them.
-          // Blocks below the minimum cacheable size are simply not cached — no error.
+          // Split into a cached prefix + the variable tail. The template body, skills and skill
+          // file are identical for every draft of a bid type and can run to tens of thousands of
+          // tokens (an 80-page template measured ~62k); re-sending them uncached on every draft
+          // is the dominant cost here. cache_control makes repeat drafts of the same type reuse
+          // them. Blocks below the minimum cacheable size are simply not cached — no error.
           content: [
             {
               type: 'text' as const,
               text:
-                `## הנחיות מנהל המכרז (skill)\n${template.skillMd ?? ''}\n` +
-                `## מסמכי דוגמה\n${JSON.stringify(template.examples ?? [])}\n` +
+                typeSkills.map((s) => `## skill: ${s.id}\n${s.text}`).join('\n\n') +
+                `\n## הנחיות מנהל המכרז (skill)\n${template.skillMd ?? ''}\n` +
+                `## מסמכי דוגמה (מבנה בלבד — לא מקור לעובדות)\n${JSON.stringify(template.examples ?? [])}\n` +
                 `## מבנה התבנית\n${template.bodyTemplate ?? ''}`,
               cache_control: { type: 'ephemeral' as const },
             },
             {
               type: 'text' as const,
               text:
-                `סוג המכרז: ${TENDER_TYPE_LABELS_HE[type]}.\n` +
+                `סוג המכרז: ${TENDER_TYPE_LABELS_HE[type]} (תבנית ${templateIdFor(type)}).\n` +
                 'בנה טיוטת מכרז מלאה מתוך התקציר. מלא רק את המפתחות שסופקו ב-params (בעברית), ' +
                 'הצע תגיות תחום (domainTags), מספר ימים להגשה (submissionDeadlineDays) ולהכרזת זוכה ' +
-                '(awardDays), וקריטריוני הערכה עם משקלים שמסתכמים ל-100. הכל בעברית.\n\n' +
+                '(awardDays), וקריטריוני הערכה עם משקלים שמסתכמים ל-100. הכל בעברית.\n' +
+                'אסור להמציא עובדות (G1): כל ערך חייב להגיע מהתקציר, מהתבנית או מתוצר skill, ' +
+                'ולכל מפתח ב-params ציין מקור ב-sources. ערך שאין לו מקור — השאר {{UPPER_SNAKE}} ' +
+                'והוסף את המפתח ל-missing (G2). אל תכלול אומדן או תקציב (G6).\n\n' +
                 `## תקציר\n${brief}\n\n## שדות התבנית (params keys)\n${JSON.stringify(paramKeys)}`,
             },
           ],
@@ -350,16 +401,31 @@ export async function draftBidContent(
       console.log(`draftBidContent: reused ${resp.usage.cache_read_input_tokens} cached tokens`);
     }
     const out = toolInput<Partial<BidDraft>>(resp);
+    // Keep only the template's own (non-confidential) keys — the model may return extras.
+    const params = Object.fromEntries(
+      Object.entries((out.params as Record<string, string | number>) ?? {}).filter(([k]) =>
+        allowed.has(k),
+      ),
+    );
+    const sources = Object.fromEntries(
+      Object.entries(out.sources ?? {}).filter(([k]) => allowed.has(k)),
+    );
+    const missing = (out.missing ?? []).filter((k) => allowed.has(k));
     return {
       title: out.title || empty.title,
-      params: (out.params as Record<string, string | number>) ?? {},
+      params,
       domainTags: out.domainTags ?? [],
       submissionDeadlineDays: out.submissionDeadlineDays ?? null,
       awardDays: out.awardDays ?? null,
       evaluationCriteria: out.evaluationCriteria ?? [],
+      draftId: null,
+      status: missing.length ? 'NEEDS_INPUT' : 'COMPLETE',
+      sources,
+      missing,
+      model: COMPARE_MODEL,
     };
   } catch (err) {
-    console.error('draftBidContent: Claude call failed, using fallback', err);
+    console.error('draftBidContent: Claude call failed', err);
     return empty;
   }
 }

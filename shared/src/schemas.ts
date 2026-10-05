@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { TENDER_STATUSES } from './tender.js';
+import type { SupervisionSummary, ValueSource, BidDraftRecord } from './supervision.js';
 
 // Inline string-literal tuples so z.enum infers a literal union (passing values from a
 // const object widens to a non-tuple and fails tsc).
@@ -57,6 +58,7 @@ export const templateDocSchema = z.object({
       labelHe: z.string(),
       type: z.enum(['text', 'number', 'date', 'textarea']),
       required: z.boolean().default(true),
+      internal: z.boolean().optional(),
     }),
   ),
   // reference "good example" bid documents for this type (manager-curated links)
@@ -106,7 +108,10 @@ export const tenderDocSchema = z.object({
   createdAt: z.number(),
   updatedAt: z.number(),
 });
-export type TenderDoc = z.infer<typeof tenderDocSchema>;
+export type TenderDoc = z.infer<typeof tenderDocSchema> & {
+  lastSupervision?: SupervisionSummary;
+  publishedDocHash?: string | null;
+};
 
 export const accessDocSchema = z.object({
   principalId: z.string(), // supplierId or internal uid
@@ -192,6 +197,8 @@ export const createTenderInput = z.object({
   awardDate: z.number().nullable().optional(),
   domainTags: z.array(z.string()).optional(),
   evaluationCriteria: z.array(z.object({ name: z.string(), weight: z.number() })).optional(),
+  // AI draft this tender was built from (provenance for the supervisor). Omitted when typed by hand.
+  draftId: z.string().optional(),
 });
 export type CreateTenderInput = z.infer<typeof createTenderInput>;
 
@@ -239,6 +246,8 @@ export type SetUserRoleInput = z.infer<typeof setUserRoleInput>;
 export const transitionTenderInput = z.object({
   tenderId: z.string(),
   to: tenderStatusSchema,
+  // Manager override of a BLOCK supervisor verdict at publish. Audited.
+  overrideReason: z.string().trim().min(10).optional(),
 });
 export type TransitionTenderInput = z.infer<typeof transitionTenderInput>;
 
@@ -267,6 +276,12 @@ export interface BidDraft {
   submissionDeadlineDays: number | null;
   awardDays: number | null;
   evaluationCriteria: { name: string; weight: number }[];
+  // Supervisor provenance: saved draft id, per-param sources (G11), values the brief didn't give.
+  draftId: string | null;
+  status: BidDraftRecord['status'];
+  sources: Record<string, ValueSource>;
+  missing: string[];
+  model: string | null;
 }
 
 export interface ExternalSupplierSuggestion {
@@ -327,6 +342,15 @@ export const saveSubmissionInput = z.object({
 export type SaveSubmissionInput = z.infer<typeof saveSubmissionInput>;
 
 export const runComparisonInput = z.object({ tenderId: z.string() });
+
+export const refreshTenderDocumentInput = z.object({
+  tenderId: z.string(),
+  overrideReason: z.string().trim().min(10).optional(),
+});
+export type RefreshTenderDocumentInput = z.infer<typeof refreshTenderDocumentInput>;
+
+export const runSupervisionInput = z.object({ tenderId: z.string() });
+export type RunSupervisionInput = z.infer<typeof runSupervisionInput>;
 export type RunComparisonInput = z.infer<typeof runComparisonInput>;
 
 export const awardTenderInput = z.object({

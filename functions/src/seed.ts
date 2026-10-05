@@ -88,7 +88,6 @@ await templatesRepo.upsert({
     'גוף מזמין: {{org}}',
     'תיאור הטובין הנדרשים: {{description}}',
     'כמות: {{quantity}}',
-    'תקציב משוער: {{budget}} ₪',
     '## תנאי סף',
     'על המציע לעמוד בכל דרישות התקן הרלוונטיות ולספק אחריות יצרן.',
     '## אופן ההגשה',
@@ -98,7 +97,8 @@ await templatesRepo.upsert({
     { key: 'org', labelHe: 'גוף מזמין', type: 'text', required: true },
     { key: 'description', labelHe: 'תיאור הטובין', type: 'textarea', required: true },
     { key: 'quantity', labelHe: 'כמות', type: 'number', required: true },
-    { key: 'budget', labelHe: 'תקציב משוער (₪)', type: 'number', required: false },
+    // The estimate is confidential (GLOBAL_RULES G6): kept internal, never in the document.
+    { key: 'budget', labelHe: 'אומדן (₪) — פנימי, לא יפורסם', type: 'number', required: false, internal: true },
   ],
 });
 await templatesRepo.upsert({

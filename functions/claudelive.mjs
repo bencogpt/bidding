@@ -23,10 +23,11 @@ const { data: created } = await call('createTender')({
   params: { org: 'בדיקה', description: 'מצלמות אבטחה IP66', quantity: 8, budget: 400000 },
 });
 const tenderId = created.id;
-await call('grantAccess')({ tenderId, supplierIds: ['sup_aegis', 'sup_meridian'], internalUids: [] });
 await call('transitionTender')({ tenderId, to: 'internal_review' });
 await call('transitionTender')({ tenderId, to: 'ready' });
 await call('transitionTender')({ tenderId, to: 'published' });
+// Suppliers can only be shared after publication (supervisor gate).
+await call('grantAccess')({ tenderId, supplierIds: ['sup_aegis', 'sup_meridian'], internalUids: [] });
 
 await signOut(auth);
 await login('a@aegis.test');

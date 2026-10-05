@@ -20,6 +20,12 @@ import {
   awardTenderInput,
   draftBidInput,
   searchSuppliersInput,
+  refreshTenderDocumentInput,
+  runSupervisionInput,
+  isSupplierVisible,
+  canTransition,
+  templateIdFor,
+  toG9Flag,
   parseDocId,
   detectPlaceholders,
   docExportTxtUrl,
@@ -31,6 +37,9 @@ import {
   type SupplierDoc,
   type SubmissionDoc,
   type UserDoc,
+  type TemplateDoc,
+  type TenderProvenance,
+  type SupervisionReport,
 } from '@obms/shared';
 import { randomBytes } from 'node:crypto';
 import { auth, db, now } from './lib/admin.js';
@@ -46,6 +55,8 @@ import {
   usersRepo,
   suppliersRepo,
   submissionsRepo,
+  bidDraftsRepo,
+  internalRepo,
 } from './repositories.js';
 import { transition } from './stateMachines/tenderFsm.js';
 import {
@@ -64,6 +75,9 @@ import {
   suggestExternalSuppliers,
 } from './services/aiService.js';
 import { findCandidates } from './services/supplierSearch.js';
+import { requiredSkillsFor } from './services/skillsRegistry.js';
+import { superviseTender, splitConfidential } from './services/supervisorService.js';
+import { templateHash } from './services/supervisorChecks.js';
 
 setGlobalOptions({ region: 'europe-west1', maxInstances: 10 });
 
@@ -101,6 +115,91 @@ const DOCS_SECRETS = [
   'GOOGLE_OAUTH_CLIENT_SECRET',
   'GOOGLE_OAUTH_REFRESH_TOKEN',
 ];
+// Functions that run the supervisor read the document (Docs) and call Claude.
+const SUPERVISED = {
+  secrets: [...DOCS_SECRETS, 'ANTHROPIC_API_KEY'],
+  timeoutSeconds: 300,
+};
+
+/** Server-side check of form params against the template (the browser `required` is not a gate). */
+function validateParams(
+  template: TemplateDoc,
+  params: Record<string, string | number>,
+): Record<string, string | number> {
+  const clean: Record<string, string | number> = {};
+  for (const p of template.params) {
+    const v = params[p.key];
+    const blank = v === undefined || String(v).trim() === '';
+    if (blank) {
+      if (p.required) throw new HttpsError('invalid-argument', `שדה חובה חסר: ${p.labelHe}`);
+      continue;
+    }
+    if (p.type === 'number' && !Number.isFinite(Number(v))) {
+      throw new HttpsError('invalid-argument', `השדה "${p.labelHe}" חייב להיות מספר.`);
+    }
+    clean[p.key] = p.type === 'number' ? Number(v) : v;
+  }
+  return clean; // unknown keys are dropped — the template defines the document
+}
+
+/** Short Hebrew summary of a BLOCK report for the HttpsError message. */
+function blockMessage(report: SupervisionReport): string {
+  const blockers = report.findings.filter((f) => f.severity === 'block');
+  return (
+    `הסוכן המפקח חסם את הפרסום (${blockers.length} ממצאים חוסמים): ` +
+    blockers
+      .slice(0, 5)
+      .map((f) => f.message)
+      .join(' · ')
+  );
+}
+
+/**
+ * Run the supervisor as a hard gate. Returns the report when it may proceed; throws on BLOCK
+ * unless the manager gave an override reason (audited).
+ */
+async function supervisorGate(
+  caller: { uid: string; name: string },
+  tenderId: string,
+  stage: 'prepublish' | 'refresh',
+  overrideReason: string | undefined,
+): Promise<SupervisionReport> {
+  const report = await superviseTender(caller, tenderId, stage);
+  if (report.verdict !== 'BLOCK') return report;
+  if (!overrideReason) {
+    throw new HttpsError('failed-precondition', blockMessage(report), {
+      runId: report.runId,
+      verdict: report.verdict,
+      flags: report.findings.filter((f) => f.severity === 'block').map(toG9Flag),
+    });
+  }
+  await auditRepo.append({
+    entityType: 'tender',
+    entityId: tenderId,
+    tenderId,
+    actorUid: caller.uid,
+    actorName: caller.name,
+    action: 'supervisor_override',
+    prevState: 'BLOCK',
+    newState: stage,
+    detail: `${overrideReason} (run ${report.runId})`,
+  });
+  return report;
+}
+
+/** Non-blocking checkpoint: a supervisor failure must never break the manager's action. */
+async function supervisorCheckpoint(
+  caller: { uid: string; name: string },
+  tenderId: string,
+  stage: 'created' | 'review' | 'ready',
+): Promise<SupervisionReport | null> {
+  try {
+    return await superviseTender(caller, tenderId, stage);
+  } catch (err) {
+    console.error(`supervisor checkpoint ${stage} failed for ${tenderId}`, err);
+    return null;
+  }
+}
 
 // ---- Auth / roles ----
 // Sets a user's role as a custom claim. Manager-only, except the very first bootstrap call
@@ -137,7 +236,7 @@ export const setUserRole = onCall(async (req) => {
 });
 
 // ---- Tenders ----
-export const createTender = onCall({ secrets: DOCS_SECRETS }, async (req) => {
+export const createTender = onCall(SUPERVISED, async (req) => {
   const caller = requireManager(req);
   const input = parseInput(createTenderInput, req.data);
 
@@ -145,13 +244,21 @@ export const createTender = onCall({ secrets: DOCS_SECRETS }, async (req) => {
   if (!template) {
     throw new HttpsError('failed-precondition', `אין תבנית לסוג המכרז: ${input.type}`);
   }
+  const params = validateParams(template, input.params);
+  // Confidential values (the estimate, G6) never go on the supplier-readable tender doc.
+  const { publicParams, internalParams } = splitConfidential(template, params);
+
+  const draft = input.draftId ? await bidDraftsRepo.get(input.draftId) : null;
+  if (input.draftId && (!draft || draft.createdBy !== caller.uid)) {
+    throw new HttpsError('invalid-argument', 'טיוטת ה-AI לא נמצאה.');
+  }
 
   const id = tendersRepo.newId();
   const tender: TenderDoc = {
     id,
     title: input.title,
     type: input.type,
-    params: input.params,
+    params: publicParams,
     status: 'draft',
     googleDocId: null,
     docExportPath: null,
@@ -165,6 +272,42 @@ export const createTender = onCall({ secrets: DOCS_SECRETS }, async (req) => {
     updatedAt: now(),
   };
   await tendersRepo.create(tender);
+
+  // Provenance (G11): exactly which template version, AI draft and skills built this tender.
+  const provenance: TenderProvenance = {
+    templateType: input.type,
+    templateId: templateIdFor(input.type),
+    templateHash: templateHash(template),
+    googleTemplateDocId: template.googleTemplateDocId ?? null,
+    draftId: draft?.draftId ?? null,
+    draftType: draft?.type ?? null,
+    brief: draft?.brief ?? null,
+    aiModel: draft?.model ?? null,
+    aiStatus: draft?.status ?? null,
+    skillsUsed: draft?.status === 'FAILED' ? [] : draft?.skillsUsed ?? [],
+    paramSources: draft?.sources ?? {},
+    editedByManager: draft
+      ? Object.keys(publicParams).filter(
+          (k) => String(draft.params[k] ?? '') !== String(publicParams[k] ?? ''),
+        )
+      : [],
+    recordedAt: now(),
+  };
+  await internalRepo.setProvenance(id, provenance);
+  if (Object.keys(internalParams).length) await internalRepo.setParams(id, internalParams);
+  await auditRepo.append({
+    entityType: 'tender',
+    entityId: id,
+    tenderId: id,
+    actorUid: caller.uid,
+    actorName: caller.name,
+    action: 'provenance_recorded',
+    prevState: null,
+    newState: provenance.templateId,
+    detail: draft
+      ? `draft ${draft.draftId} · ${provenance.skillsUsed.length} skills · ${provenance.editedByManager.length} edited`
+      : 'manual',
+  });
 
   // System detects type -> generates the document from the matching template.
   const gen = await generateTenderDocument(tender, template);
@@ -234,30 +377,51 @@ export const createTender = onCall({ secrets: DOCS_SECRETS }, async (req) => {
     newState: `${internalUsers.length} internal users`,
     detail: skipped.length ? `ללא חשבון Google: ${skipped.join(', ')}` : undefined,
   });
-  return { id, docsSkipped: skipped };
+  const supervision = await supervisorCheckpoint(caller, id, 'created');
+  return { id, docsSkipped: skipped, verdict: supervision?.verdict ?? null };
 });
 
-export const transitionTender = onCall({ secrets: DOCS_SECRETS }, async (req) => {
+export const transitionTender = onCall(SUPERVISED, async (req) => {
   const caller = requireManager(req);
   const input = parseInput(transitionTenderInput, req.data);
-  await transition(caller, input.tenderId, input.to);
-  // Cache the exported PDF at publish so suppliers load it fast (no live Google export).
-  if (input.to === 'published') {
-    const tender = await tendersRepo.get(input.tenderId);
-    if (tender) {
-      const path = await cacheTenderPdf(tender);
-      if (path) await tendersRepo.update(input.tenderId, { docExportPath: path });
-    }
+  const current = await tendersRepo.get(input.tenderId);
+  if (!current) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+
+  // Publish gate: the supervisor inspects the live document before suppliers can see it.
+  let gate: SupervisionReport | null = null;
+  if (input.to === 'published' && canTransition(current.status, 'published')) {
+    gate = await supervisorGate(caller, input.tenderId, 'prepublish', input.overrideReason);
   }
-  return { ok: true };
+  await transition(caller, input.tenderId, input.to);
+
+  if (input.to === 'published' && gate) {
+    // Cache the exported PDF at publish so suppliers load it fast (no live Google export).
+    const tender = await tendersRepo.get(input.tenderId);
+    const path = tender ? await cacheTenderPdf(tender) : null;
+    await tendersRepo.update(input.tenderId, {
+      ...(path ? { docExportPath: path } : {}),
+      publishedDocHash: gate.docHash,
+    });
+  }
+  let verdict = gate?.verdict ?? null;
+  if (input.to === 'internal_review' || input.to === 'ready') {
+    const stage = input.to === 'ready' ? 'ready' : 'review';
+    verdict = (await supervisorCheckpoint(caller, input.tenderId, stage))?.verdict ?? null;
+  }
+  return { ok: true, verdict };
 });
 
-// Manager re-exports + re-caches the bid PDF after editing the Google Doc.
-export const refreshTenderDocument = onCall({ secrets: DOCS_SECRETS }, async (req) => {
+// Manager re-exports + re-caches the bid PDF after editing the Google Doc. Once suppliers can
+// see the document, the edited version goes through the supervisor gate again.
+export const refreshTenderDocument = onCall(SUPERVISED, async (req) => {
   const caller = requireManager(req);
-  const input = parseInput(runComparisonInput, req.data); // { tenderId }
+  const input = parseInput(refreshTenderDocumentInput, req.data);
   const tender = await tendersRepo.get(input.tenderId);
   if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  if (isSupplierVisible(tender.status)) {
+    const gate = await supervisorGate(caller, input.tenderId, 'refresh', input.overrideReason);
+    await tendersRepo.update(input.tenderId, { publishedDocHash: gate.docHash });
+  }
   const path = await cacheTenderPdf(tender);
   if (path) await tendersRepo.update(input.tenderId, { docExportPath: path });
   await auditRepo.append({
@@ -279,6 +443,13 @@ export const grantAccess = onCall({ secrets: DOCS_SECRETS }, async (req) => {
   const input = parseInput(grantAccessInput, req.data);
   const tender = await tendersRepo.get(input.tenderId);
   if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  // Suppliers only see a document the supervisor has passed, i.e. after publication.
+  if ((input.supplierIds ?? []).length && !isSupplierVisible(tender.status)) {
+    throw new HttpsError(
+      'failed-precondition',
+      'ניתן לשתף ספקים רק לאחר פרסום המכרז (לאחר בדיקת הסוכן המפקח).',
+    );
+  }
 
   // Suppliers -> view access (in-system only, no Google Docs permission).
   for (const supplierId of input.supplierIds ?? []) {
@@ -352,6 +523,9 @@ export const getTenderDocument = onCall({ secrets: DOCS_SECRETS }, async (req) =
     if (!caller.supplierId) throw new HttpsError('permission-denied', 'ספק לא מזוהה.');
     const access = await accessRepo.get(input.tenderId, caller.supplierId);
     if (!access) throw new HttpsError('permission-denied', 'אין הרשאת צפייה למכרז זה.');
+    if (!isSupplierVisible(tender.status)) {
+      throw new HttpsError('permission-denied', 'המכרז טרם פורסם.');
+    }
   }
   return getViewable(tender);
 });
@@ -580,13 +754,51 @@ export const searchSuppliers = onCall(
 export const draftBid = onCall(
   { secrets: ['ANTHROPIC_API_KEY'], timeoutSeconds: 300 },
   async (req) => {
-    requireManager(req);
+    const caller = requireManager(req);
     const input = parseInput(draftBidInput, req.data);
     const template = await templatesRepo.get(input.type);
     if (!template) throw new HttpsError('failed-precondition', `אין תבנית לסוג: ${input.type}`);
-    return draftBidContent(input.type, input.brief, template);
+    const skills = requiredSkillsFor(input.type);
+    const draft = await draftBidContent(input.type, input.brief, template, skills);
+
+    // Keep the raw draft so the supervisor can later tell AI-written values from manager edits.
+    const draftId = bidDraftsRepo.newId();
+    await bidDraftsRepo.save({
+      draftId,
+      type: input.type,
+      brief: input.brief,
+      model: draft.model ?? 'none',
+      status: draft.status,
+      params: draft.params,
+      sources: draft.sources,
+      missing: draft.missing,
+      templateHash: templateHash(template),
+      skillsUsed: skills.map((s) => ({ id: s.id, hash: s.hash })),
+      createdBy: caller.uid,
+      createdAt: now(),
+    });
+    await auditRepo.append({
+      entityType: 'bidDraft',
+      entityId: draftId,
+      actorUid: caller.uid,
+      actorName: caller.name,
+      action: 'ai_draft',
+      prevState: input.type,
+      newState: draft.status,
+      detail: `${skills.length} skills · ${draft.missing.length} missing`,
+    });
+    return { ...draft, draftId };
   },
 );
+
+// Manually re-run the supervisor (full rules + AI review) on the current document.
+export const runSupervision = onCall(SUPERVISED, async (req) => {
+  const caller = requireInternal(req);
+  const input = parseInput(runSupervisionInput, req.data);
+  const tender = await tendersRepo.get(input.tenderId);
+  if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  return superviseTender(caller, input.tenderId, 'manual');
+});
 
 // ---- Templates: bind a Google Doc to a bid type ----
 const DEFAULT_TEMPLATE_TITLE: Record<string, string> = {

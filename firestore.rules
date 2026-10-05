@@ -57,8 +57,24 @@ service cloud.firestore {
 
     // ---- tenders ----
     match /tenders/{tenderId} {
-      allow read: if canSeeTender(tenderId);
+      // Suppliers see a tender only once it is published (after the supervisor gate). Access is
+      // also only granted post-publish; the status check is defense in depth.
+      allow read: if isInternal()
+        || (supplierHasAccess(tenderId)
+            && resource.data.status in ['published', 'responses', 'evaluated', 'awarded']);
       allow write: if false; // function-only (FSM, audit)
+
+      // internal-only data: provenance (template/skills/AI draft) + confidential params (G6)
+      match /internal/{docId} {
+        allow read: if isInternal();
+        allow write: if false; // function-only (createTender)
+      }
+
+      // supervisor agent reports (one per run)
+      match /supervision/{runId} {
+        allow read: if isInternal();
+        allow write: if false; // function-only (superviseTender)
+      }
 
       // access grants. Read authorizes on the principalId FIELD (not the doc id) so the
       // supplier portal's collectionGroup query `where('principalId','==', myId)` is allowed.

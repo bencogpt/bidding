@@ -77,8 +77,66 @@ async function main() {
   }
   console.log('✓ all internal users auto-granted; edit access limited to the manager');
 
+  // ---- supervisor: provenance, confidentiality, publish gate ----
+  assert.equal(tdoc.data()!.params.budget, undefined, 'estimate is not on the supplier-readable tender');
+  const internalParams = await getDoc(doc(db, 'tenders', tenderId, 'internal', 'params'));
+  assert.equal(internalParams.data()?.budget, 500000, 'estimate kept in internal params (G6)');
+  const prov = await getDoc(doc(db, 'tenders', tenderId, 'internal', 'provenance'));
+  assert.equal(prov.data()?.templateType, 'goods', 'provenance records the template used');
+  assert.equal(prov.data()?.templateId, 'T-A');
+  const createdRuns = await getDocs(collection(db, 'tenders', tenderId, 'supervision'));
+  assert.ok(createdRuns.size >= 1, 'supervisor ran at creation');
+
+  let earlyShareDenied = false;
+  try {
+    await call('grantAccess')({ tenderId, supplierIds: ['sup_aegis'], internalUids: [] });
+  } catch {
+    earlyShareDenied = true;
+  }
+  assert.ok(earlyShareDenied, 'suppliers cannot be granted access before publication');
+
+  await call('transitionTender')({ tenderId, to: 'internal_review' });
+  await call('transitionTender')({ tenderId, to: 'ready' });
+  const published = (await call('transitionTender')({ tenderId, to: 'published' })) as {
+    data: { verdict: string };
+  };
+  assert.notEqual(published.data.verdict, 'BLOCK', 'clean tender passes the supervisor gate');
+  assert.equal((await getDoc(doc(db, 'tenders', tenderId))).data()!.status, 'published');
+  console.log(`✓ supervisor: provenance + G6 split + gate passed (${published.data.verdict})`);
+
+  // A document with an unfilled placeholder is blocked; an audited override lets it through.
+  const bad = (await call('createTender')({
+    title: 'מכרז עם חוסר',
+    type: 'goods',
+    params: { org: 'משרד הביטחון', description: 'מצלמות, אחריות {{WARRANTY_YEARS}} שנים', quantity: 4 },
+  })) as { data: { id: string; verdict: string | null } };
+  assert.equal(bad.data.verdict, 'BLOCK', 'supervisor flags the placeholder at creation');
+  await call('transitionTender')({ tenderId: bad.data.id, to: 'internal_review' });
+  await call('transitionTender')({ tenderId: bad.data.id, to: 'ready' });
+  let blocked = false;
+  try {
+    await call('transitionTender')({ tenderId: bad.data.id, to: 'published' });
+  } catch (e) {
+    blocked = /הסוכן המפקח/.test((e as Error).message);
+  }
+  assert.ok(blocked, 'publish is refused while the supervisor verdict is BLOCK');
+  assert.equal((await getDoc(doc(db, 'tenders', bad.data.id))).data()!.status, 'ready');
+  await call('transitionTender')({
+    tenderId: bad.data.id,
+    to: 'published',
+    overrideReason: 'אישור חריג לצורך בדיקה אוטומטית',
+  });
+  const overrideAudit = await getDocs(
+    query(collection(db, 'auditLog'), where('tenderId', '==', bad.data.id)),
+  );
+  assert.ok(
+    overrideAudit.docs.some((d) => d.data().action === 'supervisor_override'),
+    'override is audited',
+  );
+  console.log('✓ supervisor: placeholder blocks publish; manager override is audited');
+
   await call('grantAccess')({ tenderId, supplierIds: ['sup_aegis'], internalUids: [legalUid] });
-  console.log('✓ manager created tender + shared with aegis + assigned legal');
+  console.log('✓ manager published tender + shared with aegis + assigned legal');
 
   // ---- supplier aegis: sees doc, asks a question ----
   await signOut(auth);
@@ -253,11 +311,7 @@ async function main() {
   assert.ok(aegisMatch && aegisMatch.matchedTags.includes('אבטחה'), 'sourcing matched aegis by tag');
   console.log('✓ supplier sourcing matched registered supplier by domain tag');
 
-  // ---- full lifecycle: publish → submit → compare → award ----
-  await call('transitionTender')({ tenderId, to: 'internal_review' });
-  await call('transitionTender')({ tenderId, to: 'ready' });
-  await call('transitionTender')({ tenderId, to: 'published' });
-
+  // ---- full lifecycle: (published above) → submit → compare → award ----
   await signOut(auth);
   await login('a@aegis.test');
   await call('saveSubmission')({

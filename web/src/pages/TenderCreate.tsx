@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { TENDER_TYPES, type TenderType } from '@obms/shared';
+import { TENDER_TYPES, isConfidentialParam, type TenderType } from '@obms/shared';
 import { useTemplate } from '../lib/hooks';
 import { api } from '../lib/api';
 import TagsInput from '../components/TagsInput';
@@ -24,6 +24,9 @@ export default function TenderCreate() {
   const [domainTags, setDomainTags] = useState<string[]>([]);
   const [criteria, setCriteria] = useState<Criterion[]>([]);
   const [brief, setBrief] = useState('');
+  // AI draft provenance: linked to the tender so the supervisor can trace every value.
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [draftNote, setDraftNote] = useState('');
   const [drafting, setDrafting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -37,6 +40,15 @@ export default function TenderCreate() {
     setError('');
     try {
       const d = await api.draftBid({ type, brief });
+      setDraftId(d.draftId);
+      const labelOf = (k: string) => template?.params.find((p) => p.key === k)?.labelHe ?? k;
+      setDraftNote(
+        d.status === 'FAILED'
+          ? t('create.draftFailed')
+          : d.missing.length
+            ? t('create.draftMissing', { fields: d.missing.map(labelOf).join(', ') })
+            : '',
+      );
       if (d.title) setTitle(d.title);
       setParams(Object.fromEntries(Object.entries(d.params ?? {}).map(([k, v]) => [k, String(v)])));
       setDomainTags(d.domainTags ?? []);
@@ -67,6 +79,7 @@ export default function TenderCreate() {
         submissionDeadline: deadline ? new Date(deadline).getTime() : null,
         domainTags,
         evaluationCriteria: criteria,
+        draftId: draftId ?? undefined,
       });
       nav(`/tenders/${id}`);
     } catch (err) {
@@ -90,6 +103,8 @@ export default function TenderCreate() {
             onChange={(e) => {
               setType(e.target.value as TenderType);
               setParams({});
+              setDraftId(null); // a draft is bound to the template type it was made for
+              setDraftNote('');
             }}
           >
             {Object.values(TENDER_TYPES).map((tt) => (
@@ -112,6 +127,7 @@ export default function TenderCreate() {
           {drafting ? t('create.drafting') : `✨ ${t('create.aiDraft')}`}
         </button>
         <p className="text-xs text-tx-mute">{t('create.aiDraftHint')}</p>
+        {draftNote && <div className="rounded bg-amber-100 p-2 text-xs text-amber-700">{draftNote}</div>}
       </div>
 
       <form onSubmit={submit} className="card space-y-5 p-6">
@@ -122,7 +138,10 @@ export default function TenderCreate() {
 
         {template?.params.map((p) => (
           <div key={p.key}>
-            <label className="label">{p.labelHe}</label>
+            <label className="label">
+              {p.labelHe}
+              {isConfidentialParam(p) && <span className="mr-2 text-xs text-red-600">{t('create.confidential')}</span>}
+            </label>
             {p.type === 'textarea' ? (
               <textarea
                 className="input min-h-20"

@@ -50,3 +50,10 @@ export const TENDER_TRANSITIONS: Record<TenderStatus, TenderStatus[]> = {
 export function canTransition(from: TenderStatus, to: TenderStatus): boolean {
   return TENDER_TRANSITIONS[from]?.includes(to) ?? false;
 }
+
+// Statuses in which the bid document is public to (granted) suppliers.
+export const SUPPLIER_VISIBLE_STATUSES: TenderStatus[] = ['published', 'responses', 'evaluated', 'awarded'];
+
+export function isSupplierVisible(status: TenderStatus): boolean {
+  return SUPPLIER_VISIBLE_STATUSES.includes(status);
+}

@@ -13,6 +13,9 @@ import type {
   UserDoc,
   SubmissionDoc,
   QuestionAuthorDoc,
+  BidDraftRecord,
+  TenderProvenance,
+  SupervisionReport,
 } from '@obms/shared';
 
 const stripUndefined = <T extends Record<string, unknown>>(o: T): T =>
@@ -201,6 +204,54 @@ export const submissionsRepo = {
   async list(tenderId: string): Promise<SubmissionDoc[]> {
     const q = await db.collection('tenders').doc(tenderId).collection('submissions').get();
     return q.docs.map((d) => d.data() as SubmissionDoc);
+  },
+};
+
+// ---- AI drafts (function-only; provenance source for the supervisor) ----
+export const bidDraftsRepo = {
+  newId(): string {
+    return db.collection('bidDrafts').doc().id;
+  },
+  async save(d: BidDraftRecord): Promise<void> {
+    await db.collection('bidDrafts').doc(d.draftId).set(d);
+  },
+  async get(id: string): Promise<BidDraftRecord | null> {
+    const s = await db.collection('bidDrafts').doc(id).get();
+    return s.exists ? (s.data() as BidDraftRecord) : null;
+  },
+};
+
+// ---- internal-only tender data (subcollection; suppliers can never read it) ----
+// provenance: what the tender was built from. params: confidential values (estimate, G6).
+export const internalRepo = {
+  async setProvenance(tenderId: string, p: TenderProvenance): Promise<void> {
+    await db.collection('tenders').doc(tenderId).collection('internal').doc('provenance').set(p);
+  },
+  async getProvenance(tenderId: string): Promise<TenderProvenance | null> {
+    const s = await db.collection('tenders').doc(tenderId).collection('internal').doc('provenance').get();
+    return s.exists ? (s.data() as TenderProvenance) : null;
+  },
+  async setParams(tenderId: string, params: Record<string, string | number>): Promise<void> {
+    await db.collection('tenders').doc(tenderId).collection('internal').doc('params').set(params);
+  },
+  async getParams(tenderId: string): Promise<Record<string, string | number>> {
+    const s = await db.collection('tenders').doc(tenderId).collection('internal').doc('params').get();
+    return s.exists ? (s.data() as Record<string, string | number>) : {};
+  },
+};
+
+// ---- supervisor reports (append-only, one doc per run) ----
+export const supervisionRepo = {
+  newId(tenderId: string): string {
+    return db.collection('tenders').doc(tenderId).collection('supervision').doc().id;
+  },
+  async add(r: SupervisionReport): Promise<void> {
+    await db
+      .collection('tenders')
+      .doc(r.tenderId)
+      .collection('supervision')
+      .doc(r.runId)
+      .set(JSON.parse(JSON.stringify(r))); // deep-drops undefined (e.g. finding.evidence)
   },
 };
 

@@ -10,6 +10,7 @@ import {
   useQuestions,
   useAnswers,
   useSubmissions,
+  useTemplate,
 } from '../lib/hooks';
 import { api } from '../lib/api';
 import StatusBadge from '../components/StatusBadge';
@@ -18,8 +19,9 @@ import AccessPanel from '../components/AccessPanel';
 import QuestionsPanel from '../components/QuestionsPanel';
 import EvaluationPanel from '../components/EvaluationPanel';
 import CasePanel from '../components/CasePanel';
+import SupervisorPanel, { VerdictBadge } from '../components/SupervisorPanel';
 
-type Tab = 'case' | 'overview' | 'document' | 'access' | 'questions' | 'evaluation';
+type Tab = 'case' | 'overview' | 'document' | 'supervisor' | 'access' | 'questions' | 'evaluation';
 
 export default function TenderWorkspace() {
   const { id } = useParams();
@@ -32,17 +34,34 @@ export default function TenderWorkspace() {
   const questions = useQuestions(id);
   const answers = useAnswers(id);
   const submissions = useSubmissions(id);
+  const template = useTemplate(tender?.type);
   const [tab, setTab] = useState<Tab>('case');
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  // Set when the supervisor blocked publication — offers the audited manager override.
+  const [blocked, setBlocked] = useState(false);
+  const [overrideReason, setOverrideReason] = useState('');
 
   if (loading) return <div className="text-tx-soft">{t('common.loading')}</div>;
   if (!tender) return <div className="text-tx-soft">404</div>;
 
   const isManager = role === 'tender_manager';
-  const transitionTo = async (to: Parameters<typeof api.transitionTender>[0]['to']) => {
+  const transitionTo = async (
+    to: Parameters<typeof api.transitionTender>[0]['to'],
+    override?: string,
+  ) => {
     setBusy(true);
+    setError('');
     try {
-      await api.transitionTender({ tenderId: tender.id, to });
+      await api.transitionTender({ tenderId: tender.id, to, overrideReason: override });
+      setBlocked(false);
+      setOverrideReason('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      if (to === 'published') {
+        setBlocked(true);
+        setTab('supervisor');
+      }
     } finally {
       setBusy(false);
     }
@@ -53,6 +72,7 @@ export default function TenderWorkspace() {
     { key: 'case', label: t('ws.case') },
     { key: 'overview', label: t('ws.overview') },
     { key: 'document', label: t('ws.document') },
+    { key: 'supervisor', label: t('ws.supervisor') },
     { key: 'access', label: t('ws.access') },
     { key: 'questions', label: t('ws.questions') },
     ...(showEval ? [{ key: 'evaluation' as Tab, label: t('ws.evaluation') }] : []),
@@ -69,6 +89,7 @@ export default function TenderWorkspace() {
           <div className="mt-2 flex items-center gap-2">
             <span className="chip">{t(`type.${tender.type}`)}</span>
             <StatusBadge status={tender.status} />
+            {tender.lastSupervision && <VerdictBadge verdict={tender.lastSupervision.verdict} />}
           </div>
         </div>
         {isManager && (
@@ -85,12 +106,35 @@ export default function TenderWorkspace() {
             )}
             {tender.status === 'ready' && (
               <button className="btn btn-gold" disabled={busy} onClick={() => transitionTo('published')}>
-                {t('ws.publish')}
+                {busy ? t('sup.checking') : t('ws.publish')}
               </button>
             )}
           </div>
         )}
       </div>
+
+      {error && (
+        <div className="card mb-4 space-y-2 border-red-200 p-4 text-sm">
+          <div className="text-red-600">{error}</div>
+          {isManager && blocked && tender.status === 'ready' && (
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                className="input flex-1"
+                placeholder={t('sup.overridePlaceholder')}
+                value={overrideReason}
+                onChange={(e) => setOverrideReason(e.target.value)}
+              />
+              <button
+                className="btn"
+                disabled={busy || overrideReason.trim().length < 10}
+                onClick={() => transitionTo('published', overrideReason.trim())}
+              >
+                {t('sup.override')}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="mb-4 flex gap-1 border-b border-paper-2">
         {tabs.map((tb) => (
@@ -123,6 +167,7 @@ export default function TenderWorkspace() {
         <AccessPanel
           tenderId={tender.id}
           tenderType={tender.type}
+          tenderStatus={tender.status}
           tenderDomainTags={tender.domainTags ?? []}
           access={access}
           suppliers={suppliers}
@@ -141,6 +186,7 @@ export default function TenderWorkspace() {
       )}
       {tab === 'evaluation' && <EvaluationPanel tender={tender} submissions={submissions} />}
       {tab === 'case' && <CasePanel tender={tender} />}
+      {tab === 'supervisor' && <SupervisorPanel tender={tender} template={template} />}
     </div>
   );
 }

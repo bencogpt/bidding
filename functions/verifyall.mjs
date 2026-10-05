@@ -28,10 +28,11 @@ const { data: created } = await call('createTender')({
   params: { org: 'משרד הביטחון', description: 'מצלמות IP66', quantity: 6, budget: 300000 },
 });
 const id = created.id;
-await call('grantAccess')({ tenderId: id, supplierIds: ['sup_aegis'], internalUids: [] });
 await call('transitionTender')({ tenderId: id, to: 'internal_review' });
 await call('transitionTender')({ tenderId: id, to: 'ready' });
 await call('transitionTender')({ tenderId: id, to: 'published' });
+// Suppliers can only be shared after publication (supervisor gate).
+await call('grantAccess')({ tenderId: id, supplierIds: ['sup_aegis'], internalUids: [] });
 const cached = (await getDoc(doc(db, 'tenders', id))).data()?.docExportPath;
 console.log('1) publish → docExportPath:', cached ?? '(none)');
 

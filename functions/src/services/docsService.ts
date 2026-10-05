@@ -12,6 +12,7 @@ import { google, type docs_v1 } from 'googleapis';
 import { storage } from '../lib/admin.js';
 import type { TenderDoc, TemplateDoc, UserDoc } from '@obms/shared';
 import { TENDER_TYPE_LABELS_HE } from '@obms/shared';
+import { htmlToText } from './supervisorChecks.js';
 
 // drive.file = access only to files the app creates. Non-sensitive → no OAuth verification
 // needed. (We create the tender doc from the template text rather than copying a foreign file,
@@ -45,10 +46,12 @@ function googleClients() {
   };
 }
 
+// Unfilled placeholders stay visible as {{key}} (matching real Docs mode) so the supervisor and
+// the manager see the gap — never silently papered over.
 function fillTemplate(body: string, params: Record<string, string | number>): string {
-  return body.replace(/\{\{\s*([^}\n]+?)\s*\}\}/g, (_m, key: string) => {
+  return body.replace(/\{\{\s*([^}\n]+?)\s*\}\}/g, (m, key: string) => {
     const v = params[key.trim()];
-    return v !== undefined ? String(v) : '—';
+    return v !== undefined && String(v) !== '' ? String(v) : m;
   });
 }
 
@@ -160,6 +163,19 @@ export async function readTemplateDocText(googleDocId: string): Promise<string> 
   const { docs } = googleClients();
   const doc = await docs.documents.get({ documentId: googleDocId });
   return docPlainText(doc.data);
+}
+
+/**
+ * Current plain text of a tender's document, for the supervisor. Dev: the rendered HTML in
+ * Storage. Real mode: the live Google Doc (system-owned copy), so manager edits are included.
+ */
+export async function readTenderDocText(tender: TenderDoc): Promise<string> {
+  if (!realMode()) {
+    const [buf] = await storage.bucket().file(htmlPath(tender.id)).download();
+    return htmlToText(buf.toString('utf8'));
+  }
+  if (!tender.googleDocId) throw new Error('Tender has no googleDocId to read.');
+  return readTemplateDocText(tender.googleDocId);
 }
 
 /**
