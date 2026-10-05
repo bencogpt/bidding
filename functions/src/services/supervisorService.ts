@@ -28,9 +28,11 @@ import {
   supervisionRepo,
   templatesRepo,
   tendersRepo,
+  versionsRepo,
 } from '../repositories.js';
 import { COMPARE_MODEL, getClient, toolInput } from './aiService.js';
-import { readTenderDocText } from './docsService.js';
+import { readTenderDocText, readVersionSnapshot, saveVersionSnapshot } from './docsService.js';
+import { changeRatio } from './scoreCalc.js';
 import { currentSkillHash, loadGlobalRules, loadSkill } from './skillsRegistry.js';
 import { docHash, normalize, runDeterministicChecks } from './supervisorChecks.js';
 
@@ -247,6 +249,34 @@ export async function aiReview(
   }
 }
 
+/**
+ * Record a new content version when the document changed since the last stored one. Every
+ * supervision checkpoint reads the live document, so this captures each version that reached a
+ * checkpoint (v1 = the generated document at creation). Best-effort: never fails supervision.
+ */
+async function recordVersion(tender: TenderDoc, text: string, hash: string, stage: SupervisionStage) {
+  try {
+    const list = await versionsRepo.list(tender.id);
+    const prev = list[list.length - 1];
+    if (prev?.hash === hash) return;
+    const n = list.length + 1;
+    const path = await saveVersionSnapshot(tender.id, `${n}-${hash.slice(0, 12)}`, text);
+    const prevText = prev ? await readVersionSnapshot(prev.path) : null;
+    list.push({
+      n,
+      hash,
+      stage,
+      status: tender.status,
+      at: now(),
+      path,
+      changeRatio: prevText === null ? null : changeRatio(prevText, text),
+    });
+    await versionsRepo.set(tender.id, list);
+  } catch (err) {
+    console.error(`recordVersion failed for ${tender.id}`, err);
+  }
+}
+
 /** Run the supervisor for a tender at a checkpoint, persist the report and audit it. */
 export async function superviseTender(
   caller: Pick<Caller, 'uid' | 'name'>,
@@ -279,6 +309,8 @@ export async function superviseTender(
     docText,
     currentSkillHash,
   });
+
+  if (docText !== null) await recordVersion(tender, docText, docHash(docText), stage);
 
   let aiModel: string | null = null;
   if (!RULES_ONLY.includes(stage) && docText !== null) {

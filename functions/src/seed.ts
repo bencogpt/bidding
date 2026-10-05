@@ -78,6 +78,13 @@ for (const s of suppliers) {
   await ensureUser(s.email, 'password', s.name, 'supplier', s.id);
 }
 
+// Mandatory legal sections (s11) for the DEMO templates only. The text is a clearly marked stand-in:
+// real templates must carry the organization's approved legal wording, which this seed never
+// invents. Without the headings the supervisor would (correctly) block every demo tender.
+const DEMO_LEGAL_SECTIONS = ['סודיות', 'קניין רוחני', 'אחריות ושיפוי', 'ביטול/סיום התקשרות'].flatMap(
+  (name) => [`## ${name}`, `[נוסח לדוגמה בסביבת הדגמה — יוחלף בנוסח המשפטי המאושר: ${name}]`],
+);
+
 console.log('Seeding tender templates…');
 await templatesRepo.upsert({
   type: TENDER_TYPES.goods,
@@ -92,6 +99,7 @@ await templatesRepo.upsert({
     'על המציע לעמוד בכל דרישות התקן הרלוונטיות ולספק אחריות יצרן.',
     '## אופן ההגשה',
     'יש להגיש הצעת מחיר מפורטת בצירוף מפרט טכני מלא עד למועד ההגשה.',
+    ...DEMO_LEGAL_SECTIONS,
   ].join('\n'),
   params: [
     { key: 'org', labelHe: 'גוף מזמין', type: 'text', required: true },
@@ -113,6 +121,9 @@ await templatesRepo.upsert({
     'משך ההתקשרות: {{duration}}',
     '## דרישות מקצועיות',
     'על נותן השירות להציג ניסיון מוכח וכוח אדם מוסמך לתחום.',
+    '## תנאי סף',
+    'על נותן השירות להחזיק ברישיונות הנדרשים על פי דין.',
+    ...DEMO_LEGAL_SECTIONS,
   ].join('\n'),
   params: [
     { key: 'org', labelHe: 'גוף מזמין', type: 'text', required: true },
@@ -133,6 +144,9 @@ await templatesRepo.upsert({
     'אבני דרך עיקריות: {{milestones}}',
     '## תנאים',
     'הפרויקט כולל אספקה והקמה לצד שירות ותחזוקה לאורך תקופת ההתקשרות.',
+    '## תנאי סף',
+    'על המציע להציג ניסיון בביצוע פרויקט דומה בהיקף ובמורכבות.',
+    ...DEMO_LEGAL_SECTIONS,
   ].join('\n'),
   params: [
     { key: 'org', labelHe: 'גוף מזמין', type: 'text', required: true },

@@ -59,6 +59,16 @@ export const REQUIRED_SKILLS: Record<TenderType, SkillId[]> = {
   project: [...SERVICE_SKILLS, 's08-risk-analysis', 's17-security-requirements'],
 };
 
+// Mandatory hard legal sections (s11 / GLOBAL_RULES G3). Each must appear as a heading in the
+// bid document, with the template's wording unchanged. Patterns tolerate common spelling variants.
+export const MANDATORY_LEGAL_SECTIONS = [
+  { id: 'confidentiality', nameHe: 'סודיות', pattern: /סודיות/ },
+  { id: 'ip', nameHe: 'קניין רוחני', pattern: /קני[י]?ן\s*ה?רוחני/ },
+  { id: 'liability', nameHe: 'אחריות ושיפוי', pattern: /שיפוי/ },
+  { id: 'thresholds', nameHe: 'תנאי סף', pattern: /תנאי\s*ה?סף/ },
+  { id: 'termination', nameHe: 'ביטול/סיום התקשרות', pattern: /ביטול|סיום\s*ה?התקשרות/ },
+] as const;
+
 // G11 traceability: where a drafted value came from.
 export type SourceType = 'TEMPLATE' | 'BID_MANAGER' | 'REQUESTER' | 'SKILL_OUTPUT';
 export interface ValueSource {
@@ -130,6 +140,8 @@ export type FindingCode =
   | 'CONTRADICTION'
   | 'CRITERIA_WEIGHTS'
   | 'MISSING_MANDATORY_SECTION'
+  | 'LEGAL_SECTION_MISSING'
+  | 'LEGAL_SECTION_ALTERED'
   | 'CONFIDENTIAL_LEAK'
   | 'UNFAIR_REQUIREMENT'
   // supervisor itself

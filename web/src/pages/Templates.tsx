@@ -76,9 +76,9 @@ function BindSection({ type, template }: { type: TenderType; template?: Template
       )}
       <div className="mt-3">
         <div className="mb-1 text-xs font-semibold text-tx-soft">{t('templates.fields')}</div>
-        {template?.params?.length ? (
+        {template?.params?.some((p) => !p.internal) ? (
           <div className="flex flex-wrap gap-2">
-            {template.params.map((p) => (
+            {template.params.filter((p) => !p.internal).map((p) => (
               <span key={p.key} className="chip" dir="auto">
                 {p.labelHe}
               </span>
@@ -88,6 +88,90 @@ function BindSection({ type, template }: { type: TenderType; template?: Template
           <div className="text-sm text-tx-mute">{t('templates.noFields')}</div>
         )}
       </div>
+    </div>
+  );
+}
+
+type InternalField = { key: string; labelHe: string; type: 'text' | 'number' };
+
+// Internal-only fields (e.g. the estimate): on the create form, never in the published document.
+function InternalFieldsSection({ type, template }: { type: TenderType; template?: TemplateDoc }) {
+  const { t } = useTranslation();
+  const current: InternalField[] = (template?.params ?? [])
+    .filter((p) => p.internal)
+    .map((p) => ({ key: p.key, labelHe: p.labelHe, type: p.type === 'number' ? 'number' : 'text' }));
+  const [draft, setDraft] = useState<InternalField>({ key: '', labelHe: '', type: 'number' });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const save = async (fields: InternalField[]) => {
+    setBusy(true);
+    setError('');
+    try {
+      await api.setTemplateInternalFields({ type, fields });
+      setDraft({ key: '', labelHe: '', type: 'number' });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="border-t border-paper-2 pt-4">
+      <div className="mb-1 text-sm font-semibold text-tx-soft">{t('templates.section.internal')}</div>
+      <p className="mb-2 text-xs text-tx-mute">{t('templates.internalHint')}</p>
+      {current.length > 0 && (
+        <ul className="mb-2 space-y-1 text-sm">
+          {current.map((f) => (
+            <li key={f.key} className="flex items-center gap-2">
+              <span className="badge bg-red-100 text-red-700">{t('sup.confidential')}</span>
+              <span dir="auto">{f.labelHe}</span>
+              <span className="text-xs text-tx-mute" dir="ltr">
+                {f.key} · {f.type}
+              </span>
+              <button
+                className="text-red-600"
+                disabled={busy}
+                onClick={() => save(current.filter((c) => c.key !== f.key))}
+              >
+                ✕
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <input
+          className="input w-28"
+          dir="ltr"
+          placeholder={t('templates.internalKey')}
+          value={draft.key}
+          onChange={(e) => setDraft({ ...draft, key: e.target.value })}
+        />
+        <input
+          className="input flex-1"
+          placeholder={t('templates.internalLabel')}
+          value={draft.labelHe}
+          onChange={(e) => setDraft({ ...draft, labelHe: e.target.value })}
+        />
+        <select
+          className="input w-24"
+          value={draft.type}
+          onChange={(e) => setDraft({ ...draft, type: e.target.value as InternalField['type'] })}
+        >
+          <option value="number">{t('templates.typeNumber')}</option>
+          <option value="text">{t('templates.typeText')}</option>
+        </select>
+        <button
+          className="btn btn-sm"
+          disabled={busy || !draft.key.trim() || !draft.labelHe.trim()}
+          onClick={() => save([...current, { ...draft, key: draft.key.trim(), labelHe: draft.labelHe.trim() }])}
+        >
+          {t('templates.addInternal')}
+        </button>
+      </div>
+      {error && <div className="mt-2 text-sm text-red-600">{error}</div>}
     </div>
   );
 }
@@ -212,6 +296,7 @@ function TypeCard({ type, template }: { type: TenderType; template?: TemplateDoc
     <div className="card space-y-4 p-5">
       <h2 className="font-semibold">{t(`type.${type}`)}</h2>
       <BindSection type={type} template={template} />
+      <InternalFieldsSection type={type} template={template} />
       <ExamplesSection type={type} template={template} />
       <SkillSection type={type} template={template} />
     </div>

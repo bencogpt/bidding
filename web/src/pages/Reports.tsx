@@ -12,8 +12,19 @@ import {
   Legend,
   CartesianGrid,
 } from 'recharts';
-import type { TenderStatus, TenderType } from '@obms/shared';
-import { useTenders, useAllAccess, useAllSubmissions, useSuppliers } from '../lib/hooks';
+import { useState } from 'react';
+import type { ScoreMetricKey, ScoreTargets, TenderStatus, TenderType } from '@obms/shared';
+import {
+  useTenders,
+  useAllAccess,
+  useAllSubmissions,
+  useSuppliers,
+  useCaseScores,
+  useScoringTargets,
+} from '../lib/hooks';
+import { useAuth } from '../auth/AuthProvider';
+import { api } from '../lib/api';
+import { formatMetric } from '../components/ScoreCard';
 import {
   statusCounts,
   typeCounts,
@@ -21,6 +32,8 @@ import {
   waitTimes,
   supplierProfiles,
   kpis,
+  cohortComparison,
+  MIN_COHORT,
 } from '../lib/analytics';
 import { downloadCsv } from '../lib/csv';
 
@@ -52,13 +65,102 @@ function Section({
   );
 }
 
+// Manager edits the score targets (good → 100, bad → 0 for each metric).
+function TargetsEditor({ targets }: { targets: ScoreTargets }) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState<ScoreTargets | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const current = draft ?? targets;
+  const keys = Object.keys(targets) as ScoreMetricKey[];
+
+  const set = (k: ScoreMetricKey, field: 'good' | 'bad', v: string) =>
+    setDraft({ ...current, [k]: { ...current[k], [field]: Number(v) } });
+  const save = async () => {
+    setBusy(true);
+    setMsg('');
+    try {
+      await api.updateScoringTargets({ targets: current });
+      setDraft(null);
+      setMsg(t('score.targetsSaved'));
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-tx-mute">{t('score.targetsHint')}</p>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-right text-xs text-tx-mute">
+            <th className="py-1">{t('score.metricCol')}</th>
+            <th className="py-1">{t('score.good')}</th>
+            <th className="py-1">{t('score.bad')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {keys.map((k) => (
+            <tr key={k} className="border-t border-paper-2">
+              <td className="py-1">{t(`score.metric.${k}`)}</td>
+              {(['good', 'bad'] as const).map((f) => (
+                <td key={f} className="py-1">
+                  <input
+                    className="input w-24"
+                    type="number"
+                    step="any"
+                    dir="ltr"
+                    value={current[k][f]}
+                    onChange={(e) => set(k, f, e.target.value)}
+                  />
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="flex items-center gap-2">
+        <button className="btn btn-gold btn-sm" disabled={busy || !draft} onClick={save}>
+          {t('common.save')}
+        </button>
+        {msg && <span className="text-sm text-tx-soft">{msg}</span>}
+      </div>
+    </div>
+  );
+}
+
 export default function Reports() {
   const { t } = useTranslation();
   const { tenders } = useTenders();
   const access = useAllAccess();
   const submissions = useAllSubmissions();
   const suppliers = useSuppliers();
+  const scores = useCaseScores();
+  const targets = useScoringTargets();
+  const { role } = useAuth();
+  const isManager = role === 'tender_manager';
+  const [backfilling, setBackfilling] = useState(false);
   const now = Date.now();
+  const cohorts = cohortComparison(scores);
+  const fmt = (row: (typeof cohorts)[number], v: number | null) =>
+    v === null ? '—' : row.key === 'total' ? String(v) : formatMetric(row.key, v);
+  const cohortData = cohorts
+    .filter((r) => r.key !== 'total' && r.key !== 'editSize')
+    .map((r) => ({
+      name: t(`score.metric.${r.key}`),
+      [t('score.cohort.ai')]: r.ai ?? 0,
+      [t('score.cohort.manual')]: r.manual ?? 0,
+    }));
+  const backfill = async () => {
+    setBackfilling(true);
+    try {
+      await api.backfillCaseScores({});
+    } finally {
+      setBackfilling(false);
+    }
+  };
 
   const sc = statusCounts(tenders);
   const tc = typeCounts(tenders);
@@ -190,6 +292,77 @@ export default function Reports() {
             </ResponsiveContainer>
           )}
         </Section>
+
+        {/* AI benefit: AI-drafted vs manual (control group) */}
+        <Section
+          title={t('score.benefitTitle')}
+          onCsv={() =>
+            downloadCsv(
+              'ai-benefit',
+              [t('score.metricCol'), t('score.cohort.ai'), 'n', t('score.cohort.manual'), 'n'],
+              cohorts.map((r) => [t(r.key === 'total' ? 'score.total' : `score.metric.${r.key}`), fmt(r, r.ai), r.aiN, fmt(r, r.manual), r.manualN]),
+            )
+          }
+        >
+          <p className="mb-3 text-xs text-tx-mute">{t('score.benefitHint')}</p>
+          {(cohorts[0].aiN < MIN_COHORT || cohorts[0].manualN < MIN_COHORT) && (
+            <div className="mb-3 rounded bg-amber-100 p-2 text-xs text-amber-700">
+              {t('score.tooFew', { ai: cohorts[0].aiN, manual: cohorts[0].manualN, min: MIN_COHORT })}
+            </div>
+          )}
+          <table className="mb-4 w-full text-sm">
+            <thead>
+              <tr className="text-right text-xs text-tx-mute">
+                <th className="py-1">{t('score.metricCol')}</th>
+                <th className="py-1">{t('score.cohort.ai')}</th>
+                <th className="py-1">{t('score.cohort.manual')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cohorts.map((r) => {
+                const better =
+                  r.ai !== null && r.manual !== null && r.ai !== r.manual
+                    ? (r.ai < r.manual) === r.lowerIsBetter
+                      ? 'ai'
+                      : 'manual'
+                    : null;
+                return (
+                  <tr key={r.key} className="border-t border-paper-2">
+                    <td className="py-1">{t(r.key === 'total' ? 'score.total' : `score.metric.${r.key}`)}</td>
+                    <td className={`py-1 ${better === 'ai' ? 'font-bold text-green-700' : ''}`} dir="ltr">
+                      {fmt(r, r.ai)} <span className="text-xs text-tx-mute">(n={r.aiN})</span>
+                    </td>
+                    <td className={`py-1 ${better === 'manual' ? 'font-bold text-green-700' : ''}`} dir="ltr">
+                      {fmt(r, r.manual)} <span className="text-xs text-tx-mute">(n={r.manualN})</span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={cohortData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+              <YAxis />
+              <Tooltip />
+              <Legend />
+              <Bar dataKey={t('score.cohort.ai')} fill="#0e8c8c" radius={[4, 4, 0, 0]} />
+              <Bar dataKey={t('score.cohort.manual')} fill="#d8a23a" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+          {isManager && (
+            <button className="btn btn-sm no-print mt-3" disabled={backfilling} onClick={backfill}>
+              {backfilling ? t('score.computing') : t('score.backfill')}
+            </button>
+          )}
+        </Section>
+
+        {isManager && (
+          <Section title={t('score.targetsTitle')}>
+            <TargetsEditor targets={targets} />
+          </Section>
+        )}
 
         <Section
           title={t('reports.supplierProfile')}

@@ -38,6 +38,22 @@ export function detectPlaceholders(text: string): TemplateParam[] {
   return params;
 }
 
+/**
+ * Merge freshly detected placeholder fields with the template's existing fields on sync/bind.
+ * Internal-only fields (e.g. the estimate) have no placeholder in the document by design, so a
+ * plain re-detect would drop them — they are kept. A detected key that was internal stays
+ * internal, so a confidential placeholder put back into the doc is never silently published.
+ */
+export function mergeSyncedParams(
+  detected: TemplateParam[],
+  existing: TemplateParam[],
+): TemplateParam[] {
+  const prev = new Map(existing.map((p) => [p.key, p]));
+  const merged = detected.map((p) => (prev.get(p.key)?.internal ? { ...p, internal: true } : p));
+  const keys = new Set(detected.map((p) => p.key));
+  return [...merged, ...existing.filter((p) => p.internal && !keys.has(p.key))];
+}
+
 /** Accept a Google Docs URL or a raw doc id and return the document id, or null. */
 export function parseDocId(urlOrId: string): string | null {
   const trimmed = urlOrId.trim();

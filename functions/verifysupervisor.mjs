@@ -44,4 +44,11 @@ try {
   console.log('\n⛔ publish blocked by the supervisor:', e.message);
   console.log('   flags:', JSON.stringify(e.details?.flags ?? [], null, 2));
 }
+
+const { data: score } = await call('recomputeCaseScore')({ tenderId: created.id });
+console.log(`\ncase score → ${score.total} (${score.grade}) · cohort ${score.cohort}`);
+for (const c of score.components) {
+  console.log(`  ${c.key}: ${c.score} (weight ${Math.round(c.weight * 100)}%) — ` +
+    c.metrics.map((m) => `${m.key}=${m.value}`).join(', '));
+}
 process.exit(0);

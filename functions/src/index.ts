@@ -15,6 +15,7 @@ import {
   createTemplateDocInput,
   syncTemplateFieldsInput,
   updateTemplateMetaInput,
+  setTemplateInternalFieldsInput,
   saveSubmissionInput,
   runComparisonInput,
   awardTenderInput,
@@ -22,12 +23,15 @@ import {
   searchSuppliersInput,
   refreshTenderDocumentInput,
   runSupervisionInput,
+  recomputeCaseScoreInput,
+  updateScoringTargetsInput,
   isSupplierVisible,
   canTransition,
   templateIdFor,
   toG9Flag,
   parseDocId,
   detectPlaceholders,
+  mergeSyncedParams,
   docExportTxtUrl,
   DEFAULT_INTERNAL_ACCESS,
   type TenderDoc,
@@ -57,6 +61,7 @@ import {
   submissionsRepo,
   bidDraftsRepo,
   internalRepo,
+  settingsRepo,
 } from './repositories.js';
 import { transition } from './stateMachines/tenderFsm.js';
 import {
@@ -78,6 +83,10 @@ import { findCandidates } from './services/supplierSearch.js';
 import { requiredSkillsFor } from './services/skillsRegistry.js';
 import { superviseTender, splitConfidential } from './services/supervisorService.js';
 import { templateHash } from './services/supervisorChecks.js';
+import { computeCaseScore, refreshCaseScore } from './services/scoreService.js';
+
+// Actor for automatic score recomputes (keeps supplier names out of score audit rows).
+const SYSTEM = { uid: 'system', name: 'מערכת' };
 
 setGlobalOptions({ region: 'europe-west1', maxInstances: 10 });
 
@@ -378,6 +387,7 @@ export const createTender = onCall(SUPERVISED, async (req) => {
     detail: skipped.length ? `ללא חשבון Google: ${skipped.join(', ')}` : undefined,
   });
   const supervision = await supervisorCheckpoint(caller, id, 'created');
+  await refreshCaseScore(SYSTEM, id);
   return { id, docsSkipped: skipped, verdict: supervision?.verdict ?? null };
 });
 
@@ -408,6 +418,7 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
     const stage = input.to === 'ready' ? 'ready' : 'review';
     verdict = (await supervisorCheckpoint(caller, input.tenderId, stage))?.verdict ?? null;
   }
+  await refreshCaseScore(SYSTEM, input.tenderId);
   return { ok: true, verdict };
 });
 
@@ -434,6 +445,7 @@ export const refreshTenderDocument = onCall(SUPERVISED, async (req) => {
     prevState: null,
     newState: null,
   });
+  await refreshCaseScore(SYSTEM, input.tenderId);
   return { ok: true, cached: !!path };
 });
 
@@ -569,6 +581,7 @@ export const askQuestion = onCall(async (req) => {
     prevState: null,
     newState: null,
   });
+  await refreshCaseScore(SYSTEM, input.tenderId);
   return { id };
 });
 
@@ -659,6 +672,7 @@ export const saveSubmission = onCall(async (req) => {
     prevState: null,
     newState: `${input.files.length} files`,
   });
+  await refreshCaseScore(SYSTEM, input.tenderId);
   return { ok: true };
 });
 
@@ -700,6 +714,7 @@ export const runComparison = onCall(
       prevState: null,
       newState: report.isStub ? 'stub' : report.model,
     });
+    await refreshCaseScore(SYSTEM, input.tenderId);
     return report;
   },
 );
@@ -728,6 +743,7 @@ export const awardTender = onCall(async (req) => {
     prevState: null,
     newState: supplier.name,
   });
+  await refreshCaseScore(SYSTEM, input.tenderId);
   return { ok: true };
 });
 
@@ -797,7 +813,55 @@ export const runSupervision = onCall(SUPERVISED, async (req) => {
   const input = parseInput(runSupervisionInput, req.data);
   const tender = await tendersRepo.get(input.tenderId);
   if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
-  return superviseTender(caller, input.tenderId, 'manual');
+  const report = await superviseTender(caller, input.tenderId, 'manual');
+  await refreshCaseScore(SYSTEM, input.tenderId);
+  return report;
+});
+
+// ---- Case success score ----
+export const recomputeCaseScore = onCall({ secrets: DOCS_SECRETS }, async (req) => {
+  const caller = requireInternal(req);
+  const input = parseInput(recomputeCaseScoreInput, req.data);
+  if (!(await tendersRepo.get(input.tenderId))) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  return computeCaseScore(caller, input.tenderId);
+});
+
+// One-time / on-demand: score every tender (e.g. tenders created before scoring existed).
+export const backfillCaseScores = onCall(
+  { secrets: DOCS_SECRETS, timeoutSeconds: 540 },
+  async (req) => {
+    const caller = requireManager(req);
+    const ids = await tendersRepo.listIds();
+    let scored = 0;
+    const failed: string[] = [];
+    for (const id of ids) {
+      try {
+        await computeCaseScore(caller, id);
+        scored++;
+      } catch (err) {
+        console.error(`backfill score failed for ${id}`, err);
+        failed.push(id);
+      }
+    }
+    return { scored, failed };
+  },
+);
+
+export const updateScoringTargets = onCall(async (req) => {
+  const caller = requireManager(req);
+  const input = parseInput(updateScoringTargetsInput, req.data);
+  await settingsRepo.setScoringTargets(input.targets);
+  await auditRepo.append({
+    entityType: 'settings',
+    entityId: 'scoring',
+    actorUid: caller.uid,
+    actorName: caller.name,
+    action: 'update_scoring_targets',
+    prevState: null,
+    newState: null,
+    detail: JSON.stringify(input.targets),
+  });
+  return { ok: true };
 });
 
 // ---- Templates: bind a Google Doc to a bid type ----
@@ -827,7 +891,7 @@ export const bindTemplateGoogleDoc = onCall(async (req) => {
     if (res.ok && contentType.includes('text/plain')) {
       const text = await res.text();
       bodyTemplate = text;
-      params = detectPlaceholders(text);
+      params = mergeSyncedParams(detectPlaceholders(text), existing?.params ?? []);
     } else {
       warning = 'doc-not-readable';
     }
@@ -888,7 +952,7 @@ export const syncTemplateFields = onCall({ secrets: DOCS_SECRETS }, async (req) 
     throw new HttpsError('failed-precondition', 'אין מסמך תבנית לסוג זה. צור מסמך תחילה.');
   }
   const text = await readTemplateDocText(existing.googleTemplateDocId);
-  const params = detectPlaceholders(text);
+  const params = mergeSyncedParams(detectPlaceholders(text), existing.params ?? []);
   await templatesRepo.patch(input.type, { bodyTemplate: text, params });
   await auditRepo.append({
     entityType: 'template',
@@ -920,6 +984,43 @@ export const updateTemplateMeta = onCall(async (req) => {
     newState: input.type,
   });
   return { ok: true };
+});
+
+// Manager defines internal-only fields for a bid type (e.g. the estimate, G6). They appear on the
+// create form, are stored in tenders/{id}/internal/params, and never reach the document.
+export const setTemplateInternalFields = onCall(async (req) => {
+  const caller = requireManager(req);
+  const input = parseInput(setTemplateInternalFieldsInput, req.data);
+  const existing = await templatesRepo.get(input.type);
+  if (!existing) throw new HttpsError('failed-precondition', `אין תבנית לסוג: ${input.type}`);
+
+  const inBody = new Set(detectPlaceholders(existing.bodyTemplate).map((p) => p.key));
+  const leaking = input.fields.filter((f) => inBody.has(f.key));
+  if (leaking.length) {
+    throw new HttpsError(
+      'failed-precondition',
+      `השדות ${leaking.map((f) => f.key).join(', ')} מופיעים כמציין מקום במסמך התבנית — הסר אותם מהמסמך לפני שתגדיר אותם כפנימיים.`,
+    );
+  }
+  const keys = input.fields.map((f) => f.key);
+  if (new Set(keys).size !== keys.length) {
+    throw new HttpsError('invalid-argument', 'מפתחות כפולים.');
+  }
+  const params = [
+    ...existing.params.filter((p) => !p.internal),
+    ...input.fields.map((f) => ({ ...f, required: false, internal: true })),
+  ];
+  await templatesRepo.patch(input.type, { params });
+  await auditRepo.append({
+    entityType: 'template',
+    entityId: input.type,
+    actorUid: caller.uid,
+    actorName: caller.name,
+    action: 'set_internal_fields',
+    prevState: existing.params.filter((p) => p.internal).map((p) => p.key).join(',') || null,
+    newState: keys.join(',') || null,
+  });
+  return { params };
 });
 
 // NOTE: sign-in blocking (only registered users may sign in) is implemented as a `beforeUserSignedIn`

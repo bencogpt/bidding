@@ -8,6 +8,7 @@ import {
   useTenderAudit,
 } from '../lib/hooks';
 import StatusBadge from './StatusBadge';
+import ScoreCard from './ScoreCard';
 
 // Consolidated "case file" for one bid: everything about it in one place.
 export default function CasePanel({ tender }: { tender: TenderDoc }) {
@@ -48,6 +49,8 @@ export default function CasePanel({ tender }: { tender: TenderDoc }) {
           </div>
         </div>
       </div>
+
+      <ScoreCard tender={tender} />
 
       {/* Parties */}
       <div className="card p-5">

@@ -2,6 +2,7 @@
 // they are unit-testable without Firestore; supervisorService wires them to real data.
 import { createHash } from 'node:crypto';
 import {
+  MANDATORY_LEGAL_SECTIONS,
   REQUIRED_SKILLS,
   isConfidentialParam,
   type SkillUse,
@@ -170,6 +171,77 @@ export function checkTemplate(i: DeterministicInput): Finding[] {
           });
         }
       }
+    }
+  }
+  return out;
+}
+
+// ---- mandatory legal sections (s11 / G3) ----
+type LegalSection = (typeof MANDATORY_LEGAL_SECTIONS)[number];
+
+/** Heading text with markdown hashes, outline numbering ("5.", "5.1", "א.") and a trailing colon removed. */
+function headingText(line: string): string {
+  return normalize(line)
+    .replace(/^#+\s*/, '')
+    .replace(/^(?:\d+(?:\.\d+)*\.?|[א-ת][.)])\s*/, '')
+    .replace(/[:：]\s*$/, '');
+}
+
+// A heading is short and isn't a sentence; a body line that merely mentions "סודיות" is not the
+// section.
+function isHeadingFor(line: string, s: LegalSection): boolean {
+  const h = headingText(line);
+  return (
+    h.length > 0 && h.length <= 60 && h.split(' ').length <= 5 && !/[.!?]$/.test(h) && s.pattern.test(h)
+  );
+}
+
+const isAnyHeading = (line: string) =>
+  /^\s*#/.test(line) || MANDATORY_LEGAL_SECTIONS.some((s) => isHeadingFor(line, s));
+
+/** Body lines of a section: after its heading, up to the next heading. Null if absent. */
+function sectionLines(text: string, s: LegalSection): string[] | null {
+  const lines = text.split('\n');
+  const start = lines.findIndex((l) => isHeadingFor(l, s));
+  if (start === -1) return null;
+  const body: string[] = [];
+  for (const l of lines.slice(start + 1)) {
+    if (isAnyHeading(l)) break;
+    if (l.trim()) body.push(l);
+  }
+  return body;
+}
+
+export function checkLegalSections(i: DeterministicInput): Finding[] {
+  if (i.docText === null) return [];
+  const out: Finding[] = [];
+  const doc = normalize(i.docText);
+  for (const s of MANDATORY_LEGAL_SECTIONS) {
+    const inTemplate = sectionLines(i.template.bodyTemplate, s);
+    if (sectionLines(i.docText, s) === null) {
+      out.push({
+        code: 'LEGAL_SECTION_MISSING',
+        severity: 'block',
+        location: inTemplate ? 'document' : `templates/${i.template.type}`,
+        message: inTemplate
+          ? `סעיף החובה "${s.nameHe}" קיים בתבנית אך הוסר מהמסמך (s11).`
+          : `סעיף החובה "${s.nameHe}" חסר — יש להוסיף לתבנית את הנוסח המשפטי המאושר (s11, G3).`,
+      });
+      continue;
+    }
+    // G3: the template's hard legal text must survive word for word (placeholders excepted).
+    const altered = (inTemplate ?? [])
+      .filter((l) => !l.includes('{{'))
+      .map(normalize)
+      .filter((l) => !doc.includes(l));
+    if (altered.length) {
+      out.push({
+        code: 'LEGAL_SECTION_ALTERED',
+        severity: 'block',
+        location: `document (${s.nameHe})`,
+        message: `נוסח סעיף החובה "${s.nameHe}" שונה מהתבנית — סעיף משפטי קשיח מועתק מילה במילה (G3).`,
+        evidence: altered[0],
+      });
     }
   }
   return out;
@@ -392,7 +464,12 @@ export function checkValues(i: DeterministicInput): Finding[] {
 }
 
 export function runDeterministicChecks(i: DeterministicInput): SupervisionFinding[] {
-  const findings: Finding[] = [...checkTemplate(i), ...checkSkills(i), ...checkValues(i)];
+  const findings: Finding[] = [
+    ...checkTemplate(i),
+    ...checkSkills(i),
+    ...checkValues(i),
+    ...checkLegalSections(i),
+  ];
   if (i.docText === null) {
     findings.push({
       code: 'DOC_UNREADABLE',

@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   REQUIRED_SKILLS,
+  MANDATORY_LEGAL_SECTIONS,
   verdictOf,
   type TemplateDoc,
   type TenderDoc,
@@ -15,6 +16,12 @@ import {
   htmlToText,
   type DeterministicInput,
 } from '../services/supervisorChecks.js';
+
+// Stand-in legal text: the check compares wording to the template, it never supplies it.
+const LEGAL = ['סודיות', 'קניין רוחני', 'אחריות ושיפוי', 'ביטול/סיום התקשרות'].flatMap((n) => [
+  `## ${n}`,
+  `נוסח מאושר לבדיקה של סעיף ${n}.`,
+]);
 
 const goods: TemplateDoc = {
   type: 'goods',
@@ -29,6 +36,7 @@ const goods: TemplateDoc = {
     'על המציע לעמוד בכל דרישות התקן הרלוונטיות ולספק אחריות יצרן.',
     '## אופן ההגשה',
     'יש להגיש הצעת מחיר מפורטת בצירוף מפרט טכני מלא עד למועד ההגשה.',
+    ...LEGAL,
   ].join('\n'),
   params: [
     { key: 'org', labelHe: 'גוף מזמין', type: 'text', required: true },
@@ -192,6 +200,42 @@ test('manual tender (no AI draft) → info only, PASS', () => {
 
 test('unreadable document → BLOCK', () => {
   assert.ok(codes(base({ docText: null })).includes('DOC_UNREADABLE:block'));
+});
+
+test('mandatory legal section missing from template and document → BLOCK', () => {
+  const noIp = { ...goods, bodyTemplate: goods.bodyTemplate.replace(/## קניין רוחני\n[^\n]+\n/, '') };
+  const doc = fill(noIp.bodyTemplate, tender.params);
+  const p = { ...provenance, templateHash: templateHash(noIp) };
+  const f = runDeterministicChecks(base({ template: noIp, docText: doc, provenance: p }));
+  const missing = f.filter((x) => x.code === 'LEGAL_SECTION_MISSING');
+  assert.equal(missing.length, 1);
+  assert.equal(missing[0].severity, 'block');
+  assert.equal(missing[0].location, 'templates/goods');
+});
+
+test('legal section removed from the document only → BLOCK at the document', () => {
+  const doc = cleanDoc.replace(/## סודיות\n[^\n]+\n/, '');
+  const f = runDeterministicChecks(base({ docText: doc })).filter((x) => x.code === 'LEGAL_SECTION_MISSING');
+  assert.equal(f.length, 1);
+  assert.equal(f[0].location, 'document');
+});
+
+test('legal wording changed from the template → BLOCK (G3 verbatim)', () => {
+  const doc = cleanDoc.replace('נוסח מאושר לבדיקה של סעיף אחריות ושיפוי.', 'הספק אחראי לנזקים עד 1,000 ₪.');
+  assert.ok(codes(base({ docText: doc })).includes('LEGAL_SECTION_ALTERED:block'));
+});
+
+test('numbered / colon headings are recognised; body mentions are not headings', () => {
+  const numbered = cleanDoc
+    .replace('## סודיות', '5. סודיות:')
+    .replace('## קניין רוחני', 'א. קניין רוחני');
+  assert.ok(!codes(base({ docText: numbered })).some((c) => c.startsWith('LEGAL_')));
+  const mentionOnly = cleanDoc.replace(/## סודיות\n/, 'המציע מתחייב לשמור על סודיות כל המידע שיימסר לו במסגרת המכרז.\n');
+  assert.ok(codes(base({ docText: mentionOnly })).includes('LEGAL_SECTION_MISSING:block'));
+});
+
+test('every mandatory section has a pattern matching its own name', () => {
+  for (const s of MANDATORY_LEGAL_SECTIONS) assert.ok(s.pattern.test(s.nameHe), s.id);
 });
 
 test('htmlToText extracts the dev-mode document text', () => {

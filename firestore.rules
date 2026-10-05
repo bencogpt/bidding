@@ -127,6 +127,16 @@ service cloud.firestore {
       }
     }
 
+    // ---- per-case success scores + scoring settings (internal analytics) ----
+    match /caseScores/{tenderId} {
+      allow read: if isInternal();
+      allow write: if false; // function-only (scoreService)
+    }
+    match /settings/{settingId} {
+      allow read: if isInternal();
+      allow write: if false; // function-only (updateScoringTargets)
+    }
+
     // ---- audit log (immutable, append-only via functions) ----
     match /auditLog/{entryId} {
       allow read: if isInternal();

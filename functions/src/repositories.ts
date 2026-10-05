@@ -16,6 +16,9 @@ import type {
   BidDraftRecord,
   TenderProvenance,
   SupervisionReport,
+  DocVersion,
+  CaseScore,
+  ScoreTargets,
 } from '@obms/shared';
 
 const stripUndefined = <T extends Record<string, unknown>>(o: T): T =>
@@ -105,6 +108,10 @@ export const tendersRepo = {
   async get(id: string): Promise<TenderDoc | null> {
     const s = await db.collection('tenders').doc(id).get();
     return s.exists ? (s.data() as TenderDoc) : null;
+  },
+  async listIds(): Promise<string[]> {
+    const q = await db.collection('tenders').select().get();
+    return q.docs.map((d) => d.id);
   },
   async update(id: string, patch: Partial<TenderDoc>): Promise<void> {
     await db.collection('tenders').doc(id).set(stripUndefined({ ...patch, updatedAt: now() }), {
@@ -252,6 +259,44 @@ export const supervisionRepo = {
       .collection('supervision')
       .doc(r.runId)
       .set(JSON.parse(JSON.stringify(r))); // deep-drops undefined (e.g. finding.evidence)
+  },
+  async list(tenderId: string): Promise<SupervisionReport[]> {
+    const q = await db.collection('tenders').doc(tenderId).collection('supervision').get();
+    return q.docs.map((d) => d.data() as SupervisionReport);
+  },
+};
+
+// ---- document content versions (internal; snapshots live in Storage) ----
+export const versionsRepo = {
+  async list(tenderId: string): Promise<DocVersion[]> {
+    const s = await db.collection('tenders').doc(tenderId).collection('internal').doc('versions').get();
+    return s.exists ? ((s.data() as { list: DocVersion[] }).list ?? []) : [];
+  },
+  async set(tenderId: string, list: DocVersion[]): Promise<void> {
+    await db
+      .collection('tenders')
+      .doc(tenderId)
+      .collection('internal')
+      .doc('versions')
+      .set({ list: JSON.parse(JSON.stringify(list)) });
+  },
+};
+
+// ---- per-case success scores (internal read only) ----
+export const caseScoresRepo = {
+  async set(s: CaseScore): Promise<void> {
+    await db.collection('caseScores').doc(s.tenderId).set(JSON.parse(JSON.stringify(s)));
+  },
+};
+
+// ---- settings ----
+export const settingsRepo = {
+  async getScoringTargets(): Promise<Partial<ScoreTargets>> {
+    const s = await db.collection('settings').doc('scoring').get();
+    return s.exists ? ((s.data() as { targets?: Partial<ScoreTargets> }).targets ?? {}) : {};
+  },
+  async setScoringTargets(targets: ScoreTargets): Promise<void> {
+    await db.collection('settings').doc('scoring').set({ targets });
   },
 };
 

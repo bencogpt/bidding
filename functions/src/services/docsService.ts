@@ -179,6 +179,43 @@ export async function readTenderDocText(tender: TenderDoc): Promise<string> {
 }
 
 /**
+ * Best-effort count of Google Docs revisions (raw editing activity). Real mode only. Google says
+ * the list can be incomplete for heavily edited Docs, so this is shown for context, never scored.
+ */
+export async function countDriveRevisions(tender: TenderDoc): Promise<number | null> {
+  if (!realMode() || !tender.googleDocId) return null;
+  const { drive } = googleClients();
+  let count = 0;
+  let pageToken: string | undefined;
+  do {
+    const res = await drive.revisions.list({
+      fileId: tender.googleDocId,
+      pageSize: 1000,
+      pageToken,
+      fields: 'nextPageToken, revisions(id)',
+    });
+    count += res.data.revisions?.length ?? 0;
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken);
+  return count;
+}
+
+/** Store a text snapshot of a document version in Storage; returns the path. */
+export async function saveVersionSnapshot(tenderId: string, name: string, text: string): Promise<string> {
+  const path = `tenders/${tenderId}/versions/${name}.txt`;
+  await storage
+    .bucket()
+    .file(path)
+    .save(Buffer.from(text, 'utf8'), { contentType: 'text/plain; charset=utf-8' });
+  return path;
+}
+
+export async function readVersionSnapshot(path: string): Promise<string> {
+  const [buf] = await storage.bucket().file(path).download();
+  return buf.toString('utf8');
+}
+
+/**
  * Resolve the Google address to use for a user's Doc permission.
  *
  * ONLY `googleEmail` counts. The OBMS login (often an @obms.test address) is not a Google

@@ -350,6 +350,30 @@ export const refreshTenderDocumentInput = z.object({
 export type RefreshTenderDocumentInput = z.infer<typeof refreshTenderDocumentInput>;
 
 export const runSupervisionInput = z.object({ tenderId: z.string() });
+
+export const recomputeCaseScoreInput = z.object({ tenderId: z.string() });
+export type RecomputeCaseScoreInput = z.infer<typeof recomputeCaseScoreInput>;
+
+const metricTargetSchema = z
+  .object({ good: z.number().finite(), bad: z.number().finite() })
+  .refine((t) => t.good !== t.bad, 'יעד ותקרה חייבים להיות שונים');
+export const updateScoringTargetsInput = z.object({
+  targets: z.object({
+    versions: metricTargetSchema,
+    daysToPublish: metricTargetSchema,
+    backSteps: metricTargetSchema,
+    firstCheck: metricTargetSchema,
+    blockRuns: metricTargetSchema,
+    blockersAtPublish: metricTargetSchema,
+    overrides: metricTargetSchema,
+    acceptance: metricTargetSchema,
+    editSize: metricTargetSchema,
+    questionsPerSupplier: metricTargetSchema,
+    addenda: metricTargetSchema,
+    responseRate: metricTargetSchema,
+  }),
+});
+export type UpdateScoringTargetsInput = z.infer<typeof updateScoringTargetsInput>;
 export type RunSupervisionInput = z.infer<typeof runSupervisionInput>;
 export type RunComparisonInput = z.infer<typeof runComparisonInput>;
 
@@ -374,3 +398,16 @@ export const updateTemplateMetaInput = z.object({
   skillMd: z.string().optional(),
 });
 export type UpdateTemplateMetaInput = z.infer<typeof updateTemplateMetaInput>;
+
+// Internal-only template fields (never placeholders in the document): replaces the full set.
+export const setTemplateInternalFieldsInput = z.object({
+  type: tenderTypeSchema,
+  fields: z.array(
+    z.object({
+      key: z.string().trim().regex(/^[\p{L}\p{N}_]+$/u, 'מפתח: אותיות, ספרות וקו תחתון בלבד'),
+      labelHe: z.string().trim().min(1),
+      type: z.enum(['text', 'number']),
+    }),
+  ),
+});
+export type SetTemplateInternalFieldsInput = z.infer<typeof setTemplateInternalFieldsInput>;

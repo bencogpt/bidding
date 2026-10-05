@@ -340,6 +340,40 @@ async function main() {
   assert.equal(awarded.awardedSupplierId, 'sup_aegis', 'winner recorded');
   console.log('✓ lifecycle: published → submitted → compared → awarded');
 
+  // ---- case success score ----
+  type Score = { total: number; cohort: string; raw: Record<string, number>; components: { key: string; score: number }[] };
+  const versions = (await getDoc(doc(db, 'tenders', tenderId, 'internal', 'versions'))).data() as
+    | { list: { n: number }[] }
+    | undefined;
+  assert.ok((versions?.list.length ?? 0) >= 1, 'document versions recorded');
+  const clean = (await getDoc(doc(db, 'caseScores', tenderId))).data() as Score;
+  assert.ok(clean, 'case score stored');
+  assert.equal(clean.cohort, 'manual');
+  const keys = clean.components.map((c) => c.key);
+  for (const k of ['efficiency', 'correctness', 'outcome']) assert.ok(keys.includes(k), `component ${k}`);
+  assert.equal(clean.raw.questionsPerSupplier, 0.5, '1 question / 2 invited suppliers');
+  const overridden = (await getDoc(doc(db, 'caseScores', bad.data.id))).data() as Score;
+  const correctness = (x: Score) => x.components.find((c) => c.key === 'correctness')!.score;
+  assert.ok(correctness(overridden) < correctness(clean), 'override lowers correctness');
+  assert.equal(overridden.raw.overrides, 1);
+  console.log(`✓ case score: clean ${clean.total} vs overridden ${overridden.total}`);
+
+  // suppliers can't read scores
+  await signOut(auth);
+  await login('a@aegis.test');
+  let scoreDenied = false;
+  try {
+    await getDoc(doc(db, 'caseScores', tenderId));
+  } catch {
+    scoreDenied = true;
+  }
+  assert.ok(scoreDenied, 'supplier cannot read case scores');
+  await signOut(auth);
+  await login('manager@obms.test');
+  const backfill = (await call('backfillCaseScores')({})) as { data: { scored: number; failed: string[] } };
+  assert.ok(backfill.data.scored >= 2 && backfill.data.failed.length === 0, 'backfill scores every tender');
+  console.log(`✓ backfill scored ${backfill.data.scored} tenders`);
+
   console.log('\n✅ E2E PASSED — full vertical slice works on the emulator');
   process.exit(0);
 }

@@ -1,7 +1,7 @@
 // Unit tests for template helpers (no network). Run via `npm run test --workspace functions`.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseDocId, detectPlaceholders } from '@obms/shared';
+import { parseDocId, detectPlaceholders, mergeSyncedParams } from '@obms/shared';
 
 test('parseDocId extracts id from a full Google Docs URL', () => {
   assert.equal(
@@ -36,4 +36,22 @@ test('detectPlaceholders supports Hebrew keys and uses them as labels', () => {
     ['גוף_מזמין', 'תקציב'],
   );
   assert.equal(params[0].labelHe, 'גוף_מזמין');
+});
+
+test('mergeSyncedParams keeps internal-only fields that have no placeholder', () => {
+  const estimate = { key: 'budget', labelHe: 'אומדן', type: 'number' as const, required: false, internal: true };
+  const merged = mergeSyncedParams(detectPlaceholders('{{org}} {{quantity}}'), [
+    { key: 'org', labelHe: 'org', type: 'text', required: true },
+    estimate,
+  ]);
+  assert.deepEqual(merged.map((p) => p.key), ['org', 'quantity', 'budget']);
+  assert.deepEqual(merged[2], estimate);
+});
+
+test('mergeSyncedParams keeps a confidential key internal if it reappears in the doc', () => {
+  const merged = mergeSyncedParams(detectPlaceholders('{{org}} {{budget}}'), [
+    { key: 'budget', labelHe: 'אומדן', type: 'number', required: false, internal: true },
+  ]);
+  assert.equal(merged.find((p) => p.key === 'budget')?.internal, true);
+  assert.equal(merged.length, 2);
 });

@@ -1,13 +1,16 @@
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { useTenders } from '../lib/hooks';
+import { useTenders, useCaseScores } from '../lib/hooks';
 import { useAuth } from '../auth/AuthProvider';
 import StatusBadge from '../components/StatusBadge';
+import { GradeBadge } from '../components/ScoreCard';
 
 export default function Dashboard() {
   const { t } = useTranslation();
   const { tenders, loading } = useTenders();
   const { role } = useAuth();
+  const scores = useCaseScores();
+  const scoreOf = (id: string) => scores.find((s) => s.tenderId === id);
 
   return (
     <div>
@@ -41,6 +44,13 @@ export default function Dashboard() {
                   <td className="px-5 py-3 text-tx-soft">{t(`type.${tn.type}`)}</td>
                   <td className="px-5 py-3">
                     <StatusBadge status={tn.status} />
+                  </td>
+                  <td className="px-5 py-3" title={t('score.title')}>
+                    {scoreOf(tn.id) ? (
+                      <GradeBadge grade={scoreOf(tn.id)!.grade} total={scoreOf(tn.id)!.total} />
+                    ) : (
+                      <span className="text-tx-mute">—</span>
+                    )}
                   </td>
                 </tr>
               ))}
