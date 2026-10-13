@@ -19,6 +19,10 @@ import type {
   DocVersion,
   CaseScore,
   ScoreTargets,
+  DciParams,
+  FeedbackRequest,
+  FeedbackDoc,
+  SkillTipsRun,
 } from '@obms/shared';
 
 const stripUndefined = <T extends Record<string, unknown>>(o: T): T =>
@@ -291,14 +295,74 @@ export const caseScoresRepo = {
 
 // ---- settings ----
 export const settingsRepo = {
-  async getScoringTargets(): Promise<Partial<ScoreTargets>> {
+  async getScoring(): Promise<{ targets: Partial<ScoreTargets>; dci: Partial<DciParams> }> {
     const s = await db.collection('settings').doc('scoring').get();
-    return s.exists ? ((s.data() as { targets?: Partial<ScoreTargets> }).targets ?? {}) : {};
+    const d = (s.data() ?? {}) as { targets?: Partial<ScoreTargets>; dci?: Partial<DciParams> };
+    return { targets: d.targets ?? {}, dci: d.dci ?? {} };
   },
-  async setScoringTargets(targets: ScoreTargets): Promise<void> {
-    await db.collection('settings').doc('scoring').set({ targets });
+  async setScoring(targets: ScoreTargets, dci?: DciParams): Promise<void> {
+    await db.collection('settings').doc('scoring').set(stripUndefined({ targets, dci }));
   },
 };
+
+// ---- participant feedback ----
+export const feedbackRepo = {
+  /** Creates missing pending requests (existing ones — answered or not — are left untouched). */
+  async createRequests(requests: FeedbackRequest[]): Promise<number> {
+    let created = 0;
+    for (const r of requests) {
+      try {
+        await db.collection('feedbackRequests').doc(r.id).create(r);
+        created++;
+      } catch {
+        /* already exists */
+      }
+    }
+    return created;
+  },
+  async getRequest(id: string): Promise<FeedbackRequest | null> {
+    const s = await db.collection('feedbackRequests').doc(id).get();
+    return s.exists ? (s.data() as FeedbackRequest) : null;
+  },
+  async answerRequest(id: string, status: 'done' | 'declined', at: number): Promise<void> {
+    await db.collection('feedbackRequests').doc(id).set({ status, answeredAt: at }, { merge: true });
+  },
+  async listRequests(tenderId: string): Promise<FeedbackRequest[]> {
+    const q = await db.collection('feedbackRequests').where('tenderId', '==', tenderId).get();
+    return q.docs.map((d) => d.data() as FeedbackRequest);
+  },
+  async save(f: FeedbackDoc): Promise<void> {
+    await db.collection('tenders').doc(f.tenderId).collection('feedback').doc(f.id).set(f);
+  },
+  async listForTender(tenderId: string): Promise<FeedbackDoc[]> {
+    const q = await db.collection('tenders').doc(tenderId).collection('feedback').get();
+    return q.docs.map((d) => d.data() as FeedbackDoc);
+  },
+  async listSince(type: string, since: number): Promise<FeedbackDoc[]> {
+    const q = await db.collectionGroup('feedback').where('submittedAt', '>=', since).get();
+    return q.docs.map((d) => d.data() as FeedbackDoc).filter((f) => f.tenderType === type);
+  },
+};
+
+export const skillTipsRepo = {
+  newId(type: string): string {
+    return db.collection('skillTips').doc(type).collection('runs').doc().id;
+  },
+  async save(r: SkillTipsRun): Promise<void> {
+    await db
+      .collection('skillTips')
+      .doc(r.type)
+      .collection('runs')
+      .doc(r.runId)
+      .set(JSON.parse(JSON.stringify(r)));
+  },
+};
+
+/** All supervision runs since a time (for tips: most frequent finding codes). */
+export async function supervisionSince(since: number): Promise<SupervisionReport[]> {
+  const q = await db.collectionGroup('supervision').where('at', '>=', since).get();
+  return q.docs.map((d) => d.data() as SupervisionReport);
+}
 
 // ---- audit (immutable, append-only) ----
 export const auditRepo = {

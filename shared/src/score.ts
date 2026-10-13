@@ -13,7 +13,7 @@
 export type ScoreComponentKey = 'efficiency' | 'correctness' | 'aiBenefit' | 'outcome';
 
 export type ScoreMetricKey =
-  | 'versions' // content versions before publication
+  | 'dci' // Document Change Index (0–100), see documentChange below
   | 'daysToPublish'
   | 'backSteps' // review loop-backs: internal_review→draft, ready→internal_review
   | 'firstCheck' // supervisor verdict at the first check after creation (PASS=0, WARN=1, BLOCK=2)
@@ -24,7 +24,12 @@ export type ScoreMetricKey =
   | 'editSize' // word-level change ratio from v1 (generated) to the published version (0–1)
   | 'questionsPerSupplier'
   | 'addenda' // document changes after publication
-  | 'responseRate'; // submissions ÷ invited suppliers (0–1)
+  | 'responseRate' // submissions ÷ invited suppliers (0–1)
+  | 'participantRating'; // mean of internal participants' feedback ratings (1–5)
+
+// Shown for context only (not scored on their own): edit sessions after the first edition,
+// churn C and rework R of the Document Change Index.
+export type RawExtraKey = 'versions' | 'churn' | 'rework';
 
 export interface MetricTarget {
   good: number;
@@ -34,7 +39,7 @@ export interface MetricTarget {
 export type ScoreTargets = Record<ScoreMetricKey, MetricTarget>;
 
 export const DEFAULT_SCORE_TARGETS: ScoreTargets = {
-  versions: { good: 3, bad: 10 },
+  dci: { good: 80, bad: 30 },
   daysToPublish: { good: 14, bad: 45 },
   backSteps: { good: 0, bad: 3 },
   firstCheck: { good: 0, bad: 2 },
@@ -46,7 +51,34 @@ export const DEFAULT_SCORE_TARGETS: ScoreTargets = {
   questionsPerSupplier: { good: 0.5, bad: 3 },
   addenda: { good: 0, bad: 3 },
   responseRate: { good: 0.6, bad: 0.1 },
+  participantRating: { good: 4.2, bad: 2.5 },
 };
+
+/**
+ * Document Change Index. With v0 = first edition, vN = last, N = edit sessions after the first:
+ *   D (net change) = change(v0, vN)
+ *   C (churn)      = Σ change(v(i-1), v(i))
+ *   R (rework)     = C > 0 ? max(0, 1 − D/C) : 0          — share of edits later undone/redone
+ *   DCI            = 100 × (1 − D) × (1 − w·R) × min(1, √(N₀/N))
+ * (1 − D) rewards a first edition that survived, (1 − w·R) penalizes back-and-forth, and
+ * √(N₀/N) gently penalizes iterations beyond the target.
+ */
+export interface DciParams {
+  targetSessions: number; // N₀
+  reworkWeight: number; // w
+}
+export const DEFAULT_DCI_PARAMS: DciParams = { targetSessions: 3, reworkWeight: 0.5 };
+
+export interface DocChange {
+  source: 'docs' | 'checkpoints';
+  sampled: boolean;
+  sessions: number; // N
+  netChange: number; // D
+  churn: number; // C
+  rework: number; // R
+  dci: number;
+  timeline: { n: number; editor: string | null; at: number; changeRatio: number | null }[];
+}
 
 export const SCORE_WEIGHTS: Record<ScoreComponentKey, number> = {
   efficiency: 0.25,
@@ -56,10 +88,10 @@ export const SCORE_WEIGHTS: Record<ScoreComponentKey, number> = {
 };
 
 export const SCORE_COMPONENT_METRICS: Record<ScoreComponentKey, ScoreMetricKey[]> = {
-  efficiency: ['versions', 'daysToPublish', 'backSteps'],
+  efficiency: ['dci', 'daysToPublish', 'backSteps'],
   correctness: ['firstCheck', 'blockRuns', 'blockersAtPublish', 'overrides'],
   aiBenefit: ['acceptance', 'editSize'],
-  outcome: ['questionsPerSupplier', 'addenda', 'responseRate'],
+  outcome: ['questionsPerSupplier', 'addenda', 'responseRate', 'participantRating'],
 };
 
 export interface ScoredMetric {
@@ -93,7 +125,8 @@ export interface CaseScore {
   driveRevisions: number | null;
   computedAt: number;
   // Raw metric values for reporting (incl. editSize for manual tenders, used by the cohort view).
-  raw: Partial<Record<ScoreMetricKey, number>>;
+  raw: Partial<Record<ScoreMetricKey | RawExtraKey, number>>;
+  docChange: DocChange | null;
 }
 
 /** One stored content version of the bid document (tenders/{id}/internal/versions). */

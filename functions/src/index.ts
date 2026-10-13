@@ -25,6 +25,9 @@ import {
   runSupervisionInput,
   recomputeCaseScoreInput,
   updateScoringTargetsInput,
+  submitFeedbackInput,
+  declineFeedbackInput,
+  generateSkillTipsInput,
   isSupplierVisible,
   canTransition,
   templateIdFor,
@@ -84,6 +87,12 @@ import { requiredSkillsFor } from './services/skillsRegistry.js';
 import { superviseTender, splitConfidential } from './services/supervisorService.js';
 import { templateHash } from './services/supervisorChecks.js';
 import { computeCaseScore, refreshCaseScore } from './services/scoreService.js';
+import {
+  requestFeedback,
+  submitFeedback as submitFeedbackSvc,
+  declineFeedback as declineFeedbackSvc,
+  generateSkillTips as generateSkillTipsSvc,
+} from './services/feedbackService.js';
 
 // Actor for automatic score recomputes (keeps supplier names out of score audit rows).
 const SYSTEM = { uid: 'system', name: 'מערכת' };
@@ -412,6 +421,8 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
       ...(path ? { docExportPath: path } : {}),
       publishedDocHash: gate.docHash,
     });
+    // Ask every internal participant how the drafting/review went.
+    await requestFeedback(caller, input.tenderId, 'publish');
   }
   let verdict = gate?.verdict ?? null;
   if (input.to === 'internal_review' || input.to === 'ready') {
@@ -743,6 +754,7 @@ export const awardTender = onCall(async (req) => {
     prevState: null,
     newState: supplier.name,
   });
+  await requestFeedback(caller, input.tenderId, 'award');
   await refreshCaseScore(SYSTEM, input.tenderId);
   return { ok: true };
 });
@@ -847,10 +859,35 @@ export const backfillCaseScores = onCall(
   },
 );
 
+// ---- Participant feedback + skill tips ----
+export const submitFeedback = onCall({ secrets: DOCS_SECRETS }, async (req) => {
+  const caller = requireInternal(req);
+  const input = parseInput(submitFeedbackInput, req.data);
+  const fb = await submitFeedbackSvc(caller, input);
+  await refreshCaseScore(SYSTEM, input.tenderId);
+  return fb;
+});
+
+export const declineFeedback = onCall(async (req) => {
+  const caller = requireInternal(req);
+  const input = parseInput(declineFeedbackInput, req.data);
+  await declineFeedbackSvc(caller, input);
+  return { ok: true };
+});
+
+export const generateSkillTips = onCall(
+  { secrets: ['ANTHROPIC_API_KEY'], timeoutSeconds: 300 },
+  async (req) => {
+    const caller = requireManager(req);
+    const input = parseInput(generateSkillTipsInput, req.data);
+    return generateSkillTipsSvc(caller, input.type);
+  },
+);
+
 export const updateScoringTargets = onCall(async (req) => {
   const caller = requireManager(req);
   const input = parseInput(updateScoringTargetsInput, req.data);
-  await settingsRepo.setScoringTargets(input.targets);
+  await settingsRepo.setScoring(input.targets, input.dci);
   await auditRepo.append({
     entityType: 'settings',
     entityId: 'scoring',

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { TENDER_TYPES, type TenderType, type TemplateDoc } from '@obms/shared';
-import { useTemplates } from '../lib/hooks';
+import { useTemplates, useLatestSkillTips } from '../lib/hooks';
 import { api } from '../lib/api';
 import { renderMarkdown } from '../lib/markdown';
 
@@ -290,6 +290,96 @@ function SkillSection({ type, template }: { type: TenderType; template?: Templat
   );
 }
 
+// AI tips on improving the drafting skills, grounded in participants' feedback.
+function SkillTipsSection({ type, template }: { type: TenderType; template?: TemplateDoc }) {
+  const { t } = useTranslation();
+  const run = useLatestSkillTips(type);
+  const [busy, setBusy] = useState(false);
+  const [applied, setApplied] = useState<Set<number>>(new Set());
+  const [error, setError] = useState('');
+
+  const generate = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await api.generateSkillTips({ type });
+      setApplied(new Set());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const apply = async (i: number, text: string) => {
+    setBusy(true);
+    setError('');
+    try {
+      const current = template?.skillMd?.trim() ?? '';
+      await api.updateTemplateMeta({ type, skillMd: current ? `${current}\n\n${text}` : text });
+      setApplied((s) => new Set(s).add(i));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="border-t border-paper-2 pt-4">
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-sm font-semibold text-tx-soft">{t('tips.title')}</span>
+        <button className="btn btn-sm" disabled={busy} onClick={generate}>
+          {busy ? t('tips.generating') : `✨ ${t('tips.generate')}`}
+        </button>
+      </div>
+      <p className="mb-2 text-xs text-tx-mute">{t('tips.hint')}</p>
+      {error && <div className="mb-2 text-sm text-red-600">{error}</div>}
+      {run && (
+        <div className="space-y-2">
+          <div className="text-xs text-tx-mute">
+            {t('tips.basedOn', { n: run.aggregate.responses, days: run.windowDays })} ·{' '}
+            <span dir="ltr">{new Date(run.createdAt).toLocaleString('he-IL')}</span>
+          </div>
+          {run.tips.length === 0 ? (
+            <div className="text-sm text-tx-mute">{t('tips.none')}</div>
+          ) : (
+            <ul className="space-y-2 text-sm">
+              {run.tips.map((tip, i) => (
+                <li key={i} className="rounded border border-paper-2 p-2">
+                  <div className="mb-1 flex flex-wrap items-center gap-2">
+                    <span className="chip" dir="ltr">
+                      {tip.target === 'skillMd' ? t('tips.targetSkillMd') : tip.target}
+                    </span>
+                    <span className="text-xs text-tx-mute">{tip.evidence.counts}</span>
+                  </div>
+                  <div className="font-medium">{tip.problemHe}</div>
+                  <div className="text-tx-soft">{tip.suggestionHe}</div>
+                  {tip.proposedSkillMdText ? (
+                    <>
+                      <pre className="mt-1 whitespace-pre-wrap rounded bg-paper-2 p-2 text-xs" dir="auto">
+                        {tip.proposedSkillMdText}
+                      </pre>
+                      <button
+                        className="btn btn-sm mt-1"
+                        disabled={busy || applied.has(i)}
+                        onClick={() => apply(i, tip.proposedSkillMdText!)}
+                      >
+                        {applied.has(i) ? `✓ ${t('tips.applied')}` : t('tips.apply')}
+                      </button>
+                    </>
+                  ) : (
+                    tip.target !== 'skillMd' && <div className="mt-1 text-xs text-amber-700">{t('tips.needsSkillFile')}</div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TypeCard({ type, template }: { type: TenderType; template?: TemplateDoc }) {
   const { t } = useTranslation();
   return (
@@ -299,6 +389,7 @@ function TypeCard({ type, template }: { type: TenderType; template?: TemplateDoc
       <InternalFieldsSection type={type} template={template} />
       <ExamplesSection type={type} template={template} />
       <SkillSection type={type} template={template} />
+      <SkillTipsSection type={type} template={template} />
     </div>
   );
 }

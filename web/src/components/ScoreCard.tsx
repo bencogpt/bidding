@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { ScoreGrade, ScoreMetricKey, TenderDoc } from '@obms/shared';
+import type { RawExtraKey, ScoreGrade, ScoreMetricKey, TenderDoc } from '@obms/shared';
 import { useCaseScore, useVersions } from '../lib/hooks';
 import { api } from '../lib/api';
 
@@ -11,10 +11,10 @@ const GRADE_COLORS: Record<ScoreGrade, string> = {
   D: 'bg-red-100 text-red-700',
 };
 
-const PCT_METRICS: ScoreMetricKey[] = ['acceptance', 'editSize', 'responseRate'];
+const PCT_METRICS: (ScoreMetricKey | RawExtraKey)[] = ['acceptance', 'editSize', 'responseRate', 'rework'];
 const VERDICTS = ['PASS', 'WARN', 'BLOCK'];
 
-export function formatMetric(key: ScoreMetricKey, v: number): string {
+export function formatMetric(key: ScoreMetricKey | RawExtraKey, v: number): string {
   if (PCT_METRICS.includes(key)) return `${Math.round(v * 100)}%`;
   if (key === 'firstCheck') return VERDICTS[v] ?? String(v);
   return Number.isInteger(v) ? String(v) : v.toFixed(1);
@@ -107,7 +107,58 @@ export default function ScoreCard({ tender }: { tender: TenderDoc }) {
         </div>
       )}
 
-      {/* Version timeline */}
+      {/* Document Change Index: first edition → last, over edit sessions */}
+      {score?.docChange && (
+        <div className="mt-4 rounded border border-paper-2 p-3">
+          <div className="mb-1 flex items-center justify-between text-sm">
+            <span className="font-semibold">{t('score.dciTitle')}</span>
+            <span className="font-display text-lg font-bold text-teal-600">{score.docChange.dci}</span>
+          </div>
+          <div className="mb-2 grid grid-cols-2 gap-1 text-xs md:grid-cols-4">
+            <span>
+              {t('score.dciN')}: <b>{score.docChange.sessions}</b>
+            </span>
+            <span>
+              {t('score.dciD')}: <b>{Math.round(score.docChange.netChange * 100)}%</b>
+            </span>
+            <span>
+              {t('score.dciC')}: <b>{Math.round(score.docChange.churn * 100)}%</b>
+            </span>
+            <span>
+              {t('score.dciR')}: <b>{Math.round(score.docChange.rework * 100)}%</b>
+            </span>
+          </div>
+          <div className="text-xs text-tx-mute" dir="ltr">
+            DCI = 100 × (1 − D) × (1 − w·R) × min(1, √(N₀/N))
+          </div>
+          <div className="mt-1 text-xs text-tx-mute">
+            {t(`score.dciSource.${score.docChange.source}`)}
+            {score.docChange.sampled && <> · {t('score.dciSampled')}</>}
+          </div>
+          {score.docChange.timeline.length > 1 && (
+            <ul className="mt-2 space-y-1 text-sm">
+              {score.docChange.timeline.map((s) => (
+                <li key={s.n} className="flex flex-wrap items-center gap-2">
+                  <span className="chip">{s.n === 0 ? t('score.firstEdition') : `#${s.n}`}</span>
+                  {s.editor && (
+                    <span className="text-tx-soft" dir="ltr">
+                      {s.editor}
+                    </span>
+                  )}
+                  <span className="text-tx-mute" dir="ltr">
+                    {new Date(s.at).toLocaleString('he-IL')}
+                  </span>
+                  {s.changeRatio !== null && (
+                    <span className="text-xs text-tx-soft">{t('score.changed', { pct: Math.round(s.changeRatio * 100) })}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {/* Checkpoint snapshots (what the supervisor saw) */}
       <div className="mt-4">
         <div className="mb-1 text-sm font-semibold">{t('score.versions')}</div>
         {versions.length === 0 ? (

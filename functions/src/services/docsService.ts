@@ -13,6 +13,7 @@ import { storage } from '../lib/admin.js';
 import type { TenderDoc, TemplateDoc, UserDoc } from '@obms/shared';
 import { TENDER_TYPE_LABELS_HE } from '@obms/shared';
 import { htmlToText } from './supervisorChecks.js';
+import { groupSessions, sampleSessions, type RevisionMeta } from './scoreCalc.js';
 
 // drive.file = access only to files the app creates. Non-sensitive → no OAuth verification
 // needed. (We create the tender doc from the template text rather than copying a foreign file,
@@ -41,6 +42,7 @@ function googleClients() {
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return {
+    auth,
     drive: google.drive({ version: 'v3', auth: auth as any }),
     docs: google.docs({ version: 'v1', auth: auth as any }),
   };
@@ -198,6 +200,70 @@ export async function countDriveRevisions(tender: TenderDoc): Promise<number | n
     pageToken = res.data.nextPageToken ?? undefined;
   } while (pageToken);
   return count;
+}
+
+export interface EditSessionText {
+  id: string;
+  at: number;
+  editor: string | null;
+  text: string;
+}
+
+/**
+ * The document's editions, one per Google Docs edit session (consecutive revisions by the same
+ * editor within 30 minutes), oldest first. Revision texts are cached in Storage so each is
+ * exported only once. Real mode only; null otherwise. Google may omit old revisions of heavily
+ * edited Docs, and > 60 sessions are sampled (first, last, even spread).
+ */
+export async function collectEditSessions(
+  tender: TenderDoc,
+): Promise<{ sessions: EditSessionText[]; sampled: boolean } | null> {
+  if (!realMode() || !tender.googleDocId) return null;
+  const { auth, drive } = googleClients();
+  const metas: (RevisionMeta & { exportUrl: string | null })[] = [];
+  let pageToken: string | undefined;
+  do {
+    const res = await drive.revisions.list({
+      fileId: tender.googleDocId,
+      pageSize: 1000,
+      pageToken,
+      fields: 'nextPageToken, revisions(id, modifiedTime, lastModifyingUser(displayName, emailAddress), exportLinks)',
+    });
+    for (const r of res.data.revisions ?? []) {
+      metas.push({
+        id: r.id!,
+        at: Date.parse(r.modifiedTime ?? '') || 0,
+        editor: r.lastModifyingUser?.emailAddress ?? r.lastModifyingUser?.displayName ?? null,
+        exportUrl: r.exportLinks?.['text/plain'] ?? null,
+      });
+    }
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken);
+  if (!metas.length) return null;
+
+  const byId = new Map(metas.map((m) => [m.id, m]));
+  const { kept, sampled } = sampleSessions(groupSessions(metas));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const token = (await (auth as any).getAccessToken())?.token ?? (await (auth as any).getAccessToken());
+  const sessions: EditSessionText[] = [];
+  for (const s of kept) {
+    const path = `tenders/${tender.id}/revisions/${s.id}.txt`;
+    const file = storage.bucket().file(path);
+    let text: string;
+    const [exists] = await file.exists();
+    if (exists) {
+      text = (await file.download())[0].toString('utf8');
+    } else {
+      const url = byId.get(s.id)?.exportUrl;
+      if (!url) continue;
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error(`revision ${s.id} export failed: ${res.status}`);
+      text = (await res.text()).replace(/^\uFEFF/, '');
+      await file.save(Buffer.from(text, 'utf8'), { contentType: 'text/plain; charset=utf-8' });
+    }
+    sessions.push({ id: s.id, at: s.at, editor: s.editor, text });
+  }
+  return sessions.length ? { sessions, sampled } : null;
 }
 
 /** Store a text snapshot of a document version in Storage; returns the path. */

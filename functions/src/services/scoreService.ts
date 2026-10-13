@@ -1,8 +1,12 @@
 // scoreService — gathers a bid case's data and computes + stores its success score
 // (caseScores/{tenderId}). Pure scoring lives in scoreCalc.ts.
 import {
+  DEFAULT_DCI_PARAMS,
   DEFAULT_SCORE_TARGETS,
+  type AuditDoc,
   type CaseScore,
+  type DciParams,
+  type DocChange,
   type DocVersion,
   type ScoreTargets,
   type TenderDoc,
@@ -13,6 +17,7 @@ import {
   accessRepo,
   auditRepo,
   caseScoresRepo,
+  feedbackRepo,
   internalRepo,
   questionsRepo,
   settingsRepo,
@@ -21,22 +26,77 @@ import {
   tendersRepo,
   versionsRepo,
 } from '../repositories.js';
-import { countDriveRevisions, readVersionSnapshot } from './docsService.js';
-import { changeRatio, computeScore } from './scoreCalc.js';
+import { collectEditSessions, countDriveRevisions, readVersionSnapshot } from './docsService.js';
+import { computeScore, documentChange } from './scoreCalc.js';
 
-export async function scoringTargets(): Promise<ScoreTargets> {
-  return { ...DEFAULT_SCORE_TARGETS, ...(await settingsRepo.getScoringTargets()) };
+export async function scoringSettings(): Promise<{ targets: ScoreTargets; dci: DciParams }> {
+  const s = await settingsRepo.getScoring();
+  return {
+    targets: { ...DEFAULT_SCORE_TARGETS, ...s.targets },
+    dci: { ...DEFAULT_DCI_PARAMS, ...s.dci },
+  };
 }
 
-/** Edit size: generated document (v1) → the version that was published, else the latest. */
-async function editSize(tender: TenderDoc, versions: DocVersion[]): Promise<number | null> {
-  if (versions.length < 2) return versions.length === 1 ? 0 : null;
-  const target =
-    (tender.publishedDocHash && versions.find((v) => v.hash === tender.publishedDocHash)) ||
-    versions[versions.length - 1];
-  if (target.n === 1) return 0;
-  const [a, b] = await Promise.all([readVersionSnapshot(versions[0].path), readVersionSnapshot(target.path)]);
-  return changeRatio(a, b);
+/**
+ * Document change from the first edition to the last one before publication (or the latest, if
+ * not published). Editions = Google Docs edit sessions; falls back to the supervisor's checkpoint
+ * snapshots under the emulator or if Drive can't be read.
+ */
+async function analyzeDocChange(
+  tender: TenderDoc,
+  audit: AuditDoc[],
+  versions: DocVersion[],
+  params: DciParams,
+): Promise<DocChange | null> {
+  const publishedAt =
+    audit
+      .filter((a) => a.action === 'status_change' && a.newState === 'published')
+      .sort((a, b) => a.at - b.at)[0]?.at ?? null;
+  const upToPublish = <T extends { at: number }>(xs: T[]) =>
+    publishedAt === null ? xs : xs.filter((x) => x.at <= publishedAt);
+
+  let editions: { at: number; editor: string | null; text: string }[] | null = null;
+  let source: DocChange['source'] = 'checkpoints';
+  let sampled = false;
+  try {
+    const docs = await collectEditSessions(tender);
+    if (docs) {
+      const kept = upToPublish(docs.sessions);
+      if (kept.length) {
+        editions = kept;
+        source = 'docs';
+        sampled = docs.sampled;
+      }
+    }
+  } catch (err) {
+    console.error(`edit sessions unavailable for ${tender.id}, using checkpoints`, err);
+  }
+  if (!editions) {
+    const kept = upToPublish(versions);
+    if (!kept.length) return null;
+    editions = await Promise.all(
+      kept.map(async (v) => ({ at: v.at, editor: null, text: await readVersionSnapshot(v.path) })),
+    );
+  }
+  const r = documentChange(
+    editions.map((e) => e.text),
+    params,
+  );
+  return {
+    source,
+    sampled,
+    sessions: r.sessions,
+    netChange: r.netChange,
+    churn: r.churn,
+    rework: r.rework,
+    dci: r.dci,
+    timeline: editions.map((e, i) => ({
+      n: i,
+      editor: e.editor,
+      at: e.at,
+      changeRatio: i === 0 ? null : Math.round(r.steps[i - 1] * 1000) / 1000,
+    })),
+  };
 }
 
 export async function computeCaseScore(
@@ -45,7 +105,7 @@ export async function computeCaseScore(
 ): Promise<CaseScore> {
   const tender = await tendersRepo.get(tenderId);
   if (!tender) throw new Error(`tender ${tenderId} not found`);
-  const [provenance, audit, supervision, versions, access, submissions, questions, targets] =
+  const [provenance, audit, supervision, versions, access, submissions, questions, settings, feedback] =
     await Promise.all([
       internalRepo.getProvenance(tenderId),
       auditRepo.forTender(tenderId),
@@ -54,10 +114,14 @@ export async function computeCaseScore(
       accessRepo.list(tenderId),
       submissionsRepo.list(tenderId),
       questionsRepo.list(tenderId),
-      scoringTargets(),
+      scoringSettings(),
+      feedbackRepo.listForTender(tenderId),
     ]);
-  const [edit, driveRevisions] = await Promise.all([
-    editSize(tender, versions).catch(() => null),
+  const [docChange, driveRevisions] = await Promise.all([
+    analyzeDocChange(tender, audit, versions, settings.dci).catch((err) => {
+      console.error(`document change failed for ${tenderId}`, err);
+      return null;
+    }),
     countDriveRevisions(tender).catch(() => null),
   ]);
   const score = computeScore({
@@ -66,12 +130,13 @@ export async function computeCaseScore(
     audit,
     supervision,
     versions,
-    editSize: edit,
+    docChange,
+    feedback,
     invitedSuppliers: access.filter((a) => a.kind === 'supplier').length,
     submissions: submissions.length,
     questions: questions.length,
     driveRevisions,
-    targets,
+    targets: settings.targets,
     now: now(),
   });
   await caseScoresRepo.set(score);

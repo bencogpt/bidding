@@ -359,7 +359,7 @@ const metricTargetSchema = z
   .refine((t) => t.good !== t.bad, 'יעד ותקרה חייבים להיות שונים');
 export const updateScoringTargetsInput = z.object({
   targets: z.object({
-    versions: metricTargetSchema,
+    dci: metricTargetSchema,
     daysToPublish: metricTargetSchema,
     backSteps: metricTargetSchema,
     firstCheck: metricTargetSchema,
@@ -371,7 +371,14 @@ export const updateScoringTargetsInput = z.object({
     questionsPerSupplier: metricTargetSchema,
     addenda: metricTargetSchema,
     responseRate: metricTargetSchema,
+    participantRating: metricTargetSchema,
   }),
+  dci: z
+    .object({
+      targetSessions: z.number().positive(),
+      reworkWeight: z.number().min(0).max(1),
+    })
+    .optional(),
 });
 export type UpdateScoringTargetsInput = z.infer<typeof updateScoringTargetsInput>;
 export type RunSupervisionInput = z.infer<typeof runSupervisionInput>;

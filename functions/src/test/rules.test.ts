@@ -37,6 +37,8 @@ before(async () => {
     await setDoc(doc(db, 'tenders/t1/internal/provenance'), { templateType: 'goods' });
     await setDoc(doc(db, 'tenders/t1/supervision/r1'), { runId: 'r1', verdict: 'PASS' });
     await setDoc(doc(db, 'caseScores/t1'), { tenderId: 't1', total: 80 });
+    await setDoc(doc(db, 'feedbackRequests/t1_publish_ul'), { uid: 'ul', tenderId: 't1', status: 'pending' });
+    await setDoc(doc(db, 'tenders/t1/feedback/publish_ul'), { uid: 'ul', tenderId: 't1', ratings: { clarity: 4 } });
     await setDoc(doc(db, 'tenders/t1/access/sup_a'), {
       principalId: 'sup_a',
       kind: 'supplier',
@@ -117,6 +119,18 @@ test('case scores are internal-only and function-written', async () => {
   await assertFails(getDoc(doc(supplierA(), 'caseScores/t1')));
   await assertSucceeds(getDoc(doc(legal(), 'caseScores/t1')));
   await assertFails(setDoc(doc(manager(), 'caseScores/t1'), { total: 100 }));
+});
+
+test('feedback: owner and managers read; other internal users and suppliers do not; no client writes', async () => {
+  const finance = env.authenticatedContext('uf', { role: 'finance' }).firestore();
+  await assertSucceeds(getDoc(doc(legal(), 'feedbackRequests/t1_publish_ul')));
+  await assertSucceeds(getDoc(doc(legal(), 'tenders/t1/feedback/publish_ul')));
+  await assertSucceeds(getDoc(doc(manager(), 'tenders/t1/feedback/publish_ul')));
+  await assertFails(getDoc(doc(finance, 'feedbackRequests/t1_publish_ul')));
+  await assertFails(getDoc(doc(finance, 'tenders/t1/feedback/publish_ul')));
+  await assertFails(getDoc(doc(supplierA(), 'tenders/t1/feedback/publish_ul')));
+  await assertFails(setDoc(doc(legal(), 'tenders/t1/feedback/publish_ul'), { ratings: { clarity: 5 } }));
+  await assertFails(setDoc(doc(legal(), 'feedbackRequests/t1_publish_ul'), { status: 'done' }, { merge: true }));
 });
 
 test('supplier WITHOUT access is denied (isolation)', async () => {

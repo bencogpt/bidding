@@ -12,7 +12,27 @@ import {
   type TenderDoc,
   type TenderProvenance,
 } from '@obms/shared';
-import { changeRatio, computeScore, type ScoreInput } from '../services/scoreCalc.js';
+import {
+  changeRatio,
+  computeScore,
+  documentChange,
+  groupSessions,
+  sampleSessions,
+  type ScoreInput,
+} from '../services/scoreCalc.js';
+import type { DocChange, FeedbackDoc } from '@obms/shared';
+
+const docChange = (over: Partial<DocChange> = {}): DocChange => ({
+  source: 'checkpoints',
+  sampled: false,
+  sessions: 1,
+  netChange: 0.05,
+  churn: 0.05,
+  rework: 0,
+  dci: 95,
+  timeline: [],
+  ...over,
+});
 
 const DAY = 86_400_000;
 const T0 = 1_700_000_000_000;
@@ -105,7 +125,8 @@ const base = (over: Partial<ScoreInput> = {}): ScoreInput => ({
   ],
   supervision: [run('created', 'PASS', T0 + 1000), run('prepublish', 'PASS', T0 + 5 * DAY - 1000)],
   versions: [version(1, T0 + 1000), version(2, T0 + 2 * DAY)],
-  editSize: 0.05,
+  docChange: docChange(),
+  feedback: [],
   invitedSuppliers: 4,
   submissions: 0,
   questions: 1,
@@ -174,7 +195,7 @@ test('BLOCK runs and an override lower correctness', () => {
 test('many versions, slow publication and loop-backs lower efficiency', () => {
   const s = computeScore(
     base({
-      versions: Array.from({ length: 9 }, (_, i) => version(i + 1, T0 + i * DAY)),
+      docChange: docChange({ sessions: 9, netChange: 0.4, churn: 1.2, rework: 0.67, dci: 21 }),
       audit: [
         status('draft', 'internal_review', T0 + DAY),
         status('internal_review', 'draft', T0 + 2 * DAY),
@@ -188,13 +209,14 @@ test('many versions, slow publication and loop-backs lower efficiency', () => {
   );
   assert.equal(s.raw.backSteps, 2);
   assert.equal(s.raw.versions, 9);
+  assert.equal(s.raw.dci, 21);
   assert.ok(comp(s, 'efficiency')!.score < 30);
 });
 
 test('versions after publication count as addenda', () => {
   const s = computeScore(base({ versions: [version(1, T0), version(2, T0 + 6 * DAY), version(3, T0 + 7 * DAY)] }));
   assert.equal(s.raw.addenda, 2);
-  assert.equal(s.raw.versions, 1);
+
 });
 
 test('response rate is measured only after the deadline', () => {
@@ -214,4 +236,78 @@ test('changeRatio: identical, small edit, full rewrite', () => {
   const small = changeRatio(a, a.replace('10', '12'));
   assert.ok(small > 0 && small < 0.2, String(small));
   assert.ok(changeRatio(a, 'טקסט אחר לגמרי ללא שום קשר למקור כלל ועיקר') > 0.8);
+});
+
+// ---- Document Change Index ----
+const A = 'גוף מזמין משרד הביטחון כמות 10 מצלמות אבטחה לאספקה מיידית עם אחריות יצרן מלאה';
+const B = A.replace('10', '12'); // small edit
+const Z = 'טקסט אחר לגמרי ללא שום קשר למקור כלל ועיקר והוא שונה בכל מילה ומילה';
+
+test('DCI: one edition → no change, DCI 100', () => {
+  const r = documentChange([A]);
+  assert.deepEqual([r.sessions, r.netChange, r.churn, r.rework, r.dci], [0, 0, 0, 0, 100]);
+});
+
+test('DCI: identical editions → DCI 100', () => {
+  assert.equal(documentChange([A, A, A]).dci, 100);
+});
+
+test('DCI: a single clean edit has no rework', () => {
+  const r = documentChange([A, B]);
+  assert.equal(r.rework, 0);
+  assert.ok(r.dci > 85 && r.dci < 100, String(r.dci));
+});
+
+test('DCI: edit-then-revert is pure rework and scores lower than the clean edit', () => {
+  const revert = documentChange([A, Z, A]);
+  assert.equal(revert.netChange, 0);
+  assert.equal(revert.rework, 1);
+  assert.ok(revert.dci < documentChange([A, B]).dci);
+  assert.equal(revert.dci, 50); // (1 − 0) × (1 − 0.5·1) × 1
+});
+
+test('DCI: many sessions beyond the target are penalized by √(N₀/N)', () => {
+  const twelve = documentChange(Array(13).fill(A)); // N = 12, no change
+  assert.equal(twelve.dci, 50); // √(3/12) = 0.5
+  const tuned = documentChange(Array(13).fill(A), { targetSessions: 12, reworkWeight: 0.5 });
+  assert.equal(tuned.dci, 100);
+});
+
+test('DCI: the worked example from the plan (D≈0.1, R≈0.2, N=4 → ≈70)', () => {
+  // Pure check of the formula itself.
+  const dci = 100 * (1 - 0.1) * (1 - 0.5 * 0.2) * Math.sqrt(3 / 4);
+  assert.equal(Math.round(dci), 70);
+});
+
+test('groupSessions: same editor within 30 min merges; different editor or long gap splits', () => {
+  const m = 60_000;
+  const s = groupSessions([
+    { id: 'r1', at: 0, editor: 'sys' },
+    { id: 'r2', at: 1 * m, editor: 'sys' },
+    { id: 'r3', at: 10 * m, editor: 'mgr' },
+    { id: 'r4', at: 35 * m, editor: 'mgr' },
+    { id: 'r5', at: 120 * m, editor: 'mgr' },
+    { id: 'r6', at: 121 * m, editor: 'legal' },
+  ]);
+  assert.deepEqual(s.map((x) => x.id), ['r2', 'r4', 'r5', 'r6']);
+});
+
+test('sampleSessions keeps first and last and caps the count', () => {
+  const xs = Array.from({ length: 200 }, (_, i) => i);
+  const { kept, sampled } = sampleSessions(xs, 60);
+  assert.ok(sampled);
+  assert.equal(kept.length, 60);
+  assert.equal(kept[0], 0);
+  assert.equal(kept[59], 199);
+  assert.deepEqual(sampleSessions([1, 2, 3], 60), { kept: [1, 2, 3], sampled: false });
+});
+
+test('participant feedback becomes the participantRating outcome metric', () => {
+  const fb = (ratings: FeedbackDoc['ratings']): FeedbackDoc => ({
+    id: 'x', tenderId: 't1', tenderType: 'goods', round: 'publish', uid: 'u', name: 'n', role: 'legal',
+    ratings, issues: [], skillAreas: [], comment: '', submittedAt: T0,
+  });
+  const s = computeScore(base({ feedback: [fb({ clarity: 4, draftQuality: 5 }), fb({ clarity: 3 })] }));
+  assert.equal(s.raw.participantRating, 4);
+  assert.ok(comp(s, 'outcome')!.metrics.some((m) => m.key === 'participantRating'));
 });

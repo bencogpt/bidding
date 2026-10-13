@@ -2,8 +2,9 @@ import { NavLink, Outlet } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/AuthProvider';
 import type { Role } from '@obms/shared';
+import { useMyFeedbackRequests } from '../lib/hooks';
 
-function NavItem({ to, label }: { to: string; label: string }) {
+function NavItem({ to, label, badge }: { to: string; label: string; badge?: number }) {
   return (
     <NavLink
       to={to}
@@ -15,6 +16,9 @@ function NavItem({ to, label }: { to: string; label: string }) {
       }
     >
       {label}
+      {!!badge && (
+        <span className="mr-2 rounded-full bg-gold px-1.5 text-xs font-bold text-ink-900">{badge}</span>
+      )}
     </NavLink>
   );
 }
@@ -23,6 +27,7 @@ export default function InternalLayout() {
   const { t } = useTranslation();
   const { role, user, logout } = useAuth();
   const isManager = role === 'tender_manager';
+  const pendingFeedback = useMyFeedbackRequests(user?.uid);
 
   return (
     <div className="flex h-full">
@@ -32,7 +37,7 @@ export default function InternalLayout() {
           <div className="text-xs text-white/50">{t('app.subtitle')}</div>
         </div>
         <nav className="flex-1 space-y-1">
-          <NavItem to="/" label={t('nav.dashboard')} />
+          <NavItem to="/" label={t('nav.dashboard')} badge={pendingFeedback.length} />
           {isManager && <NavItem to="/tenders/new" label={t('nav.newTender')} />}
           {isManager && <NavItem to="/templates" label={t('nav.templates')} />}
           {isManager && <NavItem to="/users" label={t('nav.users')} />}

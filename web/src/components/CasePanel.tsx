@@ -9,6 +9,8 @@ import {
 } from '../lib/hooks';
 import StatusBadge from './StatusBadge';
 import ScoreCard from './ScoreCard';
+import FeedbackSummary from './FeedbackSummary';
+import { useAuth } from '../auth/AuthProvider';
 
 // Consolidated "case file" for one bid: everything about it in one place.
 export default function CasePanel({ tender }: { tender: TenderDoc }) {
@@ -18,6 +20,7 @@ export default function CasePanel({ tender }: { tender: TenderDoc }) {
   const questions = useQuestions(tender.id);
   const answers = useAnswers(tender.id);
   const audit = useTenderAudit(tender.id);
+  const isManager = useAuth().role === 'tender_manager';
 
   const suppliers = access.filter((a) => a.kind === 'supplier');
   const reviewers = access.filter((a) => a.kind === 'internal');
@@ -51,6 +54,7 @@ export default function CasePanel({ tender }: { tender: TenderDoc }) {
       </div>
 
       <ScoreCard tender={tender} />
+      {isManager && <FeedbackSummary tender={tender} />}
 
       {/* Parties */}
       <div className="card p-5">

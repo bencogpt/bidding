@@ -340,6 +340,49 @@ async function main() {
   assert.equal(awarded.awardedSupplierId, 'sup_aegis', 'winner recorded');
   console.log('✓ lifecycle: published → submitted → compared → awarded');
 
+  // ---- participant feedback (publish + award rounds) ----
+  const reqs = await getDocs(query(collection(db, 'feedbackRequests'), where('tenderId', '==', tenderId)));
+  const rounds = new Set(reqs.docs.map((d) => d.data().round));
+  assert.ok(rounds.has('publish') && rounds.has('award'), 'feedback requested at publish and at award');
+  const internalCount = users.docs.filter((d) => d.data().role !== 'supplier').length;
+  assert.ok(
+    reqs.docs.filter((d) => d.data().round === 'publish').length >= internalCount - 1,
+    'every internal participant asked',
+  );
+  await signOut(auth);
+  await login('legal@obms.test');
+  const legalUser = auth.currentUser!.uid;
+  const mine = await getDocs(
+    query(collection(db, 'feedbackRequests'), where('uid', '==', legalUser), where('status', '==', 'pending')),
+  );
+  assert.ok(mine.docs.some((d) => d.data().tenderId === tenderId), 'legal sees their own pending request');
+  await call('submitFeedback')({
+    tenderId,
+    round: 'publish',
+    ratings: { draftQuality: 4, clarity: 3, completeness: 4, reviewEffort: 5 },
+    issues: ['legal_wording'],
+    skillAreas: ['legal'],
+    comment: 'סעיף האחריות דרש תיקון.',
+  });
+  const done = await getDoc(doc(db, 'feedbackRequests', `${tenderId}_publish_${legalUser}`));
+  assert.equal(done.data()!.status, 'done', 'request flips to done');
+  await signOut(auth);
+  await login('a@aegis.test');
+  let fbDenied = false;
+  try {
+    await getDocs(query(collection(db, 'feedbackRequests'), where('tenderId', '==', tenderId)));
+  } catch {
+    fbDenied = true;
+  }
+  assert.ok(fbDenied, 'supplier cannot read feedback requests');
+  await signOut(auth);
+  await login('manager@obms.test');
+  const tips = (await call('generateSkillTips')({ type: 'goods' })) as {
+    data: { aggregate: { responses: number }; tips: unknown[]; model: string };
+  };
+  assert.ok(tips.data.aggregate.responses >= 1, 'tips aggregate the feedback');
+  console.log(`✓ feedback: requests at publish + award, legal answered, tips run (${tips.data.model}, ${tips.data.tips.length} tips)`);
+
   // ---- case success score ----
   type Score = { total: number; cohort: string; raw: Record<string, number>; components: { key: string; score: number }[] };
   const versions = (await getDoc(doc(db, 'tenders', tenderId, 'internal', 'versions'))).data() as
@@ -352,6 +395,10 @@ async function main() {
   const keys = clean.components.map((c) => c.key);
   for (const k of ['efficiency', 'correctness', 'outcome']) assert.ok(keys.includes(k), `component ${k}`);
   assert.equal(clean.raw.questionsPerSupplier, 0.5, '1 question / 2 invited suppliers');
+  assert.equal(clean.raw.participantRating, 4, 'mean of legal\'s ratings');
+  const dc = (clean as unknown as { docChange: { source: string; dci: number } }).docChange;
+  assert.equal(dc.source, 'checkpoints', 'emulator measures change from checkpoints');
+  assert.ok(dc.dci >= 0 && dc.dci <= 100, 'DCI in range');
   const overridden = (await getDoc(doc(db, 'caseScores', bad.data.id))).data() as Score;
   const correctness = (x: Score) => x.components.find((c) => c.key === 'correctness')!.score;
   assert.ok(correctness(overridden) < correctness(clean), 'override lowers correctness');

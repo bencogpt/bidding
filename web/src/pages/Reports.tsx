@@ -13,7 +13,8 @@ import {
   CartesianGrid,
 } from 'recharts';
 import { useState } from 'react';
-import type { ScoreMetricKey, ScoreTargets, TenderStatus, TenderType } from '@obms/shared';
+import { DEFAULT_SCORE_TARGETS } from '@obms/shared';
+import type { DciParams, RatingKey, ScoreMetricKey, ScoreTargets, TenderStatus, TenderType } from '@obms/shared';
 import {
   useTenders,
   useAllAccess,
@@ -21,6 +22,7 @@ import {
   useSuppliers,
   useCaseScores,
   useScoringTargets,
+  useAllFeedback,
 } from '../lib/hooks';
 import { useAuth } from '../auth/AuthProvider';
 import { api } from '../lib/api';
@@ -34,6 +36,9 @@ import {
   kpis,
   cohortComparison,
   MIN_COHORT,
+  feedbackByRole,
+  topIssues,
+  dciFeedbackCorrelation,
 } from '../lib/analytics';
 import { downloadCsv } from '../lib/csv';
 
@@ -66,13 +71,15 @@ function Section({
 }
 
 // Manager edits the score targets (good → 100, bad → 0 for each metric).
-function TargetsEditor({ targets }: { targets: ScoreTargets }) {
+function TargetsEditor({ targets, dci }: { targets: ScoreTargets; dci: DciParams }) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState<ScoreTargets | null>(null);
+  const [dciDraft, setDciDraft] = useState<DciParams | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const current = draft ?? targets;
-  const keys = Object.keys(targets) as ScoreMetricKey[];
+  const currentDci = dciDraft ?? dci;
+  const keys = Object.keys(DEFAULT_SCORE_TARGETS) as ScoreMetricKey[];
 
   const set = (k: ScoreMetricKey, field: 'good' | 'bad', v: string) =>
     setDraft({ ...current, [k]: { ...current[k], [field]: Number(v) } });
@@ -80,8 +87,10 @@ function TargetsEditor({ targets }: { targets: ScoreTargets }) {
     setBusy(true);
     setMsg('');
     try {
-      await api.updateScoringTargets({ targets: current });
+      const clean = Object.fromEntries(keys.map((k) => [k, current[k]])) as ScoreTargets;
+      await api.updateScoringTargets({ targets: clean, dci: currentDci });
       setDraft(null);
+      setDciDraft(null);
       setMsg(t('score.targetsSaved'));
     } catch (e) {
       setMsg(e instanceof Error ? e.message : String(e));
@@ -121,8 +130,36 @@ function TargetsEditor({ targets }: { targets: ScoreTargets }) {
           ))}
         </tbody>
       </table>
+      <div className="flex flex-wrap items-center gap-3 text-sm">
+        <span className="font-semibold">{t('score.dciParams')}</span>
+        <label className="flex items-center gap-1">
+          N₀
+          <input
+            className="input w-20"
+            type="number"
+            step="1"
+            min="1"
+            dir="ltr"
+            value={currentDci.targetSessions}
+            onChange={(e) => setDciDraft({ ...currentDci, targetSessions: Number(e.target.value) })}
+          />
+        </label>
+        <label className="flex items-center gap-1">
+          w
+          <input
+            className="input w-20"
+            type="number"
+            step="0.1"
+            min="0"
+            max="1"
+            dir="ltr"
+            value={currentDci.reworkWeight}
+            onChange={(e) => setDciDraft({ ...currentDci, reworkWeight: Number(e.target.value) })}
+          />
+        </label>
+      </div>
       <div className="flex items-center gap-2">
-        <button className="btn btn-gold btn-sm" disabled={busy || !draft} onClick={save}>
+        <button className="btn btn-gold btn-sm" disabled={busy || (!draft && !dciDraft)} onClick={save}>
           {t('common.save')}
         </button>
         {msg && <span className="text-sm text-tx-soft">{msg}</span>}
@@ -138,9 +175,14 @@ export default function Reports() {
   const submissions = useAllSubmissions();
   const suppliers = useSuppliers();
   const scores = useCaseScores();
-  const targets = useScoringTargets();
+  const scoring = useScoringTargets();
   const { role } = useAuth();
   const isManager = role === 'tender_manager';
+  const allFeedback = useAllFeedback(isManager);
+  const fbRoles = feedbackByRole(allFeedback);
+  const fbKeys = [...new Set(fbRoles.flatMap((r) => Object.keys(r.ratings)))] as RatingKey[];
+  const fbIssues = topIssues(allFeedback);
+  const corr = dciFeedbackCorrelation(scores, allFeedback);
   const [backfilling, setBackfilling] = useState(false);
   const now = Date.now();
   const cohorts = cohortComparison(scores);
@@ -360,7 +402,67 @@ export default function Reports() {
 
         {isManager && (
           <Section title={t('score.targetsTitle')}>
-            <TargetsEditor targets={targets} />
+            <TargetsEditor targets={scoring.targets} dci={scoring.dci} />
+          </Section>
+        )}
+
+        {isManager && (
+          <Section
+            title={t('fb.reportTitle')}
+            onCsv={() =>
+              downloadCsv(
+                'participant-feedback',
+                [t('fb.role'), 'n', ...fbKeys.map((k) => t(`fb.rating.${k}`))],
+                fbRoles.map((r) => [r.role === 'all' ? t('fb.all') : t(`role.${r.role}`), r.n, ...fbKeys.map((k) => r.ratings[k] ?? '')]),
+              )
+            }
+          >
+            {allFeedback.length === 0 ? (
+              <div className="text-sm text-tx-mute">{t('fb.noneYet')}</div>
+            ) : (
+              <>
+                <table className="mb-3 w-full text-sm">
+                  <thead>
+                    <tr className="text-right text-xs text-tx-mute">
+                      <th className="py-1">{t('fb.role')}</th>
+                      {fbKeys.map((k) => (
+                        <th key={k} className="py-1">
+                          {t(`fb.rating.${k}`)}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fbRoles.map((r) => (
+                      <tr key={r.role} className="border-t border-paper-2">
+                        <td className="py-1">
+                          {r.role === 'all' ? t('fb.all') : t(`role.${r.role}`)} <span className="text-xs text-tx-mute">(n={r.n})</span>
+                        </td>
+                        {fbKeys.map((k) => (
+                          <td key={k} className="py-1" dir="ltr">
+                            {r.ratings[k] ?? '—'}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="mb-3 flex flex-wrap gap-1">
+                  {fbIssues.map((i) => (
+                    <span key={i.issue} className="chip">
+                      {t(`fb.issue.${i.issue}`)} · {i.count}
+                    </span>
+                  ))}
+                </div>
+              </>
+            )}
+            <div className="rounded border border-paper-2 p-3 text-sm">
+              <div className="font-semibold">{t('fb.corrTitle')}</div>
+              <div className="text-xs text-tx-mute">{t('fb.corrHint')}</div>
+              <div className="mt-1" dir="ltr">
+                {corr.r === null ? t('fb.corrTooFew', { n: corr.n }) : `r = ${corr.r} (n=${corr.n})`}
+              </div>
+            </div>
           </Section>
         )}
 

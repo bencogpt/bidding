@@ -127,6 +127,23 @@ service cloud.firestore {
       }
     }
 
+    // ---- participant feedback: owner + managers read; function-only writes ----
+    match /feedbackRequests/{requestId} {
+      allow read: if isInternal() && (resource.data.uid == request.auth.uid || isManager());
+      allow write: if false; // function-only (createFeedbackRequests / submitFeedback)
+    }
+    match /tenders/{tenderId}/feedback/{feedbackId} {
+      allow read: if isInternal() && (resource.data.uid == request.auth.uid || isManager());
+      allow write: if false; // function-only (submitFeedback)
+    }
+    match /{path=**}/feedback/{feedbackId} {
+      allow read: if isManager();
+    }
+    match /skillTips/{type}/runs/{runId} {
+      allow read: if isManager();
+      allow write: if false; // function-only (generateSkillTips)
+    }
+
     // ---- per-case success scores + scoring settings (internal analytics) ----
     match /caseScores/{tenderId} {
       allow read: if isInternal();
