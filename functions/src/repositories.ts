@@ -23,6 +23,7 @@ import type {
   FeedbackRequest,
   FeedbackDoc,
   SkillTipsRun,
+  ConversionRun,
 } from '@obms/shared';
 
 const stripUndefined = <T extends Record<string, unknown>>(o: T): T =>
@@ -368,6 +369,28 @@ export const feedbackRepo = {
   async listSince(type: string, since: number): Promise<FeedbackDoc[]> {
     const q = await db.collectionGroup('feedback').where('submittedAt', '>=', since).get();
     return q.docs.map((d) => d.data() as FeedbackDoc).filter((f) => f.tenderType === type);
+  },
+};
+
+// ---- template conversion proposals (templates/{type}/conversions/{runId}) ----
+export const conversionsRepo = {
+  newId(type: string): string {
+    return db.collection('templates').doc(type).collection('conversions').doc().id;
+  },
+  async save(r: ConversionRun): Promise<void> {
+    await db
+      .collection('templates')
+      .doc(r.type)
+      .collection('conversions')
+      .doc(r.runId)
+      .set(JSON.parse(JSON.stringify(r)));
+  },
+  async get(type: string, runId: string): Promise<ConversionRun | null> {
+    const s = await db.collection('templates').doc(type).collection('conversions').doc(runId).get();
+    return s.exists ? (s.data() as ConversionRun) : null;
+  },
+  async markApplied(type: string, runId: string, at: number): Promise<void> {
+    await db.collection('templates').doc(type).collection('conversions').doc(runId).set({ appliedAt: at }, { merge: true });
   },
 };
 

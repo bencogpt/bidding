@@ -28,6 +28,11 @@ function realMode(): boolean {
   return process.env.USE_GOOGLE_DOCS === 'true' || !!process.env.GOOGLE_OAUTH_REFRESH_TOKEN;
 }
 
+/** Whether documents live in Google Docs (deployed) or as HTML in Storage (emulator/dev). */
+export function docsRealMode(): boolean {
+  return realMode();
+}
+
 function googleClients() {
   const refreshToken = process.env.GOOGLE_OAUTH_REFRESH_TOKEN;
   const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
@@ -322,6 +327,24 @@ export async function setDocumentPermissions(
   };
   for (const email of opts.writerEmails ?? []) await grant(email, 'writer');
   for (const email of opts.commenterEmails ?? []) await grant(email, 'commenter');
+}
+
+/** Copy a Doc as a backup before modifying it (e.g. template conversion). Returns the copy id. */
+export async function backupDoc(googleDocId: string, name: string): Promise<string> {
+  const { drive } = googleClients();
+  const copy = await drive.files.copy({ fileId: googleDocId, requestBody: { name }, fields: 'id' });
+  return copy.data.id!;
+}
+
+/** Run replaceAllText requests on a Doc; returns how many occurrences each request changed. */
+export async function replaceInDoc(
+  googleDocId: string,
+  requests: { replaceAllText: { containsText: { text: string; matchCase: boolean }; replaceText: string } }[],
+): Promise<number[]> {
+  if (!requests.length) return [];
+  const { docs } = googleClients();
+  const res = await docs.documents.batchUpdate({ documentId: googleDocId, requestBody: { requests } });
+  return (res.data.replies ?? []).map((r) => r.replaceAllText?.occurrencesChanged ?? 0);
 }
 
 /** Remove a user's Google Docs permission (when they leave the case team). Best-effort. */

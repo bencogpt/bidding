@@ -60,6 +60,12 @@ service cloud.firestore {
     match /templates/{templateId} {
       allow read: if isInternal();
       allow write: if false; // function-only (seed / manager via function)
+
+      // template-conversion proposals awaiting manager review
+      match /conversions/{runId} {
+        allow read: if isManager();
+        allow write: if false; // function-only (analyzeTemplateFields)
+      }
     }
 
     // ---- tenders ----

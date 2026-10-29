@@ -68,6 +68,11 @@ export const templateDocSchema = z.object({
     .optional(),
   // per-type "bid manager skill" guidance, authored in Markdown
   skillMd: z.string().optional(),
+  // Conversion of Word-based documents into real templates (templateConverter).
+  fieldsStatus: z.enum(['ready', 'needs_conversion']).optional(),
+  unresolvedSpots: z.number().optional(),
+  supplierFillQuotes: z.array(z.string()).optional(), // spots the supplier fills — left as-is
+  backupDocIds: z.array(z.string()).optional(),
 });
 export type TemplateDoc = z.infer<typeof templateDocSchema>;
 

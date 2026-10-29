@@ -23,6 +23,8 @@ import {
   serverTimestamp,
 } from 'firebase/firestore';
 import { getFunctions, connectFunctionsEmulator, httpsCallable } from 'firebase/functions';
+import { initializeApp as initAdmin } from 'firebase-admin/app';
+import { getFirestore as adminFirestore } from 'firebase-admin/firestore';
 
 const app = initializeApp({ projectId: 'biding-system', apiKey: 'demo' });
 const auth = getAuth(app);
@@ -532,6 +534,71 @@ async function main() {
   const backfill = (await call('backfillCaseScores')({})) as { data: { scored: number; failed: string[] } };
   assert.ok(backfill.data.scored >= 2 && backfill.data.failed.length === 0, 'backfill scores every tender');
   console.log(`✓ backfill scored ${backfill.data.scored} tenders`);
+
+  // ---- template conversion: a Word-style document (XXXX / ____, no {{fields}}) ----
+  // Loaded through the admin SDK (emulator), as a manager would after pasting a .docx into a Doc.
+  process.env.FIRESTORE_EMULATOR_HOST ??= '127.0.0.1:8080';
+  const adminDb = adminFirestore(initAdmin({ projectId: 'biding-system' }, 'e2e-admin'));
+  await adminDb.collection('templates').doc('service').set(
+    {
+      bodyTemplate: [
+        'הנדון: בל"מ מס\' XXXX למתן שירותי XXXX',
+        '## אופן הגשת ההצעה',
+        'יש להגיש עד XXXXX',
+        'שם הבנק/חברת הביטוח ________',
+      ].join('\n'),
+      params: [],
+      supplierFillQuotes: [],
+    },
+    { merge: true },
+  );
+  const svcTeam = { ...goodsTeam, security: uidOf('security') };
+  let notConverted = false;
+  try {
+    await call('createTender')({ title: 'שירות', type: 'service', params: {}, team: svcTeam });
+  } catch (e) {
+    notConverted = /טרם הומרה/.test((e as Error).message);
+  }
+  assert.ok(notConverted, 'creating from an unconverted template is refused');
+  const analysis = (await call('analyzeTemplateFields')({ type: 'service' })) as {
+    data: { runId: string; unresolved: unknown[]; fields: unknown[] };
+  };
+  assert.ok(analysis.data.unresolved.length >= 4, 'emulator analysis lists the fill-in spots (no AI)');
+  const report = (await call('applyTemplateConversion')({
+    type: 'service',
+    runId: analysis.data.runId,
+    fields: [
+      { key: 'tender_number', labelHe: 'מספר הבל"מ', type: 'text', required: true, occurrences: [{ quote: 'בל"מ מס\' XXXX', replace: 'XXXX' }] },
+      { key: 'service_subject', labelHe: 'נושא השירות', type: 'text', required: true, occurrences: [{ quote: 'שירותי XXXX', replace: 'XXXX' }] },
+      { key: 'submission_date', labelHe: 'מועד הגשה', type: 'date', required: true, occurrences: [{ quote: 'עד XXXXX', replace: 'XXXXX' }] },
+    ],
+    supplierFill: ['שם הבנק/חברת הביטוח ________'],
+  })) as { data: { status: string; fields: number; unresolved: unknown[] } };
+  assert.equal(report.data.status, 'ready', 'template is ready after conversion');
+  assert.equal(report.data.unresolved.length, 0);
+  const svc = (await getDoc(doc(db, 'templates', 'service'))).data() as {
+    bodyTemplate: string;
+    params: { key: string; labelHe: string; required: boolean }[];
+    fieldsStatus: string;
+  };
+  assert.ok(svc.bodyTemplate.includes("בל\"מ מס' {{tender_number}}"), '{{fields}} written into the template');
+  assert.equal(svc.params.find((p) => p.key === 'tender_number')?.labelHe, 'מספר הבל"מ', 'labels kept');
+  assert.equal(svc.fieldsStatus, 'ready');
+  let missingRequired = false;
+  try {
+    await call('createTender')({ title: 'שירות', type: 'service', params: { tender_number: '2026-01' }, team: svcTeam });
+  } catch (e) {
+    missingRequired = /שדה חובה חסר/.test((e as Error).message);
+  }
+  assert.ok(missingRequired, 'an empty required template field is rejected');
+  const svcCase = (await call('createTender')({
+    title: 'מכרז שירותי פיתוח',
+    type: 'service',
+    params: { tender_number: '2026-01', service_subject: 'פיתוח ותחזוקה', submission_date: '2026-12-01' },
+    team: svcTeam,
+  })) as { data: { id: string } };
+  assert.ok(svcCase.data.id, 'case created once every template field is filled');
+  console.log(`✓ template conversion: refused → analysed → converted (${report.data.fields} fields) → form enforced`);
 
   // ---- one-time migrations are idempotent ----
   const s1 = (await call('backfillSerials')({})) as { data: { assigned: number } };

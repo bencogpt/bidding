@@ -5,6 +5,7 @@ import { useTemplates, useLatestSkillTips } from '../lib/hooks';
 import { api } from '../lib/api';
 import { renderMarkdown } from '../lib/markdown';
 import SkillsCatalog, { TypeSkills } from '../components/SkillsCatalog';
+import TemplateConverter from '../components/TemplateConverter';
 
 type Example = { title: string; url: string };
 
@@ -387,6 +388,7 @@ function TypeCard({ type, template }: { type: TenderType; template?: TemplateDoc
     <div className="card space-y-4 p-5">
       <h2 className="font-semibold">{t(`type.${type}`)}</h2>
       <BindSection type={type} template={template} />
+      <TemplateConverter type={type} template={template} />
       <InternalFieldsSection type={type} template={template} />
       <ExamplesSection type={type} template={template} />
       <SkillSection type={type} template={template} />

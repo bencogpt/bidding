@@ -6,6 +6,7 @@ import {
   TEAM_ROLES,
   isConfidentialParam,
   requiredRolesFor,
+  templateFieldsStatus,
   type CaseTeam,
   type TeamRole,
   type TenderType,
@@ -44,6 +45,11 @@ export default function TenderCreate() {
   const [team, setTeam] = useState<CaseTeam>({});
   const [extraRoles, setExtraRoles] = useState<TeamRole[]>([]);
   const requiredRoles = requiredRolesFor(type, extraRoles);
+  // A template that still has Word-style blanks (XXXX / ____) can't be used until it is converted.
+  const templateStatus = template
+    ? templateFieldsStatus(template.bodyTemplate ?? '', template.supplierFillQuotes ?? [])
+    : null;
+  const notConverted = templateStatus?.status === 'needs_conversion';
 
   const setParam = (k: string, v: string) => setParams((p) => ({ ...p, [k]: v }));
 
@@ -145,6 +151,11 @@ export default function TenderCreate() {
         {draftNote && <div className="rounded bg-amber-100 p-2 text-xs text-amber-700">{draftNote}</div>}
       </div>
 
+      {notConverted && (
+        <div className="card mb-5 border-amber-300 bg-amber-50 p-4 text-sm text-amber-800">
+          {t('conv.createBlocked', { n: templateStatus!.unresolved })}
+        </div>
+      )}
       <form onSubmit={submit} className="card space-y-5 p-6">
         <div>
           <label className="label">{t('create.tenderTitle')}</label>
@@ -253,7 +264,7 @@ export default function TenderCreate() {
         </div>
 
         {error && <div className="text-sm text-red-600">{error}</div>}
-        <button className="btn btn-gold" disabled={busy}>
+        <button className="btn btn-gold" disabled={busy || notConverted}>
           {busy ? t('create.creating') : t('create.submit')}
         </button>
       </form>

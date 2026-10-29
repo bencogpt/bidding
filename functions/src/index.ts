@@ -43,6 +43,9 @@ import {
   parseDocId,
   detectPlaceholders,
   mergeSyncedParams,
+  templateFieldsStatus,
+  analyzeTemplateFieldsInput,
+  applyTemplateConversionInput,
   docExportTxtUrl,
   DEFAULT_INTERNAL_ACCESS,
   type TenderDoc,
@@ -99,6 +102,7 @@ import { requiredSkillsFor, skillsCatalog } from './services/skillsRegistry.js';
 import { superviseTender, splitConfidential } from './services/supervisorService.js';
 import { templateHash } from './services/supervisorChecks.js';
 import { computeCaseScore, refreshCaseScore } from './services/scoreService.js';
+import { analyzeTemplate, applyConversion } from './services/templateConverter.js';
 import {
   requestFeedback,
   submitFeedback as submitFeedbackSvc,
@@ -317,6 +321,14 @@ export const createTender = onCall(SUPERVISED, async (req) => {
   const template = await templatesRepo.get(input.type);
   if (!template) {
     throw new HttpsError('failed-precondition', `אין תבנית לסוג המכרז: ${input.type}`);
+  }
+  // A template still carrying Word-style fill-in spots (XXXX / ____) or no {{fields}} would produce
+  // a document with blanks the form never asked for — convert it first (Templates page).
+  if (templateFieldsStatus(template.bodyTemplate, template.supplierFillQuotes).status === 'needs_conversion') {
+    throw new HttpsError(
+      'failed-precondition',
+      'התבנית טרם הומרה — יש להשלים את שדות התבנית בעמוד התבניות לפני יצירת מכרז.',
+    );
   }
   const params = validateParams(template, input.params);
   // Confidential values (the estimate, G6) never go on the supplier-readable tender doc.
@@ -1114,6 +1126,7 @@ export const bindTemplateGoogleDoc = onCall(async (req) => {
     warning = 'doc-not-readable';
   }
 
+  const st = templateFieldsStatus(bodyTemplate, existing?.supplierFillQuotes);
   await templatesRepo.upsert({
     type: input.type,
     title: input.title || existing?.title || DEFAULT_TEMPLATE_TITLE[input.type] || input.type,
@@ -1121,6 +1134,8 @@ export const bindTemplateGoogleDoc = onCall(async (req) => {
     sourceUrl: input.urlOrId,
     bodyTemplate,
     params,
+    fieldsStatus: st.status,
+    unresolvedSpots: st.unresolved,
   });
   await auditRepo.append({
     entityType: 'template',
@@ -1131,7 +1146,7 @@ export const bindTemplateGoogleDoc = onCall(async (req) => {
     prevState: existing?.googleTemplateDocId ?? null,
     newState: docId,
   });
-  return { docId, params, warning };
+  return { docId, params, warning, fieldsStatus: st.status, unresolvedSpots: st.unresolved };
 });
 
 // Create a private, system-owned Google Doc template for a bid type (seeded from bodyTemplate).
@@ -1168,7 +1183,13 @@ export const syncTemplateFields = onCall({ secrets: DOCS_SECRETS }, async (req) 
   }
   const text = await readTemplateDocText(existing.googleTemplateDocId);
   const params = mergeSyncedParams(detectPlaceholders(text), existing.params ?? []);
-  await templatesRepo.patch(input.type, { bodyTemplate: text, params });
+  const st = templateFieldsStatus(text, existing.supplierFillQuotes);
+  await templatesRepo.patch(input.type, {
+    bodyTemplate: text,
+    params,
+    fieldsStatus: st.status,
+    unresolvedSpots: st.unresolved,
+  });
   await auditRepo.append({
     entityType: 'template',
     entityId: input.type,
@@ -1176,9 +1197,26 @@ export const syncTemplateFields = onCall({ secrets: DOCS_SECRETS }, async (req) 
     actorName: caller.name,
     action: 'sync_template_fields',
     prevState: null,
-    newState: `${params.length} fields`,
+    newState: `${params.length} fields · ${st.status}`,
   });
-  return { params };
+  return { params, fieldsStatus: st.status, unresolvedSpots: st.unresolved };
+});
+
+// Template conversion: an agent loop proposes {{fields}} for a Word-based document (draft only).
+export const analyzeTemplateFields = onCall(
+  { secrets: [...DOCS_SECRETS, 'ANTHROPIC_API_KEY'], timeoutSeconds: 540, memory: '1GiB' },
+  async (req) => {
+    const caller = requireManager(req);
+    const input = parseInput(analyzeTemplateFieldsInput, req.data);
+    return analyzeTemplate(caller, input.type);
+  },
+);
+
+// After manager review: back up the Doc, write the {{fields}}, re-sync params with their labels.
+export const applyTemplateConversion = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 300 }, async (req) => {
+  const caller = requireManager(req);
+  const input = parseInput(applyTemplateConversionInput, req.data);
+  return applyConversion(caller, input);
 });
 
 // Manager curates per-type reference examples + the "bid manager skill" markdown.

@@ -49,9 +49,72 @@ export function mergeSyncedParams(
   existing: TemplateParam[],
 ): TemplateParam[] {
   const prev = new Map(existing.map((p) => [p.key, p]));
-  const merged = detected.map((p) => (prev.get(p.key)?.internal ? { ...p, internal: true } : p));
+  // A key still in the doc keeps its approved metadata (Hebrew label, type, required, internal) —
+  // a re-sync must not reset a converted template's fields to raw keys and plain text.
+  const merged = detected.map((p) => {
+    const old = prev.get(p.key);
+    return old ? { ...p, labelHe: old.labelHe, type: old.type, required: old.required, ...(old.internal ? { internal: true } : {}) } : p;
+  });
   const keys = new Set(detected.map((p) => p.key));
   return [...merged, ...existing.filter((p) => p.internal && !keys.has(p.key))];
+}
+
+// ---- Word-style fill-in spots (XXXX, ____) in documents that aren't real templates yet ----
+
+const FILL_SPOT_RE = /X{2,}|_{3,}/g;
+
+export interface FillSpot {
+  marker: string; // the XXXX / ____ run
+  line: string; // the (trimmed) line it sits on, for context
+  lineNo: number;
+}
+
+/** Whether a quote carries real words (vs. only blanks like "_______ ______"). */
+export const hasWords = (q: string): boolean => /[\p{L}\p{N}]{2,}/u.test(q);
+
+const normLine = (s: string) => s.replace(/\s+/g, ' ').trim();
+
+/**
+ * Whether a line is covered by a supplier-fill quote. A quote with words matches any line that
+ * contains it ("שם הבנק ____"); a word-less quote (a bare blank line under "לכבוד", a signature
+ * row) matches only lines that are exactly that blank — never a manager line that merely has a
+ * blank of the same length.
+ */
+export function isSupplierFillLine(line: string, supplierFillQuotes: readonly string[]): boolean {
+  const l = normLine(line);
+  return supplierFillQuotes.some((raw) => {
+    const q = normLine(raw);
+    return !!q && (hasWords(q) ? l.includes(q) : l === q);
+  });
+}
+
+/**
+ * Fill-in spots left in a document: XXXX-style and ____-style markers, except on lines the
+ * supplier fills (see isSupplierFillLine).
+ */
+export function findFillSpots(text: string, supplierFillQuotes: readonly string[] = []): FillSpot[] {
+  const spots: FillSpot[] = [];
+  text.split('\n').forEach((raw, i) => {
+    const line = normLine(raw);
+    if (!line || isSupplierFillLine(line, supplierFillQuotes)) return;
+    for (const m of line.matchAll(FILL_SPOT_RE)) spots.push({ marker: m[0], line, lineNo: i + 1 });
+  });
+  return spots;
+}
+
+export type TemplateFieldsStatus = 'ready' | 'needs_conversion';
+
+/**
+ * A template is usable for new cases only when it has real {{fields}} and no unresolved Word-style
+ * fill-in spots. Recomputed from the text, so it can't drift from the document.
+ */
+export function templateFieldsStatus(
+  bodyTemplate: string,
+  supplierFillQuotes: readonly string[] = [],
+): { status: TemplateFieldsStatus; unresolved: number; fields: number } {
+  const fields = detectPlaceholders(bodyTemplate).length;
+  const unresolved = findFillSpots(bodyTemplate, supplierFillQuotes).length;
+  return { status: fields > 0 && unresolved === 0 ? 'ready' : 'needs_conversion', unresolved, fields };
 }
 
 /** Accept a Google Docs URL or a raw doc id and return the document id, or null. */
