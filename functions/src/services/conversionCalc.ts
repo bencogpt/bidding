@@ -91,29 +91,57 @@ export function validateProposals(
   return { fields: [...byKey.values()], supplierFill: fill, dropped };
 }
 
-/** All occurrences, longest quote first (so a short quote can't break a longer one). */
-function orderedOccurrences(fields: ConversionField[]) {
-  return fields
-    .flatMap((f) => f.occurrences.map((o) => ({ ...o, key: f.key })))
-    .sort((a, b) => b.quote.length - a.quote.length);
+interface QuoteEdit {
+  quote: string;
+  spans: { replace: string; key: string }[]; // every field written inside this quote
 }
 
-export const placeholderQuote = (o: { quote: string; replace: string; key: string }) =>
-  o.quote.replace(o.replace, `{{${o.key}}}`);
+/**
+ * Occurrences grouped by identical quote — two fields often share one sentence ("{{name}}, טלפון:
+ * {{phone}}"), and replacing them one request at a time would make the second quote stale. Longest
+ * quote first, so a short quote can't break a longer one.
+ */
+function quoteEdits(fields: ConversionField[]): QuoteEdit[] {
+  const byQuote = new Map<string, QuoteEdit>();
+  for (const f of fields) {
+    for (const o of f.occurrences) {
+      const e = byQuote.get(o.quote) ?? { quote: o.quote, spans: [] };
+      if (!e.spans.some((s) => s.replace === o.replace)) e.spans.push({ replace: o.replace, key: f.key });
+      byQuote.set(o.quote, e);
+    }
+  }
+  return [...byQuote.values()].sort((a, b) => b.quote.length - a.quote.length);
+}
+
+/** The quote with every span replaced by its {{key}} (spans located in the original quote). */
+export function placeholderQuote(e: QuoteEdit): string {
+  const located = e.spans
+    .map((s) => ({ ...s, at: e.quote.indexOf(s.replace) }))
+    .filter((s) => s.at >= 0)
+    .sort((a, b) => b.at - a.at); // right to left keeps earlier indexes valid
+  let out = e.quote;
+  let limit = Infinity;
+  for (const s of located) {
+    if (s.at + s.replace.length > limit) continue; // overlapping span — keep the first one only
+    out = out.slice(0, s.at) + `{{${s.key}}}` + out.slice(s.at + s.replace.length);
+    limit = s.at;
+  }
+  return out;
+}
 
 /** The document text after the conversion — exactly what the Docs replaceAllText batch produces. */
 export function applyToText(text: string, fields: ConversionField[]): string {
   let out = text;
-  for (const o of orderedOccurrences(fields)) out = out.split(o.quote).join(placeholderQuote(o));
+  for (const e of quoteEdits(fields)) out = out.split(e.quote).join(placeholderQuote(e));
   return out;
 }
 
 /** Docs API requests for the conversion, in the same order as applyToText. */
 export function replaceRequests(fields: ConversionField[]) {
-  return orderedOccurrences(fields).map((o) => ({
+  return quoteEdits(fields).map((e) => ({
     replaceAllText: {
-      containsText: { text: o.quote, matchCase: true },
-      replaceText: placeholderQuote(o),
+      containsText: { text: e.quote, matchCase: true },
+      replaceText: placeholderQuote(e),
     },
   }));
 }

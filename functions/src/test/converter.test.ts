@@ -133,3 +133,20 @@ test('sync keeps approved labels and types for converted fields', () => {
   const resynced = mergeSyncedParams(detectPlaceholders(text), params);
   assert.equal(resynced.find((p) => p.key === 'subject')!.labelHe, 'נושא הרכש');
 });
+
+test('two fields in one sentence are written by a single replacement', () => {
+  const text = "29. נציגת המזמין הינה נעמה, מס' טלפון: 077-4305464.";
+  const quote = "הינה נעמה, מס' טלפון: 077-4305464";
+  const v = validateProposals(
+    text,
+    [
+      { key: 'contact_name', labelHe: 'שם', type: 'text', required: true, occurrences: [{ quote, replace: 'נעמה' }] },
+      { key: 'contact_phone', labelHe: 'טלפון', type: 'text', required: true, occurrences: [{ quote, replace: '077-4305464' }] },
+    ],
+    [],
+  );
+  const reqs = replaceRequests(v.fields);
+  assert.equal(reqs.length, 1, 'one request for the shared quote');
+  assert.equal(reqs[0].replaceAllText.replaceText, "הינה {{contact_name}}, מס' טלפון: {{contact_phone}}");
+  assert.equal(applyToText(text, v.fields), "29. נציגת המזמין הינה {{contact_name}}, מס' טלפון: {{contact_phone}}.");
+});
