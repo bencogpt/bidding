@@ -50,6 +50,13 @@ test('a word-less supplier quote exempts only lines that are exactly that blank'
   assert.equal(findFillSpots(row, ['חתימה ____ ____']).length, 0);
 });
 
+test('a bare XXXX supplier quote does not exempt manager lines containing XXXX', () => {
+  const text = ['הנדון: בל"ם מס\' XXXX בקשה', 'בברכה,', 'XXXX', 'יחידת הרכש'].join('\n');
+  const spots = findFillSpots(text, ['XXXX']);
+  assert.equal(spots.length, 1, 'only the identical line is exempt');
+  assert.ok(spots[0].line.startsWith('הנדון'));
+});
+
 test('templateFieldsStatus: needs conversion until fields exist and no spots remain', () => {
   assert.equal(templateFieldsStatus(DOC).status, 'needs_conversion');
   assert.equal(templateFieldsStatus('גוף מזמין: {{org}}').status, 'ready');

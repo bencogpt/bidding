@@ -69,8 +69,11 @@ export interface FillSpot {
   lineNo: number;
 }
 
-/** Whether a quote carries real words (vs. only blanks like "_______ ______"). */
-export const hasWords = (q: string): boolean => /[\p{L}\p{N}]{2,}/u.test(q);
+/**
+ * Whether a quote carries real words (vs. only fill-in markers like "_______ ______" or "XXXX" —
+ * the X's of a marker are letters but not words).
+ */
+export const hasWords = (q: string): boolean => /[\p{L}\p{N}]{2,}/u.test(q.replace(/X{2,}|_{3,}/g, ' '));
 
 const normLine = (s: string) => s.replace(/\s+/g, ' ').trim();
 
