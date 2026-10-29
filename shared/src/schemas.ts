@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { TENDER_STATUSES } from './tender.js';
 import type { SupervisionSummary, ValueSource, BidDraftRecord } from './supervision.js';
+import { createTenderTeamFields, type CaseTeam, type TeamRole } from './team.js';
 
 // Inline string-literal tuples so z.enum infers a literal union (passing values from a
 // const object widens to a non-tuple and fails tsc).
@@ -111,6 +112,10 @@ export const tenderDocSchema = z.object({
 export type TenderDoc = z.infer<typeof tenderDocSchema> & {
   lastSupervision?: SupervisionSummary;
   publishedDocHash?: string | null;
+  serial?: string; // BID-2026-0042
+  team?: CaseTeam; // role → uid (one user per required role)
+  requiredRoles?: TeamRole[];
+  memberUids?: string[]; // owner + team: the only internal users (besides managers) who see the case
 };
 
 export const accessDocSchema = z.object({
@@ -199,6 +204,7 @@ export const createTenderInput = z.object({
   evaluationCriteria: z.array(z.object({ name: z.string(), weight: z.number() })).optional(),
   // AI draft this tender was built from (provenance for the supervisor). Omitted when typed by hand.
   draftId: z.string().optional(),
+  ...createTenderTeamFields,
 });
 export type CreateTenderInput = z.infer<typeof createTenderInput>;
 

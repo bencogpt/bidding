@@ -81,6 +81,7 @@ export interface FeedbackRequest {
   id: string;
   tenderId: string;
   tenderTitle: string;
+  tenderSerial?: string;
   tenderType: string;
   aiDrafted: boolean;
   round: FeedbackRound;

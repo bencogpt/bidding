@@ -11,7 +11,17 @@ import {
   assertSucceeds,
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import {
+  collection,
+  collectionGroup,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  serverTimestamp,
+  setDoc,
+  where,
+} from 'firebase/firestore';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const rulesPath = resolve(here, '../../../firestore.rules');
@@ -26,7 +36,17 @@ before(async () => {
   // Seed a tender + an access grant for supplier "sup_a" using admin (bypasses rules).
   await env.withSecurityRulesDisabled(async (ctx) => {
     const db = ctx.firestore();
-    await setDoc(doc(db, 'tenders/t1'), { id: 't1', title: 'T1', status: 'published' });
+    // Case team of t1: the manager (owner) and legal 'ul'. Finance 'uf' is NOT on the team.
+    await setDoc(doc(db, 'tenders/t1'), {
+      id: 't1',
+      title: 'T1',
+      status: 'published',
+      createdAt: 1,
+      memberUids: ['mgr', 'ul'],
+    });
+    await setDoc(doc(db, 'tenders/t1/access/ul'), { principalId: 'ul', kind: 'internal', level: 'comment' });
+    await setDoc(doc(db, 'auditLog/a1'), { id: 'a1', tenderId: 't1', action: 'create', at: 1 });
+    await setDoc(doc(db, 'tenders/t1/chat/m0'), { id: 'm0', uid: 'mgr', name: 'M', role: 'tender_manager', text: 'שלום', createdAt: 1 });
     // An unpublished tender the supplier somehow holds access to (defense in depth).
     await setDoc(doc(db, 'tenders/t2'), { id: 't2', title: 'T2', status: 'ready' });
     await setDoc(doc(db, 'tenders/t2/access/sup_a'), {
@@ -86,6 +106,51 @@ const supplierB = () =>
   env.authenticatedContext('ub', { role: 'supplier', supplierId: 'sup_b' }).firestore();
 // A non-manager internal role, to exercise the isInternal() branch rather than isManager().
 const legal = () => env.authenticatedContext('ul', { role: 'legal' }).firestore();
+// An internal user who is NOT on t1's team.
+const finance = () => env.authenticatedContext('uf', { role: 'finance' }).firestore();
+
+test('strict teams: an unassigned internal user sees nothing of the case', async () => {
+  const f = finance();
+  await assertFails(getDoc(doc(f, 'tenders/t1')));
+  await assertFails(getDoc(doc(f, 'tenders/t1/internal/provenance')));
+  await assertFails(getDoc(doc(f, 'tenders/t1/supervision/r1')));
+  await assertFails(getDoc(doc(f, 'tenders/t1/questions/qb')));
+  await assertFails(getDoc(doc(f, 'tenders/t1/questionAuthors/qb')));
+  await assertFails(getDoc(doc(f, 'caseScores/t1')));
+  await assertFails(getDoc(doc(f, 'tenders/t1/chat/m0')));
+  await assertFails(getDocs(query(collection(f, 'auditLog'), where('tenderId', '==', 't1'))));
+});
+
+test('strict teams: list queries are scoped to the user\'s cases', async () => {
+  const mine = await assertSucceeds(getDocs(query(collection(legal(), 'tenders'), where('memberUids', 'array-contains', 'ul'))));
+  assert.equal((mine as { size: number }).size, 1);
+  const none = await assertSucceeds(getDocs(query(collection(finance(), 'tenders'), where('memberUids', 'array-contains', 'uf'))));
+  assert.equal((none as { size: number }).size, 0);
+  await assertFails(getDocs(collection(finance(), 'tenders'))); // unscoped list is denied
+  await assertSucceeds(getDocs(collection(manager(), 'tenders'))); // managers see every case
+  await assertSucceeds(getDocs(query(collection(legal(), 'auditLog'), where('tenderId', '==', 't1'))));
+  await assertFails(getDocs(collection(legal(), 'auditLog'))); // not the whole log
+  await assertSucceeds(getDocs(query(collectionGroup(legal(), 'access'), where('principalId', '==', 'ul'))));
+  await assertFails(getDocs(collectionGroup(legal(), 'access')));
+});
+
+test('chat: members read and post with enforced identity + server time; immutable; no suppliers', async () => {
+  await assertSucceeds(getDoc(doc(legal(), 'tenders/t1/chat/m0')));
+  await assertSucceeds(getDoc(doc(manager(), 'tenders/t1/chat/m0')));
+  await assertFails(getDoc(doc(supplierA(), 'tenders/t1/chat/m0')));
+  const msg = (over: Record<string, unknown>) => ({
+    id: 'm1', uid: 'ul', name: 'עו"ד', role: 'legal', text: 'נבדק', createdAt: serverTimestamp(), ...over,
+  });
+  await assertSucceeds(setDoc(doc(legal(), 'tenders/t1/chat/m1'), msg({})));
+  await assertFails(setDoc(doc(legal(), 'tenders/t1/chat/m2'), msg({ id: 'm2', uid: 'mgr' }))); // impersonation
+  await assertFails(setDoc(doc(legal(), 'tenders/t1/chat/m3'), msg({ id: 'm3', createdAt: 5 }))); // client time
+  await assertFails(setDoc(doc(legal(), 'tenders/t1/chat/m4'), msg({ id: 'm4', role: 'tender_manager' })));
+  await assertFails(setDoc(doc(legal(), 'tenders/t1/chat/m5'), msg({ id: 'm5', text: '' })));
+  await assertFails(setDoc(doc(finance(), 'tenders/t1/chat/m6'), msg({ id: 'm6', uid: 'uf', role: 'finance' })));
+  await assertFails(setDoc(doc(legal(), 'tenders/t1/chat/m1'), msg({ text: 'נערך' }))); // no edits
+  await assertSucceeds(setDoc(doc(legal(), 'tenders/t1/chatReads/ul'), { lastReadAt: serverTimestamp() }));
+  await assertFails(setDoc(doc(legal(), 'tenders/t1/chatReads/mgr'), { lastReadAt: serverTimestamp() }));
+});
 
 test('unauthenticated cannot read a tender', async () => {
   const db = env.unauthenticatedContext().firestore();

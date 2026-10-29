@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import {
   REQUIRED_SKILLS,
   MANDATORY_LEGAL_SECTIONS,
+  LEGAL_CLAUSE_CHECKLIST,
   verdictOf,
   type TemplateDoc,
   type TenderDoc,
@@ -14,11 +15,20 @@ import {
   runDeterministicChecks,
   templateHash,
   htmlToText,
+  presentLegalSections,
   type DeterministicInput,
 } from '../services/supervisorChecks.js';
 
 // Stand-in legal text: the check compares wording to the template, it never supplies it.
-const LEGAL = ['סודיות', 'קניין רוחני', 'אחריות ושיפוי', 'ביטול/סיום התקשרות'].flatMap((n) => [
+const LEGAL = [
+  'סודיות',
+  'קניין רוחני',
+  'אחריות ושיפוי',
+  'ביטול/סיום התקשרות',
+  'פיצויים מוסכמים',
+  'בחירת ההצעה הזוכה',
+  'מסמכים שיש לצרף להצעה',
+].flatMap((n) => [
   `## ${n}`,
   `נוסח מאושר לבדיקה של סעיף ${n}.`,
 ]);
@@ -236,6 +246,29 @@ test('numbered / colon headings are recognised; body mentions are not headings',
 
 test('every mandatory section has a pattern matching its own name', () => {
   for (const s of MANDATORY_LEGAL_SECTIONS) assert.ok(s.pattern.test(s.nameHe), s.id);
+});
+
+test('extended mandatory sections: agreed damages, submission, winner selection, required documents', () => {
+  for (const name of ['פיצויים מוסכמים', 'בחירת ההצעה הזוכה', 'מסמכים שיש לצרף להצעה']) {
+    const doc = cleanDoc.replace(new RegExp(`## ${name}\\n[^\\n]+\\n?`), '');
+    const f = runDeterministicChecks(base({ docText: doc })).filter((x) => x.code === 'LEGAL_SECTION_MISSING');
+    assert.equal(f.length, 1, name);
+  }
+  // "אופן ההגשה" (the existing goods heading) counts as the submission section.
+  assert.ok(presentLegalSections(cleanDoc).includes('submission'));
+});
+
+test('a documents heading mentioning "בתנאי הסף" is not the thresholds section', () => {
+  const doc = cleanDoc.replace('## תנאי סף', '## מסמכים להוכחת עמידה בתנאי הסף');
+  assert.ok(!presentLegalSections(doc).includes('thresholds'));
+  assert.ok(presentLegalSections(doc).includes('requiredDocs'));
+});
+
+test('legal clause checklist: unique element ids, only for known sections', () => {
+  const ids = Object.values(LEGAL_CLAUSE_CHECKLIST).flatMap((els) => els!.map((e) => e.id));
+  assert.equal(new Set(ids).size, ids.length);
+  const sections = new Set(MANDATORY_LEGAL_SECTIONS.map((s) => s.id));
+  for (const k of Object.keys(LEGAL_CLAUSE_CHECKLIST)) assert.ok(sections.has(k as never), k);
 });
 
 test('htmlToText extracts the dev-mode document text', () => {

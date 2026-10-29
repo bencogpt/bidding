@@ -212,6 +212,11 @@ function sectionLines(text: string, s: LegalSection): string[] | null {
   return body;
 }
 
+/** Ids of the mandatory legal sections whose heading appears in the text. */
+export function presentLegalSections(text: string): LegalSection['id'][] {
+  return MANDATORY_LEGAL_SECTIONS.filter((s) => sectionLines(text, s) !== null).map((s) => s.id);
+}
+
 export function checkLegalSections(i: DeterministicInput): Finding[] {
   if (i.docText === null) return [];
   const out: Finding[] = [];

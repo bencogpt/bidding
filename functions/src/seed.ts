@@ -81,7 +81,15 @@ for (const s of suppliers) {
 // Mandatory legal sections (s11) for the DEMO templates only. The text is a clearly marked stand-in:
 // real templates must carry the organization's approved legal wording, which this seed never
 // invents. Without the headings the supervisor would (correctly) block every demo tender.
-const DEMO_LEGAL_SECTIONS = ['סודיות', 'קניין רוחני', 'אחריות ושיפוי', 'ביטול/סיום התקשרות'].flatMap(
+const DEMO_LEGAL_SECTIONS = [
+  'סודיות',
+  'קניין רוחני',
+  'אחריות ושיפוי',
+  'ביטול/סיום התקשרות',
+  'פיצויים מוסכמים',
+  'בחירת ההצעה הזוכה',
+  'מסמכים שיש לצרף להצעה',
+].flatMap(
   (name) => [`## ${name}`, `[נוסח לדוגמה בסביבת הדגמה — יוחלף בנוסח המשפטי המאושר: ${name}]`],
 );
 
@@ -123,6 +131,8 @@ await templatesRepo.upsert({
     'על נותן השירות להציג ניסיון מוכח וכוח אדם מוסמך לתחום.',
     '## תנאי סף',
     'על נותן השירות להחזיק ברישיונות הנדרשים על פי דין.',
+    '## אופן הגשת ההצעה',
+    '[נוסח לדוגמה בסביבת הדגמה — יוחלף בנוסח המאושר: אופן הגשת ההצעה]',
     ...DEMO_LEGAL_SECTIONS,
   ].join('\n'),
   params: [
@@ -146,6 +156,8 @@ await templatesRepo.upsert({
     'הפרויקט כולל אספקה והקמה לצד שירות ותחזוקה לאורך תקופת ההתקשרות.',
     '## תנאי סף',
     'על המציע להציג ניסיון בביצוע פרויקט דומה בהיקף ובמורכבות.',
+    '## אופן הגשת ההצעה',
+    '[נוסח לדוגמה בסביבת הדגמה — יוחלף בנוסח המאושר: אופן הגשת ההצעה]',
     ...DEMO_LEGAL_SECTIONS,
   ].join('\n'),
   params: [

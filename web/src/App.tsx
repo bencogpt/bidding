@@ -1,3 +1,4 @@
+import type { ReactElement } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './auth/AuthProvider';
 import { useTranslation } from 'react-i18next';
@@ -39,18 +40,19 @@ export default function App() {
     );
   }
 
-  // internal roles
+  // internal roles — pages that span all cases (or administer the system) are manager-only
+  const managerOnly = (el: ReactElement) => (role === 'tender_manager' ? el : <Navigate to="/" replace />);
   return (
     <Routes>
       <Route element={<InternalLayout />}>
         <Route path="/" element={<Dashboard />} />
-        <Route path="/tenders/new" element={<TenderCreate />} />
+        <Route path="/tenders/new" element={managerOnly(<TenderCreate />)} />
         <Route path="/tenders/:id" element={<TenderWorkspace />} />
-        <Route path="/templates" element={<Templates />} />
-        <Route path="/users" element={<InternalUsers />} />
+        <Route path="/templates" element={managerOnly(<Templates />)} />
+        <Route path="/users" element={managerOnly(<InternalUsers />)} />
         <Route path="/suppliers" element={<Suppliers />} />
-        <Route path="/reports" element={<Reports />} />
-        <Route path="/audit" element={<Audit />} />
+        <Route path="/reports" element={managerOnly(<Reports />)} />
+        <Route path="/audit" element={managerOnly(<Audit />)} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

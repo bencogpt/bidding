@@ -324,6 +324,26 @@ export async function setDocumentPermissions(
   for (const email of opts.commenterEmails ?? []) await grant(email, 'commenter');
 }
 
+/** Remove a user's Google Docs permission (when they leave the case team). Best-effort. */
+export async function removeDocumentPermission(googleDocId: string | null, email: string | null): Promise<void> {
+  if (!realMode() || !googleDocId || !email) return;
+  const { drive } = googleClients();
+  try {
+    const res = await drive.permissions.list({
+      fileId: googleDocId,
+      fields: 'permissions(id, emailAddress, role)',
+      supportsAllDrives: true,
+    });
+    for (const p of res.data.permissions ?? []) {
+      if (p.emailAddress?.toLowerCase() === email.toLowerCase() && p.role !== 'owner') {
+        await drive.permissions.delete({ fileId: googleDocId, permissionId: p.id!, supportsAllDrives: true });
+      }
+    }
+  } catch (e) {
+    console.warn(`Docs permission removal skipped for ${email}:`, (e as Error).message);
+  }
+}
+
 const pdfPath = (id: string) => `tenders/${id}/document.pdf`;
 
 /**

@@ -5,7 +5,20 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { REQUIRED_SKILLS, type SkillId, type SkillUse, type TenderType } from '@obms/shared';
+import {
+  LEGAL_CLAUSE_CHECKLIST,
+  MANDATORY_LEGAL_SECTIONS,
+  REQUIRED_SKILLS,
+  SKILL_IDS,
+  templateIdFor,
+  type SkillId,
+  type SkillsCatalog,
+  type SkillUse,
+  type TenderType,
+} from '@obms/shared';
+
+// Skills the supervisor's AI review is grounded in (besides GLOBAL_RULES).
+export const SUPERVISOR_SKILLS: SkillId[] = ['s05-procurement-quality-check', 's11-legal-compliance'];
 
 export interface LoadedSkill {
   id: SkillId | 'GLOBAL_RULES';
@@ -67,4 +80,31 @@ export function currentSkillHash(id: SkillUse['id']): string | null {
   } catch {
     return null;
   }
+}
+
+/** name / description from a SKILL.md YAML frontmatter block (single-line values). */
+export function skillMeta(text: string): { name: string; description: string } {
+  const fm = text.match(/^---\s*\n([\s\S]*?)\n---/);
+  const field = (key: string) =>
+    fm?.[1].match(new RegExp(`^${key}:\\s*(.*)$`, 'm'))?.[1].trim().replace(/^["']|["']$/g, '') ?? '';
+  return { name: field('name'), description: field('description') };
+}
+
+/** Everything the system enforces from the skills framework, exactly as deployed. */
+export function skillsCatalog(): SkillsCatalog {
+  const g = loadGlobalRules();
+  const types: TenderType[] = ['goods', 'service', 'project'];
+  return {
+    globalRules: { text: g.text, hash: g.hash },
+    skills: SKILL_IDS.map((id) => {
+      const s = loadSkill(id);
+      const meta = skillMeta(s.text);
+      return { id, name: meta.name || id, description: meta.description, text: s.text, hash: s.hash };
+    }),
+    required: REQUIRED_SKILLS,
+    templateIds: Object.fromEntries(types.map((t) => [t, templateIdFor(t)])) as SkillsCatalog['templateIds'],
+    supervisorSkills: SUPERVISOR_SKILLS,
+    legalSections: MANDATORY_LEGAL_SECTIONS.map(({ id, nameHe }) => ({ id, nameHe })),
+    legalChecklist: LEGAL_CLAUSE_CHECKLIST as SkillsCatalog['legalChecklist'],
+  };
 }

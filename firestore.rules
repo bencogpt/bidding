@@ -33,8 +33,15 @@ service cloud.firestore {
         && supplierId() != ''
         && exists(/databases/$(database)/documents/tenders/$(tenderId)/access/$(supplierId()));
     }
+    // Strict case teams: tender managers see every case; any other internal role only the cases
+    // whose team (tender.memberUids) they belong to.
+    function isCaseMember(tenderId) {
+      return isManager()
+        || (isInternal()
+            && request.auth.uid in get(/databases/$(database)/documents/tenders/$(tenderId)).data.get('memberUids', []));
+    }
     function canSeeTender(tenderId) {
-      return isInternal() || supplierHasAccess(tenderId);
+      return isCaseMember(tenderId) || supplierHasAccess(tenderId);
     }
 
     // ---- users ----
@@ -59,29 +66,56 @@ service cloud.firestore {
     match /tenders/{tenderId} {
       // Suppliers see a tender only once it is published (after the supervisor gate). Access is
       // also only granted post-publish; the status check is defense in depth.
-      allow read: if isInternal()
+      // Non-manager internal users list their cases with where('memberUids','array-contains',uid).
+      allow read: if isManager()
+        || (isInternal() && request.auth.uid in resource.data.get('memberUids', []))
         || (supplierHasAccess(tenderId)
             && resource.data.status in ['published', 'responses', 'evaluated', 'awarded']);
       allow write: if false; // function-only (FSM, audit)
 
       // internal-only data: provenance (template/skills/AI draft) + confidential params (G6)
       match /internal/{docId} {
-        allow read: if isInternal();
+        allow read: if isCaseMember(tenderId);
         allow write: if false; // function-only (createTender)
       }
 
       // supervisor agent reports (one per run)
       match /supervision/{runId} {
-        allow read: if isInternal();
+        allow read: if isCaseMember(tenderId);
         allow write: if false; // function-only (superviseTender)
       }
 
       // access grants. Read authorizes on the principalId FIELD (not the doc id) so the
       // supplier portal's collectionGroup query `where('principalId','==', myId)` is allowed.
       match /access/{principalId} {
-        allow read: if isInternal()
+        allow read: if isCaseMember(tenderId)
           || (isSupplier() && resource.data.principalId == supplierId());
-        allow write: if false; // function-only (grantAccess / revokeAccess)
+        allow write: if false; // function-only (grantAccess / assignTeamMember)
+      }
+
+      // internal chat of the case team — members and managers only, never suppliers. Messages are
+      // immutable (part of the case record); identity and time are enforced, not client-supplied.
+      match /chat/{messageId} {
+        allow read: if isCaseMember(tenderId);
+        allow create: if isCaseMember(tenderId)
+          && request.resource.data.keys().hasOnly(['id', 'uid', 'name', 'role', 'text', 'createdAt'])
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.role == role()
+          && request.resource.data.id == messageId
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.name is string
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 4000;
+        allow update, delete: if false;
+      }
+      // per-user read marker for the chat's unread count
+      match /chatReads/{uid} {
+        allow read: if isCaseMember(tenderId) && uid == request.auth.uid;
+        allow write: if isCaseMember(tenderId)
+          && uid == request.auth.uid
+          && request.resource.data.keys().hasOnly(['lastReadAt'])
+          && request.resource.data.lastReadAt == request.time;
       }
 
       // clarification questions — authorized suppliers see each other's questions, but these
@@ -99,7 +133,7 @@ service cloud.firestore {
       // Authorized on the principal FIELD (like /access above) so the supplier's
       // where('supplierId','==',me) query is allowed.
       match /questionAuthors/{questionId} {
-        allow read: if isInternal()
+        allow read: if isCaseMember(tenderId)
           || (isSupplier() && resource.data.supplierId == supplierId());
         allow write: if false; // function-only (askQuestion)
       }
@@ -146,7 +180,7 @@ service cloud.firestore {
 
     // ---- per-case success scores + scoring settings (internal analytics) ----
     match /caseScores/{tenderId} {
-      allow read: if isInternal();
+      allow read: if isCaseMember(tenderId);
       allow write: if false; // function-only (scoreService)
     }
     match /settings/{settingId} {
@@ -155,15 +189,19 @@ service cloud.firestore {
     }
 
     // ---- audit log (immutable, append-only via functions) ----
+    // managers read everything; team members only the trail of their own cases (queried by tenderId)
     match /auditLog/{entryId} {
-      allow read: if isInternal();
+      allow read: if isManager()
+        || (isInternal() && resource.data.get('tenderId', null) is string
+            && isCaseMember(resource.data.tenderId));
       allow write: if false; // function-only
     }
 
     // Collection-group reads. Nested match rules above secure direct gets/writes; these
     // additional rules authorize collectionGroup() queries (supplier portal + reports).
     match /{path=**}/access/{accessId} {
-      allow read: if isInternal()
+      allow read: if isManager()
+        || (isInternal() && resource.data.principalId == request.auth.uid)
         || (isSupplier() && resource.data.principalId == supplierId());
     }
     match /{path=**}/submissions/{ownerSupplierId} {

@@ -1,8 +1,16 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { TENDER_TYPES, isConfidentialParam, type TenderType } from '@obms/shared';
-import { useTemplate } from '../lib/hooks';
+import {
+  TENDER_TYPES,
+  TEAM_ROLES,
+  isConfidentialParam,
+  requiredRolesFor,
+  type CaseTeam,
+  type TeamRole,
+  type TenderType,
+} from '@obms/shared';
+import { useTemplate, useUsers } from '../lib/hooks';
 import { api } from '../lib/api';
 import TagsInput from '../components/TagsInput';
 
@@ -31,6 +39,11 @@ export default function TenderCreate() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const template = useTemplate(type);
+  const users = useUsers();
+  // Case team: one user per required role (type defaults + roles the manager adds).
+  const [team, setTeam] = useState<CaseTeam>({});
+  const [extraRoles, setExtraRoles] = useState<TeamRole[]>([]);
+  const requiredRoles = requiredRolesFor(type, extraRoles);
 
   const setParam = (k: string, v: string) => setParams((p) => ({ ...p, [k]: v }));
 
@@ -80,6 +93,8 @@ export default function TenderCreate() {
         domainTags,
         evaluationCriteria: criteria,
         draftId: draftId ?? undefined,
+        team: Object.fromEntries(requiredRoles.filter((r) => team[r]).map((r) => [r, team[r]])),
+        extraRoles,
       });
       nav(`/tenders/${id}`);
     } catch (err) {
@@ -160,6 +175,47 @@ export default function TenderCreate() {
             )}
           </div>
         ))}
+
+        <div>
+          <label className="label">{t('team.title')}</label>
+          <p className="mb-2 text-xs text-tx-mute">{t('team.createHint')}</p>
+          <div className="space-y-2">
+            {requiredRoles.map((r) => (
+              <div key={r} className="flex items-center gap-2 text-sm">
+                <span className="w-28">{t(`role.${r}`)}</span>
+                <select
+                  className="input w-56"
+                  value={team[r] ?? ''}
+                  onChange={(e) => setTeam((tm) => ({ ...tm, [r]: e.target.value || undefined }))}
+                >
+                  <option value="">{t('team.unassigned')}</option>
+                  {users
+                    .filter((u) => u.role === r)
+                    .map((u) => (
+                      <option key={u.uid} value={u.uid}>
+                        {u.displayName}
+                      </option>
+                    ))}
+                </select>
+                {extraRoles.includes(r) && (
+                  <button type="button" className="text-xs text-red-600" onClick={() => setExtraRoles((x) => x.filter((y) => y !== r))}>
+                    ✕
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+          {TEAM_ROLES.some((r) => !requiredRoles.includes(r)) && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+              <span className="text-tx-soft">{t('team.addRole')}:</span>
+              {TEAM_ROLES.filter((r) => !requiredRoles.includes(r)).map((r) => (
+                <button key={r} type="button" className="chip" onClick={() => setExtraRoles((x) => [...x, r])}>
+                  + {t(`role.${r}`)}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         <div>
           <label className="label">{t('create.domainTags')}</label>

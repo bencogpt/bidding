@@ -42,8 +42,8 @@ export default function InternalLayout() {
           {isManager && <NavItem to="/templates" label={t('nav.templates')} />}
           {isManager && <NavItem to="/users" label={t('nav.users')} />}
           <NavItem to="/suppliers" label={t('nav.suppliers')} />
-          <NavItem to="/reports" label={t('nav.reports')} />
-          <NavItem to="/audit" label={t('nav.audit')} />
+          {isManager && <NavItem to="/reports" label={t('nav.reports')} />}
+          {isManager && <NavItem to="/audit" label={t('nav.audit')} />}
         </nav>
         <div className="mt-4 border-t border-white/10 pt-4">
           <div className="px-2 text-sm font-semibold">{user?.displayName ?? user?.email}</div>

@@ -11,7 +11,11 @@ import {
   useAnswers,
   useSubmissions,
   useTemplate,
+  useChat,
 } from '../lib/hooks';
+import { REQUIRED_ROLES_BY_TYPE, missingRoles } from '@obms/shared';
+import TeamPanel from '../components/TeamPanel';
+import ChatPanel from '../components/ChatPanel';
 import { api } from '../lib/api';
 import StatusBadge from '../components/StatusBadge';
 import DocumentViewer from '../components/DocumentViewer';
@@ -21,13 +25,14 @@ import EvaluationPanel from '../components/EvaluationPanel';
 import CasePanel from '../components/CasePanel';
 import SupervisorPanel, { VerdictBadge } from '../components/SupervisorPanel';
 
-type Tab = 'case' | 'overview' | 'document' | 'supervisor' | 'access' | 'questions' | 'evaluation';
+type Tab = 'case' | 'overview' | 'document' | 'supervisor' | 'chat' | 'access' | 'questions' | 'evaluation';
 
 export default function TenderWorkspace() {
   const { id } = useParams();
   const { t } = useTranslation();
-  const { role } = useAuth();
-  const { tender, loading } = useTender(id);
+  const { role, user } = useAuth();
+  const { tender, loading, denied } = useTender(id);
+  const chat = useChat(id, user?.uid);
   const access = useAccess(id);
   const suppliers = useSuppliers();
   const users = useUsers();
@@ -43,9 +48,10 @@ export default function TenderWorkspace() {
   const [overrideReason, setOverrideReason] = useState('');
 
   if (loading) return <div className="text-tx-soft">{t('common.loading')}</div>;
-  if (!tender) return <div className="text-tx-soft">404</div>;
+  if (!tender) return <div className="text-tx-soft">{denied ? t('team.notAssigned') : '404'}</div>;
 
   const isManager = role === 'tender_manager';
+  const missing = missingRoles(tender.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[tender.type], tender.team);
   const transitionTo = async (
     to: Parameters<typeof api.transitionTender>[0]['to'],
     override?: string,
@@ -73,6 +79,7 @@ export default function TenderWorkspace() {
     { key: 'overview', label: t('ws.overview') },
     { key: 'document', label: t('ws.document') },
     { key: 'supervisor', label: t('ws.supervisor') },
+    { key: 'chat', label: chat.unread ? `${t('chat.tab')} (${chat.unread})` : t('chat.tab') },
     { key: 'access', label: t('ws.access') },
     { key: 'questions', label: t('ws.questions') },
     ...(showEval ? [{ key: 'evaluation' as Tab, label: t('ws.evaluation') }] : []),
@@ -87,6 +94,11 @@ export default function TenderWorkspace() {
         <div>
           <h1 className="font-display text-2xl font-bold">{tender.title}</h1>
           <div className="mt-2 flex items-center gap-2">
+            {tender.serial && (
+              <span className="chip font-semibold" dir="ltr">
+                {tender.serial}
+              </span>
+            )}
             <span className="chip">{t(`type.${tender.type}`)}</span>
             <StatusBadge status={tender.status} />
             {tender.lastSupervision && <VerdictBadge verdict={tender.lastSupervision.verdict} />}
@@ -95,7 +107,12 @@ export default function TenderWorkspace() {
         {isManager && (
           <div className="flex gap-2">
             {tender.status === 'draft' && (
-              <button className="btn" disabled={busy} onClick={() => transitionTo('internal_review')}>
+              <button
+                className="btn"
+                disabled={busy || missing.length > 0}
+                title={missing.length ? t('team.missing', { roles: missing.map((r) => t(`role.${r}`)).join(', ') }) : ''}
+                onClick={() => transitionTo('internal_review')}
+              >
                 {t('ws.sendToReview')}
               </button>
             )}
@@ -163,6 +180,12 @@ export default function TenderWorkspace() {
       {tab === 'document' && (
         <DocumentViewer tenderId={tender.id} googleDocId={tender.googleDocId} />
       )}
+      {tab === 'chat' && <ChatPanel tenderId={tender.id} messages={chat.messages} />}
+      {tab === 'access' && (
+        <div className="mb-4">
+          <TeamPanel tender={tender} users={users} access={access} canManage={isManager} />
+        </div>
+      )}
       {tab === 'access' && (
         <AccessPanel
           tenderId={tender.id}
@@ -171,7 +194,6 @@ export default function TenderWorkspace() {
           tenderDomainTags={tender.domainTags ?? []}
           access={access}
           suppliers={suppliers}
-          users={users}
           canManage={isManager}
         />
       )}

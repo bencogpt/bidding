@@ -61,13 +61,53 @@ export const REQUIRED_SKILLS: Record<TenderType, SkillId[]> = {
 
 // Mandatory hard legal sections (s11 / GLOBAL_RULES G3). Each must appear as a heading in the
 // bid document, with the template's wording unchanged. Patterns tolerate common spelling variants.
+// The organization's list (legal skills spec) also makes these hard sections: agreed damages, how
+// to submit, choosing the winning offer, and the documents bidders must attach.
 export const MANDATORY_LEGAL_SECTIONS = [
   { id: 'confidentiality', nameHe: 'סודיות', pattern: /סודיות/ },
   { id: 'ip', nameHe: 'קניין רוחני', pattern: /קני[י]?ן\s*ה?רוחני/ },
   { id: 'liability', nameHe: 'אחריות ושיפוי', pattern: /שיפוי/ },
-  { id: 'thresholds', nameHe: 'תנאי סף', pattern: /תנאי\s*ה?סף/ },
+  { id: 'thresholds', nameHe: 'תנאי סף', pattern: /^ה?תנאי\s*ה?סף/ },
   { id: 'termination', nameHe: 'ביטול/סיום התקשרות', pattern: /ביטול|סיום\s*ה?התקשרות/ },
+  { id: 'agreedDamages', nameHe: 'פיצויים מוסכמים', pattern: /פיצויים\s+מוסכמים/ },
+  { id: 'submission', nameHe: 'אופן הגשת ההצעה', pattern: /אופן\s+ה?הגשה|הגשת\s+ה?הצע/ },
+  { id: 'winnerSelection', nameHe: 'בחירת ההצעה הזוכה', pattern: /ה?הצע(?:ה|ות)\s+ה?זוכ/ },
+  {
+    id: 'requiredDocs',
+    nameHe: 'מסמכים שיש לצרף להצעה',
+    pattern: /מסמכים\s+(?:שיש\s+)?(?:לצרף|נדרשים|להוכחת)/,
+  },
 ] as const;
+export type LegalSectionId = (typeof MANDATORY_LEGAL_SECTIONS)[number]['id'];
+
+/**
+ * What each hard legal clause must contain — the organization's legal-skills spec, used as a
+ * checklist (never as wording: the clauses themselves come verbatim from legal, G3). The
+ * supervisor's AI review checks present clauses against it; a missing element is a warning for
+ * legal to review, not a block.
+ */
+export const LEGAL_CLAUSE_CHECKLIST: Partial<Record<LegalSectionId, { id: string; he: string }[]>> = {
+  ip: [
+    { id: 'ip_ownership', he: 'כל קניין רוחני חדש, תוצר, קוד, מפרט או פיתוח שייכים בלעדית לארגון' },
+    { id: 'ip_originality', he: 'הצהרת הספק כי התוצרים מבוססים על פיתוח מקורי ואינם מפרים פטנט או זכויות יוצרים של צד שלישי' },
+    { id: 'ip_indemnity', he: 'התחייבות הספק לשיפוי מלא במקרה של תביעת הפרה' },
+  ],
+  confidentiality: [
+    { id: 'conf_level', he: 'קביעת רמת הסיווג (בלמ"ס / שמור / סודי) בהתאם למפרט, ונספח סודיות מתאים' },
+    { id: 'conf_infosec', he: 'סעיפי אבטחת מידע בהתאם לסיווג (גישה למידע רגיש, ענן, גישה מרחוק)' },
+    { id: 'conf_parties', he: 'חובת הסודיות חלה על כל עובדי הספק, קבלני המשנה וההנהלה' },
+  ],
+  termination: [
+    { id: 'term_convenience', he: 'זכות הארגון לסיים בכל עת ומכל סיבה, בהודעה מוקדמת בכתב, ללא פיצוי או קנס' },
+    { id: 'term_breach', he: 'ביטול מיידי במקרה של הפרה יסודית' },
+    { id: 'term_transition', he: 'חובת הספק להמשיך לספק שירות בתקופת מעבר, להעביר את כל הנתונים והחומרים ולבצע חפיפה' },
+  ],
+  liability: [
+    { id: 'liab_full', he: 'אחריות מלאה של הספק לכל נזק (ישיר, עקיף או תוצאתי) שייגרם עקב עבודתו' },
+    { id: 'liab_indemnity', he: 'סעיף שיפוי עצמאי בגין כל טענה, דרישה או תביעה של צד שלישי עקב מעשי או מחדלי הספק' },
+    { id: 'liab_insurance', he: 'נספח ביטוח התואם את סוג העסקה (אחריות מקצועית, צד שלישי, חבות מעבידים)' },
+  ],
+};
 
 // G11 traceability: where a drafted value came from.
 export type SourceType = 'TEMPLATE' | 'BID_MANAGER' | 'REQUESTER' | 'SKILL_OUTPUT';
@@ -142,6 +182,7 @@ export type FindingCode =
   | 'MISSING_MANDATORY_SECTION'
   | 'LEGAL_SECTION_MISSING'
   | 'LEGAL_SECTION_ALTERED'
+  | 'LEGAL_ELEMENT_MISSING'
   | 'CONFIDENTIAL_LEAK'
   | 'UNFAIR_REQUIREMENT'
   // supervisor itself
@@ -174,6 +215,17 @@ export interface SupervisionReport {
 }
 
 /** Small summary kept on the tender doc so lists/headers can show the latest verdict. */
+/** Read-only catalog of the skills framework the deployed functions enforce (getSkillsCatalog). */
+export interface SkillsCatalog {
+  globalRules: { text: string; hash: string };
+  skills: { id: SkillId; name: string; description: string; text: string; hash: string }[];
+  required: Record<TenderType, SkillId[]>;
+  templateIds: Record<TenderType, OrchestratorTemplateId>;
+  supervisorSkills: SkillId[];
+  legalSections: { id: string; nameHe: string }[];
+  legalChecklist: Record<string, { id: string; he: string }[]>;
+}
+
 export interface SupervisionSummary {
   runId: string;
   verdict: SupervisionVerdict;

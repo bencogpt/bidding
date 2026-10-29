@@ -28,6 +28,7 @@ export default function SupplierPortal() {
             <div key={tn.id} className="card flex items-center justify-between p-5">
               <div>
                 <div className="font-semibold">{tn.title}</div>
+                {tn.serial && <div className="text-xs text-tx-mute" dir="ltr">{tn.serial}</div>}
                 <div className="mt-1 flex items-center gap-2">
                   <span className="chip">{t(`type.${tn.type}`)}</span>
                   <StatusBadge status={tn.status} />

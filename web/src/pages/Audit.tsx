@@ -6,7 +6,7 @@ export default function Audit() {
   const { t } = useTranslation();
   const audit = useAudit();
   const { tenders } = useTenders();
-  const titleOf = new Map(tenders.map((tn) => [tn.id, tn.title]));
+  const titleOf = new Map(tenders.map((tn) => [tn.id, tn.serial ? `${tn.serial} · ${tn.title}` : tn.title]));
 
   return (
     <div>

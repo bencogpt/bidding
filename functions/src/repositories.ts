@@ -1,7 +1,7 @@
 // Repository layer: the ONLY place that touches Firestore directly (constitution:
 // Repository Pattern — no raw firestore.collection(...).set(...) outside this file).
 import { db, now } from './lib/admin.js';
-import { isInternalRole } from '@obms/shared';
+import { isInternalRole, formatSerial } from '@obms/shared';
 import type {
   TenderDoc,
   AccessDoc,
@@ -101,8 +101,35 @@ export const templatesRepo = {
   },
 };
 
+// ---- counters (gapless serial numbers) ----
+export const countersRepo = {
+  /** Next BID-{year}-NNNN, allocated atomically so two concurrent creates never share a number. */
+  async nextSerial(year: number): Promise<string> {
+    const ref = db.collection('counters').doc(`bidSerial-${year}`);
+    const n = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const next = ((snap.data()?.last as number | undefined) ?? 0) + 1;
+      tx.set(ref, { last: next, year }, { merge: true });
+      return next;
+    });
+    return formatSerial(year, n);
+  },
+  /** Raise the counter to at least `n` (used by the serial backfill). */
+  async ensureAtLeast(year: number, n: number): Promise<void> {
+    const ref = db.collection('counters').doc(`bidSerial-${year}`);
+    await db.runTransaction(async (tx) => {
+      const last = ((await tx.get(ref)).data()?.last as number | undefined) ?? 0;
+      if (n > last) tx.set(ref, { last: n, year }, { merge: true });
+    });
+  },
+};
+
 // ---- tenders ----
 export const tendersRepo = {
+  async listAll(): Promise<TenderDoc[]> {
+    const q = await db.collection('tenders').get();
+    return q.docs.map((d) => d.data() as TenderDoc);
+  },
   newId(): string {
     return db.collection('tenders').doc().id;
   },

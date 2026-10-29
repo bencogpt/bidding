@@ -52,6 +52,7 @@ export async function createFeedbackRequests(
       id: requestId(tenderId, round, uid),
       tenderId,
       tenderTitle: tender.title,
+      ...(tender.serial ? { tenderSerial: tender.serial } : {}), // Firestore rejects undefined
       tenderType: tender.type,
       aiDrafted: !!provenance?.draftId,
       round,

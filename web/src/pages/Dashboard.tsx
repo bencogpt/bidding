@@ -13,6 +13,12 @@ export default function Dashboard() {
   const { role, user } = useAuth();
   const pending = useMyFeedbackRequests(user?.uid);
   const [open, setOpen] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const isManager = role === 'tender_manager';
+  const needle = search.trim().toLowerCase();
+  const shown = needle
+    ? tenders.filter((tn) => `${tn.serial ?? ''} ${tn.title}`.toLowerCase().includes(needle))
+    : tenders;
   const scores = useCaseScores();
   const scoreOf = (id: string) => scores.find((s) => s.tenderId === id);
 
@@ -39,6 +45,11 @@ export default function Dashboard() {
                     <Link to={`/tenders/${r.tenderId}`} className="font-semibold text-teal-600">
                       {r.tenderTitle}
                     </Link>
+                    {r.tenderSerial && (
+                      <span className="text-xs text-tx-mute" dir="ltr">
+                        {r.tenderSerial}
+                      </span>
+                    )}
                     <span className="chip">{t(`fb.round.${r.round}`)}</span>
                   </div>
                   <button className="btn btn-sm" onClick={() => setOpen(open === r.id ? null : r.id)}>
@@ -57,8 +68,14 @@ export default function Dashboard() {
       )}
 
       <div className="card overflow-hidden">
-        <div className="border-b border-paper-2 px-5 py-3 font-semibold">
-          {t('dashboard.allTenders')}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-paper-2 px-5 py-3">
+          <span className="font-semibold">{isManager ? t('dashboard.allTenders') : t('dashboard.myTenders')}</span>
+          <input
+            className="input w-64"
+            placeholder={t('dashboard.search')}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
         </div>
         {loading ? (
           <div className="p-6 text-tx-soft">{t('common.loading')}</div>
@@ -67,8 +84,11 @@ export default function Dashboard() {
         ) : (
           <table className="w-full text-sm">
             <tbody>
-              {tenders.map((tn) => (
+              {shown.map((tn) => (
                 <tr key={tn.id} className="border-b border-paper-2 last:border-0 hover:bg-paper">
+                  <td className="whitespace-nowrap px-5 py-3 text-tx-soft" dir="ltr">
+                    {tn.serial ?? '—'}
+                  </td>
                   <td className="px-5 py-3">
                     <Link to={`/tenders/${tn.id}`} className="font-semibold text-teal-600">
                       {tn.title}
@@ -78,13 +98,15 @@ export default function Dashboard() {
                   <td className="px-5 py-3">
                     <StatusBadge status={tn.status} />
                   </td>
-                  <td className="px-5 py-3" title={t('score.title')}>
-                    {scoreOf(tn.id) ? (
-                      <GradeBadge grade={scoreOf(tn.id)!.grade} total={scoreOf(tn.id)!.total} />
-                    ) : (
-                      <span className="text-tx-mute">—</span>
-                    )}
-                  </td>
+                  {isManager && (
+                    <td className="px-5 py-3" title={t('score.title')}>
+                      {scoreOf(tn.id) ? (
+                        <GradeBadge grade={scoreOf(tn.id)!.grade} total={scoreOf(tn.id)!.total} />
+                      ) : (
+                        <span className="text-tx-mute">—</span>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

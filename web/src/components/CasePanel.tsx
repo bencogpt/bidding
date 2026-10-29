@@ -30,6 +30,11 @@ export default function CasePanel({ tender }: { tender: TenderDoc }) {
       {/* Summary */}
       <div className="card p-5">
         <div className="mb-2 flex items-center gap-2">
+          {tender.serial && (
+            <span className="chip font-semibold" dir="ltr">
+              {tender.serial}
+            </span>
+          )}
           <h3 className="font-semibold">{tender.title}</h3>
           <span className="chip">{t(`type.${tender.type}`)}</span>
           <StatusBadge status={tender.status} />

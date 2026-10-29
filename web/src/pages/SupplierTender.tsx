@@ -25,6 +25,7 @@ export default function SupplierTender() {
       </Link>
       <div>
         <h1 className="font-display text-2xl font-bold">{tender.title}</h1>
+        {tender.serial && <div className="text-sm text-tx-mute" dir="ltr">{tender.serial}</div>}
         <div className="mt-2 flex items-center gap-2">
           <span className="chip">{t(`type.${tender.type}`)}</span>
           <StatusBadge status={tender.status} />

@@ -28,6 +28,14 @@ import {
   submitFeedbackInput,
   declineFeedbackInput,
   generateSkillTipsInput,
+  assignTeamMemberInput,
+  setRequiredRolesInput,
+  requiredRolesFor,
+  missingRoles,
+  memberUidsOf,
+  REQUIRED_ROLES_BY_TYPE,
+  TEAM_ROLES,
+  ROLE_LABELS_HE,
   isSupplierVisible,
   canTransition,
   templateIdFor,
@@ -47,10 +55,12 @@ import {
   type TemplateDoc,
   type TenderProvenance,
   type SupervisionReport,
+  type CaseTeam,
+  type TeamRole,
 } from '@obms/shared';
 import { randomBytes } from 'node:crypto';
 import { auth, db, now } from './lib/admin.js';
-import { requireAuth, requireManager, requireInternal } from './lib/context.js';
+import { requireAuth, requireManager, requireInternal, requireCaseAccess } from './lib/context.js';
 import { parseInput } from './lib/validate.js';
 import {
   tendersRepo,
@@ -65,6 +75,7 @@ import {
   bidDraftsRepo,
   internalRepo,
   settingsRepo,
+  countersRepo,
 } from './repositories.js';
 import { transition } from './stateMachines/tenderFsm.js';
 import {
@@ -75,6 +86,7 @@ import {
   createTemplateDoc as createTemplateDocInDrive,
   readTemplateDocText,
   googleIdentityOf,
+  removeDocumentPermission,
 } from './services/docsService.js';
 import {
   clusterQuestions,
@@ -83,7 +95,7 @@ import {
   suggestExternalSuppliers,
 } from './services/aiService.js';
 import { findCandidates } from './services/supplierSearch.js';
-import { requiredSkillsFor } from './services/skillsRegistry.js';
+import { requiredSkillsFor, skillsCatalog } from './services/skillsRegistry.js';
 import { superviseTender, splitConfidential } from './services/supervisorService.js';
 import { templateHash } from './services/supervisorChecks.js';
 import { computeCaseScore, refreshCaseScore } from './services/scoreService.js';
@@ -253,6 +265,50 @@ export const setUserRole = onCall(async (req) => {
   return { ok: true };
 });
 
+// ---- Case team (strict role-based assignment) ----
+const roleLabel = (r: TeamRole) => ROLE_LABELS_HE[r];
+
+/** Each slot must hold an existing user with exactly that role. */
+async function resolveTeam(team: CaseTeam | undefined): Promise<{ team: CaseTeam; users: UserDoc[] }> {
+  const clean: CaseTeam = {};
+  const users: UserDoc[] = [];
+  for (const role of TEAM_ROLES) {
+    const uid = team?.[role];
+    if (!uid) continue;
+    const user = await usersRepo.get(uid);
+    if (!user || user.role !== role) {
+      throw new HttpsError('invalid-argument', `המשתמש שנבחר ל"${roleLabel(role)}" אינו בעל תפקיד זה.`);
+    }
+    clean[role] = uid;
+    users.push(user);
+  }
+  return { team: clean, users };
+}
+
+/** Access docs + Google Docs comment permissions for team members. Returns users without Google. */
+async function grantTeamAccess(
+  tenderId: string,
+  googleDocId: string | null,
+  users: UserDoc[],
+  grantedBy: string,
+): Promise<string[]> {
+  for (const u of users) {
+    await accessRepo.grant(tenderId, {
+      principalId: u.uid,
+      kind: 'internal',
+      level: DEFAULT_INTERNAL_ACCESS[u.role] ?? 'comment',
+      displayName: u.displayName,
+      grantedBy,
+      grantedAt: now(),
+    });
+  }
+  const { writerEmails, commenterEmails, skipped } = splitDocsRecipients(users);
+  if (writerEmails.length || commenterEmails.length) {
+    await setDocumentPermissions(googleDocId, { writerEmails, commenterEmails });
+  }
+  return skipped;
+}
+
 // ---- Tenders ----
 export const createTender = onCall(SUPERVISED, async (req) => {
   const caller = requireManager(req);
@@ -271,9 +327,18 @@ export const createTender = onCall(SUPERVISED, async (req) => {
     throw new HttpsError('invalid-argument', 'טיוטת ה-AI לא נמצאה.');
   }
 
+  // The case team: one user per required role, validated against the users' actual roles.
+  const requiredRoles = requiredRolesFor(input.type, input.extraRoles ?? []);
+  const { team, users: teamUsers } = await resolveTeam(input.team);
+
   const id = tendersRepo.newId();
+  const serial = await countersRepo.nextSerial(new Date(now()).getFullYear());
   const tender: TenderDoc = {
     id,
+    serial,
+    team,
+    requiredRoles,
+    memberUids: memberUidsOf(caller.uid, team),
     title: input.title,
     type: input.type,
     params: publicParams,
@@ -334,43 +399,22 @@ export const createTender = onCall(SUPERVISED, async (req) => {
     docExportPath: gen.exportPath,
   });
 
-  // Every internal user gets access to the bid document at creation: the manager edits, all
-  // other internal roles comment + suggest. No one has to be assigned by hand first.
-  const internalUsers = await usersRepo.listInternal();
-  for (const u of internalUsers) {
-    const a: AccessDoc = {
-      principalId: u.uid,
-      kind: 'internal',
-      level: DEFAULT_INTERNAL_ACCESS[u.role] ?? 'comment',
-      displayName: u.displayName,
-      grantedBy: caller.uid,
-      grantedAt: now(),
-    };
-    await accessRepo.grant(id, a);
-  }
-  // The creating manager, who may not be in `users` yet (e.g. first Google SSO sign-in).
-  if (!internalUsers.some((u) => u.uid === caller.uid)) {
-    await accessRepo.grant(id, {
-      principalId: caller.uid,
-      kind: 'internal',
-      level: 'edit',
-      displayName: caller.name,
-      grantedBy: caller.uid,
-      grantedAt: now(),
-    });
-  }
-
-  const { writerEmails, commenterEmails, skipped } = splitDocsRecipients(internalUsers);
+  // Strict assignment: only the owning manager (edit) and the case team (comment) get access —
+  // no other internal user sees the case.
+  const owner = await usersRepo.get(caller.uid);
+  await accessRepo.grant(id, {
+    principalId: caller.uid,
+    kind: 'internal',
+    level: 'edit',
+    displayName: owner?.displayName ?? caller.name,
+    grantedBy: caller.uid,
+    grantedAt: now(),
+  });
   // The caller's own token email is a real Google address when they signed in with SSO, so it is
   // an acceptable fallback for the owner only.
-  const callerAddress =
-    googleIdentityOf(internalUsers.find((u) => u.uid === caller.uid) ?? {}) ?? caller.email;
-  if (callerAddress && !writerEmails.includes(callerAddress)) writerEmails.push(callerAddress);
-
-  await setDocumentPermissions(gen.googleDocId, {
-    writerEmails,
-    commenterEmails,
-  });
+  const callerAddress = googleIdentityOf(owner ?? {}) ?? caller.email;
+  if (callerAddress) await setDocumentPermissions(gen.googleDocId, { writerEmails: [callerAddress] });
+  const skipped = await grantTeamAccess(id, gen.googleDocId, teamUsers, caller.uid);
 
   await auditRepo.append({
     entityType: 'tender',
@@ -381,23 +425,29 @@ export const createTender = onCall(SUPERVISED, async (req) => {
     action: 'create',
     prevState: null,
     newState: 'draft',
-    detail: `${input.type}: ${input.title}`,
+    detail: `${serial} · ${input.type}: ${input.title}`,
   });
-  // One summary entry rather than one per user — the access docs are the record of who got what.
+  const missing = missingRoles(requiredRoles, team);
   await auditRepo.append({
     entityType: 'tender',
     entityId: id,
     tenderId: id,
     actorUid: caller.uid,
     actorName: caller.name,
-    action: 'auto_grant_internal',
+    action: 'team_assigned',
     prevState: null,
-    newState: `${internalUsers.length} internal users`,
-    detail: skipped.length ? `ללא חשבון Google: ${skipped.join(', ')}` : undefined,
+    newState: teamUsers.map((u) => `${u.role}:${u.displayName}`).join(', ') || null,
+    detail:
+      [
+        missing.length ? `חסרים: ${missing.map(roleLabel).join(', ')}` : '',
+        skipped.length ? `ללא חשבון Google: ${skipped.join(', ')}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ') || undefined,
   });
   const supervision = await supervisorCheckpoint(caller, id, 'created');
   await refreshCaseScore(SYSTEM, id);
-  return { id, docsSkipped: skipped, verdict: supervision?.verdict ?? null };
+  return { id, serial, docsSkipped: skipped, verdict: supervision?.verdict ?? null, missingRoles: missing };
 });
 
 export const transitionTender = onCall(SUPERVISED, async (req) => {
@@ -405,6 +455,17 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
   const input = parseInput(transitionTenderInput, req.data);
   const current = await tendersRepo.get(input.tenderId);
   if (!current) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+
+  // The case team must be complete before internal review.
+  if (input.to === 'internal_review' && canTransition(current.status, 'internal_review')) {
+    const missing = missingRoles(current.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[current.type], current.team);
+    if (missing.length) {
+      throw new HttpsError(
+        'failed-precondition',
+        `לא ניתן לשלוח לבדיקה פנימית — יש לשבץ: ${missing.map(roleLabel).join(', ')}.`,
+      );
+    }
+  }
 
   // Publish gate: the supervisor inspects the live document before suppliers can see it.
   let gate: SupervisionReport | null = null;
@@ -466,6 +527,10 @@ export const grantAccess = onCall({ secrets: DOCS_SECRETS }, async (req) => {
   const input = parseInput(grantAccessInput, req.data);
   const tender = await tendersRepo.get(input.tenderId);
   if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  // Internal users are assigned through the case team (assignTeamMember), never ad hoc.
+  if ((input.internalUids ?? []).length) {
+    throw new HttpsError('invalid-argument', 'שיבוץ משתמשים פנימיים נעשה דרך צוות המכרז.');
+  }
   // Suppliers only see a document the supervisor has passed, i.e. after publication.
   if ((input.supplierIds ?? []).length && !isSupplierVisible(tender.status)) {
     throw new HttpsError(
@@ -499,40 +564,71 @@ export const grantAccess = onCall({ secrets: DOCS_SECRETS }, async (req) => {
     });
   }
 
-  // Internal reviewers -> comment access (Google Docs commenter in prod). Managers -> writer.
-  const grantedUsers: UserDoc[] = [];
-  for (const uid of input.internalUids ?? []) {
-    const user = await usersRepo.get(uid);
-    if (!user) continue;
-    const a: AccessDoc = {
-      principalId: uid,
-      kind: 'internal',
-      level: DEFAULT_INTERNAL_ACCESS[user.role] ?? 'comment',
-      displayName: user.displayName,
-      grantedBy: caller.uid,
-      grantedAt: now(),
-    };
-    await accessRepo.grant(input.tenderId, a);
-    grantedUsers.push(user);
-    await auditRepo.append({
-      entityType: 'tender',
-      entityId: input.tenderId,
-      tenderId: input.tenderId,
-      actorUid: caller.uid,
-      actorName: caller.name,
-      action: 'assign_reviewer',
-      prevState: null,
-      newState: user.displayName,
-    });
+  return { ok: true, docsSkipped: [] as string[] };
+});
+
+// Assign (or clear) the user holding one role slot of the case team. The previous holder loses
+// access to the case, its document and its chat. Allowed in any status (people get replaced).
+export const assignTeamMember = onCall({ secrets: DOCS_SECRETS }, async (req) => {
+  const caller = requireManager(req);
+  const input = parseInput(assignTeamMemberInput, req.data);
+  const tender = await tendersRepo.get(input.tenderId);
+  if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  const team: CaseTeam = { ...(tender.team ?? {}) };
+  const prevUid = team[input.role] ?? null;
+  if (prevUid === input.uid) return { ok: true, docsSkipped: [] as string[] };
+
+  let newUser: UserDoc | null = null;
+  if (input.uid) {
+    ({
+      users: [newUser],
+    } = await resolveTeam({ [input.role]: input.uid }));
+    team[input.role] = input.uid;
+  } else {
+    delete team[input.role];
   }
-  const { writerEmails, commenterEmails, skipped } = splitDocsRecipients(grantedUsers);
-  if (writerEmails.length || commenterEmails.length) {
-    await setDocumentPermissions(tender.googleDocId, {
-      writerEmails,
-      commenterEmails,
-    });
+  const memberUids = memberUidsOf(tender.ownerUid, team);
+
+  // Revoke the previous holder unless they still hold another slot (or own the case).
+  if (prevUid && !memberUids.includes(prevUid)) {
+    const prev = await usersRepo.get(prevUid);
+    await accessRepo.revoke(tender.id, prevUid);
+    await removeDocumentPermission(tender.googleDocId, prev ? googleIdentityOf(prev) : null);
   }
+  await tendersRepo.update(tender.id, { team, memberUids });
+  const skipped = newUser ? await grantTeamAccess(tender.id, tender.googleDocId, [newUser], caller.uid) : [];
+  await auditRepo.append({
+    entityType: 'tender',
+    entityId: tender.id,
+    tenderId: tender.id,
+    actorUid: caller.uid,
+    actorName: caller.name,
+    action: newUser ? 'team_assigned' : 'team_unassigned',
+    prevState: prevUid,
+    newState: newUser ? `${input.role}:${newUser.displayName}` : input.role,
+  });
   return { ok: true, docsSkipped: skipped };
+});
+
+// The manager may require additional roles on a case; the type's default roles always stay.
+export const setRequiredRoles = onCall(async (req) => {
+  const caller = requireManager(req);
+  const input = parseInput(setRequiredRolesInput, req.data);
+  const tender = await tendersRepo.get(input.tenderId);
+  if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  const requiredRoles = requiredRolesFor(tender.type, input.roles);
+  await tendersRepo.update(tender.id, { requiredRoles });
+  await auditRepo.append({
+    entityType: 'tender',
+    entityId: tender.id,
+    tenderId: tender.id,
+    actorUid: caller.uid,
+    actorName: caller.name,
+    action: 'set_required_roles',
+    prevState: (tender.requiredRoles ?? []).join(',') || null,
+    newState: requiredRoles.join(','),
+  });
+  return { requiredRoles };
 });
 
 // Returns the rendered tender document for the in-system viewer (authorization checked here).
@@ -549,6 +645,8 @@ export const getTenderDocument = onCall({ secrets: DOCS_SECRETS }, async (req) =
     if (!isSupplierVisible(tender.status)) {
       throw new HttpsError('permission-denied', 'המכרז טרם פורסם.');
     }
+  } else {
+    requireCaseAccess(caller, tender);
   }
   return getViewable(tender);
 });
@@ -825,16 +923,25 @@ export const runSupervision = onCall(SUPERVISED, async (req) => {
   const input = parseInput(runSupervisionInput, req.data);
   const tender = await tendersRepo.get(input.tenderId);
   if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  requireCaseAccess(caller, tender);
   const report = await superviseTender(caller, input.tenderId, 'manual');
   await refreshCaseScore(SYSTEM, input.tenderId);
   return report;
+});
+
+// Read-only catalog of the skills framework the system enforces (Templates page).
+export const getSkillsCatalog = onCall(async (req) => {
+  requireInternal(req);
+  return skillsCatalog();
 });
 
 // ---- Case success score ----
 export const recomputeCaseScore = onCall({ secrets: DOCS_SECRETS }, async (req) => {
   const caller = requireInternal(req);
   const input = parseInput(recomputeCaseScoreInput, req.data);
-  if (!(await tendersRepo.get(input.tenderId))) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  const tender = await tendersRepo.get(input.tenderId);
+  if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  requireCaseAccess(caller, tender);
   return computeCaseScore(caller, input.tenderId);
 });
 
@@ -883,6 +990,77 @@ export const generateSkillTips = onCall(
     return generateSkillTipsSvc(caller, input.type);
   },
 );
+
+// One-time: number tenders created before serials existed (by creation date within each year).
+export const backfillSerials = onCall({ timeoutSeconds: 300 }, async (req) => {
+  const caller = requireManager(req);
+  const all = (await tendersRepo.listAll()).sort((a, b) => a.createdAt - b.createdAt);
+  const byYear = new Map<number, TenderDoc[]>();
+  for (const t of all) {
+    const y = new Date(t.createdAt).getFullYear();
+    byYear.set(y, [...(byYear.get(y) ?? []), t]);
+  }
+  let assigned = 0;
+  for (const [year, tenders] of byYear) {
+    // Continue after the highest number already used this year (existing serials are kept).
+    const used = tenders
+      .map((t) => Number(t.serial?.match(/^BID-\d{4}-(\d+)$/)?.[1] ?? 0))
+      .reduce((a, b) => Math.max(a, b), 0);
+    await countersRepo.ensureAtLeast(year, used);
+    for (const t of tenders) {
+      if (t.serial) continue;
+      await tendersRepo.update(t.id, { serial: await countersRepo.nextSerial(year) });
+      assigned++;
+    }
+  }
+  await auditRepo.append({
+    entityType: 'settings',
+    entityId: 'serials',
+    actorUid: caller.uid,
+    actorName: caller.name,
+    action: 'backfill_serials',
+    prevState: null,
+    newState: `${assigned} assigned`,
+  });
+  return { assigned, total: all.length };
+});
+
+// One-time: move tenders created before strict assignment onto case teams. Keeps everyone who has
+// access today (members = owner + internal access principals), fills a role slot only where exactly
+// one user of that role has access; managers then trim the team in the Team panel.
+export const migrateTeams = onCall({ timeoutSeconds: 300 }, async (req) => {
+  const caller = requireManager(req);
+  let migrated = 0;
+  for (const t of await tendersRepo.listAll()) {
+    if (t.memberUids && t.requiredRoles) continue;
+    const internal = (await accessRepo.list(t.id)).filter((a) => a.kind === 'internal');
+    const users = (await Promise.all(internal.map((a) => usersRepo.get(a.principalId)))).filter(
+      (u): u is UserDoc => !!u,
+    );
+    const team: CaseTeam = {};
+    for (const role of TEAM_ROLES) {
+      const holders = users.filter((u) => u.role === role);
+      if (holders.length === 1) team[role] = holders[0].uid;
+    }
+    const memberUids = [...new Set([t.ownerUid, ...internal.map((a) => a.principalId)])];
+    await tendersRepo.update(t.id, {
+      team: t.team ?? team,
+      requiredRoles: t.requiredRoles ?? requiredRolesFor(t.type),
+      memberUids,
+    });
+    migrated++;
+  }
+  await auditRepo.append({
+    entityType: 'settings',
+    entityId: 'teams',
+    actorUid: caller.uid,
+    actorName: caller.name,
+    action: 'migrate_teams',
+    prevState: null,
+    newState: `${migrated} tenders`,
+  });
+  return { migrated };
+});
 
 export const updateScoringTargets = onCall(async (req) => {
   const caller = requireManager(req);
@@ -1121,6 +1299,15 @@ export const deleteInternalUser = onCall(async (req) => {
   }
   const user = await usersRepo.get(input.uid);
   await usersRepo.remove(input.uid);
+  // A deleted user leaves every case team (their slots become empty and must be refilled).
+  for (const t of await tendersRepo.listAll()) {
+    const roles = (Object.keys(t.team ?? {}) as TeamRole[]).filter((r) => t.team?.[r] === input.uid);
+    if (!roles.length && !(t.memberUids ?? []).includes(input.uid)) continue;
+    const team: CaseTeam = { ...(t.team ?? {}) };
+    for (const r of roles) delete team[r];
+    await tendersRepo.update(t.id, { team, memberUids: memberUidsOf(t.ownerUid, team) });
+    await accessRepo.revoke(t.id, input.uid);
+  }
   try {
     await auth.deleteUser(input.uid);
   } catch {

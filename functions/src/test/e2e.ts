@@ -19,6 +19,8 @@ import {
   collectionGroup,
   query,
   where,
+  setDoc,
+  serverTimestamp,
 } from 'firebase/firestore';
 import { getFunctions, connectFunctionsEmulator, httpsCallable } from 'firebase/functions';
 
@@ -37,30 +39,52 @@ async function main() {
   // ---- manager creates a goods tender ----
   await login('manager@obms.test');
   const users = await getDocs(collection(db, 'users'));
-  const legalUid = users.docs.find((d) => d.data().role === 'legal')!.id;
+  const uidOf = (role: string) => users.docs.find((d) => d.data().role === role)!.id;
+  const legalUid = uidOf('legal');
+  const goodsTeam = { requester: uidOf('requester'), legal: legalUid, finance: uidOf('finance') };
 
   const created = (await call('createTender')({
     title: 'מכרז טובין לבדיקה',
     type: 'goods',
     params: { org: 'משרד הביטחון', description: 'מצלמות אבטחה', quantity: 10, budget: 500000 },
-  })) as { data: { id: string } };
+    team: goodsTeam,
+  })) as { data: { id: string; serial: string } };
   const tenderId = created.data.id;
   assert.ok(tenderId, 'tender id returned');
+  assert.match(created.data.serial, /^BID-\d{4}-\d{4}$/, 'serial number assigned');
+
+  // A team slot only accepts a user with exactly that role.
+  let wrongRole = false;
+  try {
+    await call('createTender')({
+      title: 'x',
+      type: 'goods',
+      params: { org: 'o', description: 'd', quantity: 1 },
+      team: { legal: uidOf('finance') },
+    });
+  } catch {
+    wrongRole = true;
+  }
+  assert.ok(wrongRole, 'a finance user cannot fill the legal slot');
 
   const tdoc = await getDoc(doc(db, 'tenders', tenderId));
   assert.ok(tdoc.exists(), 'tender doc persisted');
   assert.equal(tdoc.data()!.status, 'draft');
 
-  // Every internal user gets access to the bid document at creation — nobody has to be
-  // assigned by hand (requirement: internal users can comment/suggest on the doc).
-  const internalUids = users.docs
-    .filter((d) => d.data().role !== 'supplier')
-    .map((d) => d.id);
+  // Strict assignment: only the owner and the case team get access — security is not on it.
+  const managerUid = auth.currentUser!.uid;
   const accessSnap = await getDocs(collection(db, 'tenders', tenderId, 'access'));
   const accessByPrincipal = new Map(accessSnap.docs.map((d) => [d.id, d.data()]));
-  for (const uid of internalUids) {
-    assert.ok(accessByPrincipal.has(uid), `internal user ${uid} auto-granted access at creation`);
-  }
+  assert.deepEqual(
+    [...accessByPrincipal.keys()].sort(),
+    [managerUid, ...Object.values(goodsTeam)].sort(),
+    'access = owner + team only',
+  );
+  assert.deepEqual(
+    [...tdoc.data()!.memberUids].sort(),
+    [managerUid, ...Object.values(goodsTeam)].sort(),
+    'memberUids = owner + team',
+  );
 
   // Only the tender manager may hold 'edit' — this is what keeps "only the bid manager accepts
   // changes" true, since Docs writer (= can accept suggestions) is derived from this role split.
@@ -75,7 +99,46 @@ async function main() {
       );
     }
   }
-  console.log('✓ all internal users auto-granted; edit access limited to the manager');
+  console.log(`✓ ${created.data.serial}: team-only access; edit access limited to the manager`);
+
+  // An unassigned internal user (security) can't see the case at all.
+  await signOut(auth);
+  await login('security@obms.test');
+  let secDenied = false;
+  try {
+    await getDoc(doc(db, 'tenders', tenderId));
+  } catch {
+    secDenied = true;
+  }
+  assert.ok(secDenied, 'unassigned user cannot read the tender');
+  let secDocDenied = false;
+  try {
+    await call('getTenderDocument')({ tenderId });
+  } catch {
+    secDocDenied = true;
+  }
+  assert.ok(secDocDenied, 'unassigned user cannot open the document');
+  const secList = await getDocs(
+    query(collection(db, 'tenders'), where('memberUids', 'array-contains', auth.currentUser!.uid)),
+  );
+  assert.ok(!secList.docs.some((d) => d.id === tenderId), 'case not in the unassigned user\'s list');
+
+  // A team member posts in the case chat (server time enforced by rules).
+  await signOut(auth);
+  await login('legal@obms.test');
+  await setDoc(doc(db, 'tenders', tenderId, 'chat', 'e2e-msg-1'), {
+    id: 'e2e-msg-1',
+    uid: auth.currentUser!.uid,
+    name: 'יועץ משפטי',
+    role: 'legal',
+    text: 'בדקתי את סעיף האחריות.',
+    createdAt: serverTimestamp(),
+  });
+  await signOut(auth);
+  await login('manager@obms.test');
+  const chat = await getDocs(collection(db, 'tenders', tenderId, 'chat'));
+  assert.equal(chat.size, 1, 'manager reads the team chat');
+  console.log('✓ unassigned user sees nothing; team chat works');
 
   // ---- supervisor: provenance, confidentiality, publish gate ----
   assert.equal(tdoc.data()!.params.budget, undefined, 'estimate is not on the supplier-readable tender');
@@ -109,9 +172,22 @@ async function main() {
     title: 'מכרז עם חוסר',
     type: 'goods',
     params: { org: 'משרד הביטחון', description: 'מצלמות, אחריות {{WARRANTY_YEARS}} שנים', quantity: 4 },
-  })) as { data: { id: string; verdict: string | null } };
+    team: { requester: goodsTeam.requester, legal: legalUid }, // finance slot left empty
+  })) as { data: { id: string; serial: string; verdict: string | null; missingRoles: string[] } };
   assert.equal(bad.data.verdict, 'BLOCK', 'supervisor flags the placeholder at creation');
+  const serialNo = (x: string) => Number(x.split('-')[2]);
+  assert.equal(serialNo(bad.data.serial), serialNo(created.data.serial) + 1, 'serials are sequential; the rejected create consumed no number');
+  assert.deepEqual(bad.data.missingRoles, ['finance']);
+  let gateRefused = false;
+  try {
+    await call('transitionTender')({ tenderId: bad.data.id, to: 'internal_review' });
+  } catch (e) {
+    gateRefused = /יש לשבץ/.test((e as Error).message);
+  }
+  assert.ok(gateRefused, 'review is refused while a required role is empty');
+  await call('assignTeamMember')({ tenderId: bad.data.id, role: 'finance', uid: goodsTeam.finance });
   await call('transitionTender')({ tenderId: bad.data.id, to: 'internal_review' });
+  console.log('✓ review gate: refused with an empty slot, passes once the team is complete');
   await call('transitionTender')({ tenderId: bad.data.id, to: 'ready' });
   let blocked = false;
   try {
@@ -135,8 +211,31 @@ async function main() {
   );
   console.log('✓ supervisor: placeholder blocks publish; manager override is audited');
 
-  await call('grantAccess')({ tenderId, supplierIds: ['sup_aegis'], internalUids: [legalUid] });
-  console.log('✓ manager published tender + shared with aegis + assigned legal');
+  // Internal users can no longer be granted ad hoc — only through the team.
+  let adHocRefused = false;
+  try {
+    await call('grantAccess')({ tenderId, supplierIds: [], internalUids: [uidOf('security')] });
+  } catch {
+    adHocRefused = true;
+  }
+  assert.ok(adHocRefused, 'ad-hoc internal grants are refused');
+  await call('grantAccess')({ tenderId, supplierIds: ['sup_aegis'], internalUids: [] });
+  console.log('✓ manager published tender + shared with aegis');
+
+  // Removing legal from a case revokes their access to it.
+  await call('assignTeamMember')({ tenderId: bad.data.id, role: 'legal', uid: null });
+  await signOut(auth);
+  await login('legal@obms.test');
+  let revoked = false;
+  try {
+    await getDoc(doc(db, 'tenders', bad.data.id));
+  } catch {
+    revoked = true;
+  }
+  assert.ok(revoked, 'unassigned legal loses access to the case');
+  await signOut(auth);
+  await login('manager@obms.test');
+  console.log('✓ unassigning a team member revokes their access');
 
   // ---- supplier aegis: sees doc, asks a question ----
   await signOut(auth);
@@ -344,11 +443,8 @@ async function main() {
   const reqs = await getDocs(query(collection(db, 'feedbackRequests'), where('tenderId', '==', tenderId)));
   const rounds = new Set(reqs.docs.map((d) => d.data().round));
   assert.ok(rounds.has('publish') && rounds.has('award'), 'feedback requested at publish and at award');
-  const internalCount = users.docs.filter((d) => d.data().role !== 'supplier').length;
-  assert.ok(
-    reqs.docs.filter((d) => d.data().round === 'publish').length >= internalCount - 1,
-    'every internal participant asked',
-  );
+  const publishReqUids = reqs.docs.filter((d) => d.data().round === 'publish').map((d) => d.data().uid).sort();
+  assert.deepEqual(publishReqUids, [managerUid, ...Object.values(goodsTeam)].sort(), 'only the case team is asked');
   await signOut(auth);
   await login('legal@obms.test');
   const legalUser = auth.currentUser!.uid;
@@ -383,6 +479,15 @@ async function main() {
   assert.ok(tips.data.aggregate.responses >= 1, 'tips aggregate the feedback');
   console.log(`✓ feedback: requests at publish + award, legal answered, tips run (${tips.data.model}, ${tips.data.tips.length} tips)`);
 
+  // ---- read-only skills catalog ----
+  const catalog = (await call('getSkillsCatalog')({})) as {
+    data: { skills: unknown[]; required: { goods: string[] }; legalSections: unknown[] };
+  };
+  assert.equal(catalog.data.skills.length, 19, 'all skills in the catalog');
+  assert.ok(catalog.data.required.goods.includes('s11-legal-compliance'), 'goods requires the legal skill');
+  assert.equal(catalog.data.legalSections.length, 9, '9 mandatory legal sections');
+  console.log('✓ skills catalog served read-only');
+
   // ---- case success score ----
   type Score = { total: number; cohort: string; raw: Record<string, number>; components: { key: string; score: number }[] };
   const versions = (await getDoc(doc(db, 'tenders', tenderId, 'internal', 'versions'))).data() as
@@ -415,11 +520,25 @@ async function main() {
     scoreDenied = true;
   }
   assert.ok(scoreDenied, 'supplier cannot read case scores');
+  let catalogDenied = false;
+  try {
+    await call('getSkillsCatalog')({});
+  } catch {
+    catalogDenied = true;
+  }
+  assert.ok(catalogDenied, 'supplier cannot read the skills catalog');
   await signOut(auth);
   await login('manager@obms.test');
   const backfill = (await call('backfillCaseScores')({})) as { data: { scored: number; failed: string[] } };
   assert.ok(backfill.data.scored >= 2 && backfill.data.failed.length === 0, 'backfill scores every tender');
   console.log(`✓ backfill scored ${backfill.data.scored} tenders`);
+
+  // ---- one-time migrations are idempotent ----
+  const s1 = (await call('backfillSerials')({})) as { data: { assigned: number } };
+  assert.equal(s1.data.assigned, 0, 'all tenders already numbered');
+  const m1 = (await call('migrateTeams')({})) as { data: { migrated: number } };
+  assert.equal(m1.data.migrated, 0, 'all tenders already on teams');
+  console.log('✓ backfillSerials / migrateTeams are no-ops on current data');
 
   console.log('\n✅ E2E PASSED — full vertical slice works on the emulator');
   process.exit(0);

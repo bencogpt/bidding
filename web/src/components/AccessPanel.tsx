@@ -3,12 +3,11 @@ import { useTranslation } from 'react-i18next';
 import type {
   AccessDoc,
   SupplierDoc,
-  UserDoc,
   TenderType,
   TenderStatus,
   ExternalSupplierSuggestion,
 } from '@obms/shared';
-import { isInternalRole, isSupplierVisible } from '@obms/shared';
+import { isSupplierVisible } from '@obms/shared';
 import { api } from '../lib/api';
 import SupplierForm from './SupplierForm';
 
@@ -19,7 +18,6 @@ export default function AccessPanel({
   tenderDomainTags,
   access,
   suppliers,
-  users,
   canManage,
 }: {
   tenderId: string;
@@ -28,12 +26,10 @@ export default function AccessPanel({
   tenderDomainTags: string[];
   access: AccessDoc[];
   suppliers: SupplierDoc[];
-  users: UserDoc[];
   canManage: boolean;
 }) {
   const { t } = useTranslation();
   const [selSuppliers, setSelSuppliers] = useState<Set<string>>(new Set());
-  const [selUsers, setSelUsers] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   // Suppliers may only see a document the supervisor passed, i.e. after publication.
@@ -50,7 +46,6 @@ export default function AccessPanel({
   } | null>(null);
 
   const granted = new Set(access.map((a) => a.principalId));
-  const reviewers = users.filter((u) => isInternalRole(u.role) && u.role !== 'tender_manager');
   const wanted = new Set(tenderDomainTags.map((x) => x.toLowerCase()));
 
   // Rank registered suppliers by domain-tag overlap, Israeli-first.
@@ -71,9 +66,9 @@ export default function AccessPanel({
     setBusy(true);
     setError('');
     try {
-      await api.grantAccess({ tenderId, supplierIds: [...selSuppliers], internalUids: [...selUsers] });
+      // Internal users join through the case team (TeamPanel), never ad hoc.
+      await api.grantAccess({ tenderId, supplierIds: [...selSuppliers], internalUids: [] });
       setSelSuppliers(new Set());
-      setSelUsers(new Set());
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -123,36 +118,9 @@ export default function AccessPanel({
             ))}
           </div>
 
-          <h3 className="mb-3 mt-5 font-semibold">{t('ws.assignReviewers')}</h3>
-          {reviewers.some((u) => !u.googleEmail) && (
-            <div className="mb-2 rounded bg-amber-100 p-2 text-xs text-amber-700">
-              {t('ws.noGoogleAccountWarning', {
-                names: reviewers
-                  .filter((u) => !u.googleEmail)
-                  .map((u) => u.displayName)
-                  .join(', '),
-              })}
-            </div>
-          )}
-          <div className="space-y-2">
-            {reviewers.map((u) => (
-              <label key={u.uid} className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  disabled={granted.has(u.uid)}
-                  checked={granted.has(u.uid) || selUsers.has(u.uid)}
-                  onChange={() => toggle(selUsers, u.uid, setSelUsers)}
-                />
-                <span>{u.displayName}</span>
-                <span className="chip">{t(`role.${u.role}`)}</span>
-                {granted.has(u.uid) && <span className="text-xs text-green-600">✓</span>}
-              </label>
-            ))}
-          </div>
-
           <button
             className="btn btn-gold mt-5"
-            disabled={busy || (selSuppliers.size === 0 && selUsers.size === 0)}
+            disabled={busy || selSuppliers.size === 0}
             onClick={grant}
           >
             {t('ws.grant')}

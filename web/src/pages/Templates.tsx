@@ -4,6 +4,7 @@ import { TENDER_TYPES, type TenderType, type TemplateDoc } from '@obms/shared';
 import { useTemplates, useLatestSkillTips } from '../lib/hooks';
 import { api } from '../lib/api';
 import { renderMarkdown } from '../lib/markdown';
+import SkillsCatalog, { TypeSkills } from '../components/SkillsCatalog';
 
 type Example = { title: string; url: string };
 
@@ -390,6 +391,7 @@ function TypeCard({ type, template }: { type: TenderType; template?: TemplateDoc
       <ExamplesSection type={type} template={template} />
       <SkillSection type={type} template={template} />
       <SkillTipsSection type={type} template={template} />
+      <TypeSkills type={type} />
     </div>
   );
 }
@@ -408,6 +410,7 @@ export default function Templates() {
           <TypeCard key={ty} type={ty} template={byType(ty)} />
         ))}
       </div>
+      <SkillsCatalog />
     </div>
   );
 }
