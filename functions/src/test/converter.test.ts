@@ -141,6 +141,16 @@ test('sync keeps approved labels and types for converted fields', () => {
   assert.equal(resynced.find((p) => p.key === 'subject')!.labelHe, 'נושא הרכש');
 });
 
+test('a field written inside a supplier-filled line keeps that line exempt', () => {
+  const line = 'הוצבו במתקני המשרד _____ [12] נותני שירות';
+  const fields = validateProposals(line, [
+    { key: 'total_providers', labelHe: 'סך', type: 'number', required: true, occurrences: [{ quote: '[12] נותני', replace: '12' }] },
+  ], []).fields;
+  const supplier = [line].map((q) => applyToText(q, fields)); // what applyConversion stores
+  assert.equal(findFillSpots(applyToText(line, fields), supplier).length, 0);
+  assert.equal(findFillSpots(applyToText(line, fields), [line]).length, 1, 'the stale quote would not match');
+});
+
 test('two fields in one sentence are written by a single replacement', () => {
   const text = "29. נציגת המזמין הינה נעמה, מס' טלפון: 077-4305464.";
   const quote = "הינה נעמה, מס' טלפון: 077-4305464";

@@ -5,12 +5,12 @@
   "type": "module",
   "main": "lib/index.js",
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "scripts": {
     "prebuild": "node scripts/copy-skills.mjs",
     "build": "tsc -p tsconfig.json && npm run bundle",
-    "bundle": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=lib/index.js --external:firebase-admin --external:firebase-functions --external:googleapis --external:@anthropic-ai/sdk --external:zod",
+    "bundle": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --outfile=lib/index.js --external:firebase-admin --external:firebase-functions --external:googleapis --external:@anthropic-ai/sdk --external:zod",
     "build:watch": "tsc -w -p tsconfig.json",
     "serve": "npm run build && firebase emulators:start --only functions",
     "seed": "node lib/seed.js",

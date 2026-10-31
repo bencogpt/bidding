@@ -224,13 +224,16 @@ export async function applyConversion(
     replaced = v.fields.reduce((n, f) => n + f.occurrences.length, 0);
   }
 
+  // Supplier-fill quotes get the same edits as the document, or a field written inside a
+  // supplier-filled line would make its quote stale and the line count as unresolved again.
+  const supplierFill = [...new Set(v.supplierFill.map((q) => applyToText(q, v.fields)))];
   // Sync with the approved labels/types (approved fields first, then the template's existing ones).
   const params = mergeSyncedParams(detectPlaceholders(newText), [...fieldsAsParams(v.fields), ...template.params]);
-  const st = templateFieldsStatus(newText, v.supplierFill);
+  const st = templateFieldsStatus(newText, supplierFill);
   await templatesRepo.patch(input.type, {
     bodyTemplate: newText,
     params,
-    supplierFillQuotes: v.supplierFill,
+    supplierFillQuotes: supplierFill,
     fieldsStatus: st.status,
     unresolvedSpots: st.unresolved,
     ...(backupDocId ? { backupDocIds: [...(template.backupDocIds ?? []), backupDocId] } : {}),
@@ -250,7 +253,7 @@ export async function applyConversion(
     fields: v.fields.length,
     replaced,
     notFound,
-    unresolved: findFillSpots(newText, v.supplierFill),
+    unresolved: findFillSpots(newText, supplierFill),
     status: st.status,
     backupDocId,
   };
