@@ -15,6 +15,8 @@ export default {
         surface: { DEFAULT: '#ffffff', 2: '#fbfcfe' },
         gold: { DEFAULT: '#d8a23a', soft: '#f4e4c0', deep: '#a9781f' },
         teal: { DEFAULT: '#0e8c8c', 600: '#0a6f70', soft: '#d4ecec' },
+        // Accent of the new UI (numbers, main action buttons).
+        accent: { DEFAULT: '#5b3fd1', hover: '#4a31b5', soft: '#efecfc' },
          tx: { DEFAULT: '#131a2b', soft: '#475069', mute: '#8590a8' },
       },
       fontFamily: {

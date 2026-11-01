@@ -33,24 +33,26 @@ export default function TenderHeader({
 
   return (
     <div className="sticky top-0 z-20 -mx-8 -mt-8 mb-4 border-b border-paper-2 bg-paper px-8 pt-5">
-      <div className="card flex items-start gap-3 px-5 py-4">
+      <div className="card flex items-center gap-3 px-5 py-4">
         <Link
           to="/"
           title={t('ws.backToAll')}
-          className="grid h-8 w-8 shrink-0 place-items-center rounded border border-paper-2 text-tx-soft hover:border-tx-mute hover:text-tx"
+          className="grid h-8 w-8 shrink-0 self-start place-items-center rounded border border-paper-2 text-tx-soft hover:border-tx-mute hover:text-tx"
         >
           →
         </Link>
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="font-display text-2xl font-bold">{tender.title}</h1>
+            <h1 className="font-display text-[26px] font-semibold leading-8">{tender.title}</h1>
             {tender.serial && (
-              <span className="text-sm font-semibold text-teal-600" dir="ltr">
+              <span className="text-sm font-semibold tabular-nums text-accent" dir="ltr">
                 {tender.serial}
               </span>
             )}
             <span className="h-4 w-px bg-paper-2" />
-            <span className="chip">{t(`type.${tender.type}`)}</span>
+            <span className="rounded border border-paper-2 bg-paper px-2.5 py-0.5 text-xs text-tx-soft">
+              {t(`type.${tender.type}`)}
+            </span>
             {tender.lastSupervision && <VerdictBadge verdict={tender.lastSupervision.verdict} />}
           </div>
           {ownerName && (
@@ -66,7 +68,7 @@ export default function TenderHeader({
         <div className="flex-1" />
         {action && (
           <button
-            className="btn btn-primary shrink-0"
+            className="btn shrink-0 border-accent bg-accent px-5 text-white hover:border-accent-hover hover:bg-accent-hover"
             disabled={action.disabled || action.busy}
             title={action.title}
             onClick={action.onClick}
