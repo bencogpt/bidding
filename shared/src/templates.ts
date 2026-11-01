@@ -81,10 +81,25 @@ export function mergeSyncedParams(
   // a re-sync must not reset a converted template's fields to raw keys and plain text.
   const merged = detected.map((p) => {
     const old = prev.get(p.key);
-    return old ? { ...p, labelHe: old.labelHe, type: old.type, required: old.required, ...(old.internal ? { internal: true } : {}) } : p;
+    if (!old) return p;
+    return {
+      ...p,
+      labelHe: old.labelHe,
+      type: old.type,
+      required: old.required,
+      ...(old.internal ? { internal: true } : {}),
+      // form layout and system-fill rules survive a re-sync too
+      ...(old.order !== undefined ? { order: old.order } : {}),
+      ...(old.hidden ? { hidden: true } : {}),
+      ...(old.fill ? { fill: old.fill } : {}),
+      ...(old.defaultFrom ? { defaultFrom: old.defaultFrom } : {}),
+    };
   });
   const keys = new Set(detected.map((p) => p.key));
-  return [...merged, ...existing.filter((p) => p.internal && !keys.has(p.key))];
+  // Fields that are not typed into the document (the estimate, system-filled and not-yet-set ones)
+  // have no placeholder to be detected from, so they are carried over.
+  const keepWithoutPlaceholder = (p: TemplateParam) => p.internal || p.hidden || !!p.fill;
+  return [...merged, ...existing.filter((p) => keepWithoutPlaceholder(p) && !keys.has(p.key))];
 }
 
 // ---- Word-style fill-in spots (XXXX, ____) in documents that aren't real templates yet ----

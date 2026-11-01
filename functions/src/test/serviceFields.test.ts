@@ -133,3 +133,37 @@ test('askedParams: fields without an order keep their stored order after the ord
   ];
   assert.deepEqual(askedParams(legacy).map((p) => p.key), ['b', 'a', 'c']);
 });
+
+test('mergeSyncedParams keeps form order, hidden and fill rules across a re-sync', async () => {
+  const { mergeSyncedParams } = await import('@obms/shared');
+  const existing: TemplateParam[] = [
+    { key: 'guarantee_amount', labelHe: 'ערבות', type: 'number', required: false, order: 5, defaultFrom: 'guarantee_pct' },
+    { key: 'total_months', labelHe: 'סך', type: 'number', required: false, fill: { kind: 'formula', formula: 'total_months' } },
+    { key: 'damages_cap', labelHe: 'פיצוי', type: 'number', required: false, hidden: true },
+    { key: 'removed_from_doc', labelHe: 'הוסר', type: 'text', required: true, order: 6 },
+  ];
+  // the doc still mentions the first two, and a brand-new field
+  const detected: TemplateParam[] = [
+    { key: 'guarantee_amount', labelHe: 'guarantee_amount', type: 'text', required: true },
+    { key: 'total_months', labelHe: 'total_months', type: 'text', required: true },
+    { key: 'new_field', labelHe: 'new_field', type: 'text', required: true },
+  ];
+  const merged = mergeSyncedParams(detected, existing);
+  const by = (k: string) => merged.find((p) => p.key === k)!;
+  assert.equal(by('guarantee_amount').order, 5);
+  assert.equal(by('guarantee_amount').defaultFrom, 'guarantee_pct');
+  assert.deepEqual(by('total_months').fill, { kind: 'formula', formula: 'total_months' });
+  assert.equal(by('new_field').order, undefined);
+  assert.ok(by('damages_cap').hidden, 'hidden field without a placeholder is carried over');
+  assert.equal(merged.some((p) => p.key === 'removed_from_doc'), false, 'an ordinary field gone from the doc is dropped');
+});
+
+test('a brief longer than BRIEF_MAX_LENGTH is rejected by createTender and the AI draft', async () => {
+  const { createTenderInput, draftBidInput, BRIEF_MAX_LENGTH } = await import('@obms/shared');
+  const ok = 'א'.repeat(BRIEF_MAX_LENGTH);
+  const tooLong = ok + 'א';
+  assert.equal(createTenderInput.safeParse({ type: 'service', params: {}, brief: ok }).success, true);
+  assert.equal(createTenderInput.safeParse({ type: 'service', params: {}, brief: tooLong }).success, false);
+  assert.equal(draftBidInput.safeParse({ type: 'service', brief: ok }).success, true);
+  assert.equal(draftBidInput.safeParse({ type: 'service', brief: tooLong }).success, false);
+});

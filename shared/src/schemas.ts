@@ -211,9 +211,12 @@ export type AuditDoc = z.infer<typeof auditDocSchema>;
 
 // ---- Callable function payloads ----
 
+/** Longest tender brief accepted (it is stored on the case and sent to the AI draft). */
+export const BRIEF_MAX_LENGTH = 5000;
+
 export const createTenderInput = z.object({
   title: z.string().optional(), // blank: the system names the case from its type and serial
-  brief: z.string().optional(), // the requester's summary (also the AI draft's input)
+  brief: z.string().max(BRIEF_MAX_LENGTH).optional(), // the requester's summary (also the AI draft's input)
   type: tenderTypeSchema,
   params: z.record(z.union([z.string(), z.number()])),
   submissionDeadline: z.number().nullable().optional(),
@@ -230,7 +233,7 @@ export type CreateTenderInput = z.infer<typeof createTenderInput>;
 
 export const draftBidInput = z.object({
   type: tenderTypeSchema,
-  brief: z.string().min(3),
+  brief: z.string().min(3).max(BRIEF_MAX_LENGTH),
 });
 export type DraftBidInput = z.infer<typeof draftBidInput>;
 

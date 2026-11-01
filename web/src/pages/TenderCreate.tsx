@@ -10,6 +10,7 @@ import {
   hasPlaceholder,
   isAutoSerialParam,
   askedParams,
+  BRIEF_MAX_LENGTH,
   guaranteeDefault,
   shekelsInWords,
   SERVICE_KEYS,
@@ -203,6 +204,7 @@ export default function TenderCreate() {
           <label className="label">{t('create.brief')}{ordered && <span className="text-red-600"> *</span>}</label>
           <textarea
             className="input min-h-20"
+            maxLength={BRIEF_MAX_LENGTH}
             placeholder={t('create.briefPlaceholder')}
             value={brief}
             onChange={(e) => setBrief(e.target.value)}
