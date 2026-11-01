@@ -113,7 +113,9 @@ import {
 // Actor for automatic score recomputes (keeps supplier names out of score audit rows).
 const SYSTEM = { uid: 'system', name: 'מערכת' };
 
-setGlobalOptions({ region: 'europe-west1', maxInstances: 10 });
+// 1 GiB: creating/transitioning a case reads the whole bid document (service template ≈150K chars),
+// runs the supervisor, snapshots versions and diffs them for the score — 256 MiB ran out of memory.
+setGlobalOptions({ region: 'europe-west1', maxInstances: 10, memory: '1GiB' });
 
 /**
  * Split internal users into Google Docs writer/commenter address lists.

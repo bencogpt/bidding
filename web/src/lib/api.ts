@@ -46,8 +46,13 @@ import type {
   SupervisionVerdict,
 } from '@obms/shared';
 
+// The Firebase client gives up after 70 s by default and reports an error — while the server keeps
+// going (creating a case runs the supervisor + Claude and takes ~1.5 min). Wait as long as the
+// longest server timeout (540 s); each function still enforces its own limit.
+const CALL_TIMEOUT_MS = 540_000;
+
 const call = <I, O>(name: string) => {
-  const fn = httpsCallable<I, O>(functions, name);
+  const fn = httpsCallable<I, O>(functions, name, { timeout: CALL_TIMEOUT_MS });
   return async (data: I): Promise<O> => (await fn(data)).data;
 };
 
