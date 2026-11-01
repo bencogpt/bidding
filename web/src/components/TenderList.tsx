@@ -30,17 +30,24 @@ function Pie({ pct }: { pct: number }) {
   );
 }
 
-/** The "רביעייה": one chip per required role, joined by ›, green once a user is assigned to that slot. */
+/**
+ * The "רביעייה": the case roles in working order, joined by ›. The tender manager (רכש) owns the
+ * case so is always filled; every other role is green once a user is assigned to its slot.
+ */
 function TeamChips({ tender }: { tender: TenderDoc }) {
   const { t } = useTranslation();
-  const roles = tender.requiredRoles ?? requiredRolesFor(tender.type);
+  const required = tender.requiredRoles ?? requiredRolesFor(tender.type);
+  const steps = [
+    ...required.filter((r) => r === 'requester').map((r) => ({ key: r, done: !!tender.team?.[r] })),
+    { key: 'manager', done: true },
+    ...required.filter((r) => r !== 'requester').map((r) => ({ key: r, done: !!tender.team?.[r] })),
+  ];
   return (
     <div className="flex flex-wrap items-center gap-1">
-      {roles.map((r, i) => {
-        const done = !!tender.team?.[r];
-        const role = t(`role.${r}`);
+      {steps.map(({ key, done }, i) => {
+        const role = t(`quartet.${key}`);
         return (
-          <Fragment key={r}>
+          <Fragment key={key}>
             {i > 0 && <span className="text-tx-mute">›</span>}
             <span
               title={t(done ? 'dashboard.teamAssigned' : 'dashboard.teamMissing', { role })}
