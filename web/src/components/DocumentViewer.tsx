@@ -8,7 +8,8 @@ import { useAuth } from '../auth/AuthProvider';
 // server-side). Suppliers see the same in-system render — never the raw Google Doc.
 type Doc = { kind: 'html'; content: string } | { kind: 'pdf'; dataUrl: string };
 
-type OutlineItem = { text: string; level: number };
+// ok = every field in the section is filled; gaps = {{placeholders}} are still unfilled.
+type OutlineItem = { text: string; level: number; status: 'ok' | 'gaps' };
 
 export default function DocumentViewer({
   tenderId,
@@ -31,6 +32,7 @@ export default function DocumentViewer({
   const boxRef = useRef<HTMLDivElement>(null);
   const [outline, setOutline] = useState<OutlineItem[]>([]);
   const [fullscreen, setFullscreen] = useState(false);
+  const [active, setActive] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -61,12 +63,38 @@ export default function DocumentViewer({
   // The in-system render is same-origin (srcDoc), so the section list is read from its headings.
   const headingsOf = () =>
     Array.from(
-      frameRef.current?.contentDocument?.querySelectorAll<HTMLElement>('h1, h2, h3') ?? [],
+      frameRef.current?.contentDocument?.querySelectorAll<HTMLElement>('h1, h2, h3, h4') ?? [],
     );
-  const readOutline = () =>
+  // A section has gaps when unfilled {{placeholders}} remain between its heading and the next.
+  const hasGaps = (h: HTMLElement) => {
+    for (
+      let el = h.nextElementSibling;
+      el && !/^H[1-4]$/.test(el.tagName);
+      el = el.nextElementSibling
+    ) {
+      if (el.textContent?.includes('{{')) return true;
+    }
+    return false;
+  };
+  const readOutline = () => {
+    const hs = headingsOf();
     setOutline(
-      headingsOf().map((h) => ({ text: h.textContent?.trim() ?? '', level: Number(h.tagName[1]) })),
+      hs.map((h) => ({
+        text: h.textContent?.trim() ?? '',
+        level: Number(h.tagName[1]),
+        status: hasGaps(h) ? 'gaps' : 'ok',
+      })),
     );
+    setActive(0);
+    // Highlight the section being read as the document scrolls.
+    frameRef.current?.contentWindow?.addEventListener('scroll', () => {
+      let idx = 0;
+      headingsOf().forEach((h, i) => {
+        if (h.getBoundingClientRect().top <= 24) idx = i;
+      });
+      setActive(idx);
+    });
+  };
   const jumpTo = (i: number) =>
     headingsOf()[i]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
@@ -112,16 +140,27 @@ export default function DocumentViewer({
       </div>
       <div className="flex min-h-0 flex-1">
         {outline.length > 1 && (
-          <nav className="w-52 shrink-0 overflow-y-auto border-e border-paper-2 p-3 text-sm">
-            <div className="mb-2 text-xs font-semibold text-tx-mute">{t('doc.outline')}</div>
+          <nav className="w-56 shrink-0 overflow-y-auto border-e border-paper-2 p-3 text-sm">
+            <div className="mb-2 px-1 text-xs font-semibold text-tx-mute">{t('doc.outline')}</div>
             <ul className="space-y-0.5">
               {outline.map((o, i) => (
-                <li key={i} style={{ paddingInlineStart: `${(o.level - 1) * 12}px` }}>
+                <li key={i}>
                   <button
-                    className="w-full rounded px-2 py-1 text-start text-tx-soft hover:bg-paper-2 hover:text-tx"
+                    className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-start ${
+                      i === active
+                        ? 'bg-accent-soft font-semibold text-accent'
+                        : 'text-tx-soft hover:bg-paper-2 hover:text-tx'
+                    }`}
+                    style={{ paddingInlineStart: `${8 + Math.max(0, o.level - 3) * 12}px` }}
                     onClick={() => jumpTo(i)}
                   >
-                    {o.text}
+                    <span className="flex-1 truncate">{o.text}</span>
+                    <i
+                      className={`h-2 w-2 shrink-0 rounded-full ${
+                        o.status === 'gaps' ? 'bg-amber-500' : 'bg-green-600'
+                      }`}
+                      title={t(o.status === 'gaps' ? 'doc.sectionGaps' : 'doc.sectionOk')}
+                    />
                   </button>
                 </li>
               ))}

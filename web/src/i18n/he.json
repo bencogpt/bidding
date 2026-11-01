@@ -58,6 +58,8 @@
   "ws.questions": "שאלות הבהרה",
   "ws.overview": "סקירה",
   "doc.outline": "מבנה המסמך",
+  "doc.sectionOk": "כל השדות בסעיף מולאו",
+  "doc.sectionGaps": "בסעיף יש שדות שטרם מולאו",
   "doc.print": "הדפסה / שמירה כ-PDF",
   "doc.download": "הורדת PDF",
   "doc.fullscreen": "מסך מלא",
