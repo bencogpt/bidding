@@ -46,6 +46,9 @@ import {
   templateFieldsStatus,
   hasPlaceholder,
   isAutoSerialParam,
+  isAutoDeadlineParam,
+  isAutoParam,
+  formatDeadlineFor,
   analyzeTemplateFieldsInput,
   applyTemplateConversionInput,
   docExportTxtUrl,
@@ -169,7 +172,7 @@ function validateParams(
 ): Record<string, string | number> {
   const clean: Record<string, string | number> = {};
   const stillPlaceholders = template.params
-    .filter((p) => !isAutoSerialParam(p) && hasPlaceholder(params[p.key]))
+    .filter((p) => !isAutoParam(p) && hasPlaceholder(params[p.key]))
     .map((p) => p.labelHe);
   if (stillPlaceholders.length) {
     throw new HttpsError(
@@ -178,7 +181,7 @@ function validateParams(
     );
   }
   for (const p of template.params) {
-    if (isAutoSerialParam(p)) continue; // filled by the system with the case serial
+    if (isAutoParam(p)) continue; // filled by the system (case serial / form deadline)
     const v = params[p.key];
     const blank = v === undefined || String(v).trim() === '';
     if (blank) {
@@ -381,6 +384,11 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
     throw new HttpsError('invalid-argument', 'טיוטת ה-AI לא נמצאה.');
   }
 
+  // Template fields that are the submission date come from the form's deadline — one source.
+  if (template.params.some(isAutoDeadlineParam) && !input.submissionDeadline) {
+    throw new HttpsError('invalid-argument', 'יש לקבוע מועד הגשה — הוא ממולא אוטומטית במסמך המכרז.');
+  }
+
   // The case team: one user per required role, validated against the users' actual roles.
   const requiredRoles = requiredRolesFor(input.type, input.extraRoles ?? []);
   const { team, users: teamUsers } = await resolveTeam(input.team);
@@ -391,6 +399,10 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
   const serial = await countersRepo.nextSerial(new Date(now()).getFullYear());
   // The bid number is the case serial — filled by the system, never typed or guessed.
   for (const p of template.params) if (isAutoSerialParam(p)) publicParams[p.key] = serial;
+  // ...and the submission-date fields are the form's deadline.
+  for (const p of template.params) {
+    if (isAutoDeadlineParam(p)) publicParams[p.key] = formatDeadlineFor(p.key, input.submissionDeadline!);
+  }
   const tender: TenderDoc = {
     id,
     serial,
@@ -427,7 +439,7 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
     paramSources: draft?.sources ?? {},
     editedByManager: draft
       ? Object.keys(publicParams).filter(
-          (k) => !isAutoSerialParam({ key: k }) && String(draft.params[k] ?? '') !== String(publicParams[k] ?? ''),
+          (k) => !isAutoParam({ key: k }) && String(draft.params[k] ?? '') !== String(publicParams[k] ?? ''),
         )
       : [],
     recordedAt: now(),

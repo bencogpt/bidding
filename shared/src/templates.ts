@@ -128,6 +128,31 @@ const AUTO_SERIAL_KEY_RE = /^(tender|bid)_(number|no|num)$/;
 export const isAutoSerialParam = (p: { key: string }): boolean => AUTO_SERIAL_KEY_RE.test(p.key);
 
 /**
+ * Template fields that ARE the submission deadline: filled from the form's "מועד הגשה" so the
+ * same fact is never asked twice (and can't disagree).
+ */
+const AUTO_DEADLINE_KEY_RE = /^(submission|bid_submission|offer_submission)_(date|day_date|deadline|day)$/;
+export const isAutoDeadlineParam = (p: { key: string }): boolean => AUTO_DEADLINE_KEY_RE.test(p.key);
+
+const HE_WEEKDAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+
+/** The deadline as the field expects it: "*_day" → weekday, "*_day_date" → "יום ג', 16/12/2026", else 16/12/2026. */
+export function formatDeadlineFor(key: string, deadlineMs: number): string {
+  const d = new Date(deadlineMs);
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', day: '2-digit', month: '2-digit', year: 'numeric', weekday: 'short' })
+    .formatToParts(d)
+    .reduce<Record<string, string>>((a, p) => ({ ...a, [p.type]: p.value }), {});
+  const date = `${parts.day}/${parts.month}/${parts.year}`;
+  const weekday = HE_WEEKDAYS[['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(parts.weekday)];
+  if (/_day$/.test(key)) return weekday;
+  if (/_day_date$/.test(key)) return `יום ${weekday}, ${date}`;
+  return date;
+}
+
+/** Fields the system fills itself — never asked in the form, never guessed by the AI. */
+export const isAutoParam = (p: { key: string }): boolean => isAutoSerialParam(p) || isAutoDeadlineParam(p);
+
+/**
  * A form value that still holds a placeholder — the AI draft writes {{UPPER_SNAKE}} where the brief
  * doesn't give the value (G2) — is not a value: the manager must replace it before creating.
  */

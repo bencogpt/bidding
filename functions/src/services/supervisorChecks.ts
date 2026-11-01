@@ -5,7 +5,7 @@ import {
   MANDATORY_LEGAL_SECTIONS,
   REQUIRED_SKILLS,
   isConfidentialParam,
-  isAutoSerialParam,
+  isAutoParam,
   type SkillUse,
   type SupervisionFinding,
   type TemplateDoc,
@@ -357,7 +357,7 @@ export function checkValues(i: DeterministicInput): Finding[] {
     // G1/G11: a value the AI wrote (and the manager kept) must be traceable. Numbers are the
     // classic hallucination — they must literally appear in the brief or the template.
     // The bid number is the case serial, filled by the system — not an AI value to trace.
-    if (prov?.draftId && !prov.editedByManager.includes(p.key) && !isAutoSerialParam(p)) {
+    if (prov?.draftId && !prov.editedByManager.includes(p.key) && !isAutoParam(p)) {
       if (!prov.paramSources[p.key]) {
         out.push({
           code: 'UNSOURCED_PARAM',

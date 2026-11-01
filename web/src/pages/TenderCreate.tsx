@@ -9,6 +9,8 @@ import {
   templateFieldsStatus,
   hasPlaceholder,
   isAutoSerialParam,
+  isAutoParam,
+  isAutoDeadlineParam,
   type CaseTeam,
   type TeamRole,
   type TenderType,
@@ -87,7 +89,7 @@ export default function TenderCreate() {
   };
 
   // Fields still holding the AI draft's {{PLACEHOLDER}} — the brief didn't give the value.
-  const unfilled = (template?.params ?? []).filter((p) => !isAutoSerialParam(p) && hasPlaceholder(params[p.key]));
+  const unfilled = (template?.params ?? []).filter((p) => !isAutoParam(p) && hasPlaceholder(params[p.key]));
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -176,12 +178,12 @@ export default function TenderCreate() {
           <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} required />
         </div>
 
-        {template?.params.filter(isAutoSerialParam).map((p) => (
+        {template?.params.filter(isAutoParam).map((p) => (
           <div key={p.key} className="rounded bg-paper-2 p-2 text-sm text-tx-soft">
-            {p.labelHe}: {t('create.autoSerial')}
+            {p.labelHe}: {isAutoSerialParam(p) ? t('create.autoSerial') : t('create.autoDeadline')}
           </div>
         ))}
-        {template?.params.filter((p) => !isAutoSerialParam(p)).map((p) => (
+        {template?.params.filter((p) => !isAutoParam(p)).map((p) => (
           <div key={p.key}>
             <label className="label">
               {p.labelHe}
@@ -282,6 +284,7 @@ export default function TenderCreate() {
             type="datetime-local"
             value={deadline}
             onChange={(e) => setDeadline(e.target.value)}
+            required={!!template?.params.some(isAutoDeadlineParam)}
           />
         </div>
 
