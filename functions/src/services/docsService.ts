@@ -13,6 +13,7 @@ import { storage } from '../lib/admin.js';
 import type { TenderDoc, TemplateDoc, UserDoc } from '@obms/shared';
 import { TENDER_TYPE_LABELS_HE } from '@obms/shared';
 import { htmlToText } from './supervisorChecks.js';
+import { bodyToHtml } from './docHtml.js';
 import { groupSessions, sampleSessions, type RevisionMeta } from './scoreCalc.js';
 
 // drive.file = access only to files the app creates. Non-sensitive → no OAuth verification
@@ -76,7 +77,7 @@ h1{font-size:24px}h2{font-size:18px;border-bottom:2px solid #d8a23a;padding-bott
 <body>
 <h1>${tender.title}</h1>
 <div class="meta">${TENDER_TYPE_LABELS_HE[tender.type]} · מסמך מכרז · נוצר אוטומטית מתבנית</div>
-${body.split('\n').map((l) => (l.trim() ? `<p>${l}</p>` : '')).join('\n')}
+${bodyToHtml(body)}
 </body></html>`;
 }
 
