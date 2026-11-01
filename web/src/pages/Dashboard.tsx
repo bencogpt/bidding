@@ -4,8 +4,7 @@ import { useState } from 'react';
 import { useTenders, useCaseScores, useMyFeedbackRequests } from '../lib/hooks';
 import FeedbackForm from '../components/FeedbackForm';
 import { useAuth } from '../auth/AuthProvider';
-import StatusBadge from '../components/StatusBadge';
-import { GradeBadge } from '../components/ScoreCard';
+import TenderList from '../components/TenderList';
 
 export default function Dashboard() {
   const { t } = useTranslation();
@@ -13,19 +12,21 @@ export default function Dashboard() {
   const { role, user } = useAuth();
   const pending = useMyFeedbackRequests(user?.uid);
   const [open, setOpen] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
   const isManager = role === 'tender_manager';
-  const needle = search.trim().toLowerCase();
-  const shown = needle
-    ? tenders.filter((tn) => `${tn.serial ?? ''} ${tn.title}`.toLowerCase().includes(needle))
-    : tenders;
   const scores = useCaseScores();
   const scoreOf = (id: string) => scores.find((s) => s.tenderId === id);
 
   return (
     <div>
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="font-display text-2xl font-bold">{t('dashboard.title')}</h1>
+        <div>
+          <h1 className="font-display text-2xl font-bold">
+            {isManager ? t('dashboard.allTenders') : t('dashboard.myTenders')}
+          </h1>
+          <div className="text-sm text-tx-soft">
+            {t('dashboard.count', { count: tenders.length })}
+          </div>
+        </div>
         {role === 'tender_manager' && (
           <Link to="/tenders/new" className="btn btn-gold">
             + {t('nav.newTender')}
@@ -52,7 +53,10 @@ export default function Dashboard() {
                     )}
                     <span className="chip">{t(`fb.round.${r.round}`)}</span>
                   </div>
-                  <button className="btn btn-sm" onClick={() => setOpen(open === r.id ? null : r.id)}>
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => setOpen(open === r.id ? null : r.id)}
+                  >
                     {open === r.id ? t('common.close') : t('fb.give')}
                   </button>
                 </div>
@@ -67,52 +71,13 @@ export default function Dashboard() {
         </div>
       )}
 
-      <div className="card overflow-hidden">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-paper-2 px-5 py-3">
-          <span className="font-semibold">{isManager ? t('dashboard.allTenders') : t('dashboard.myTenders')}</span>
-          <input
-            className="input w-64"
-            placeholder={t('dashboard.search')}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
-        {loading ? (
-          <div className="p-6 text-tx-soft">{t('common.loading')}</div>
-        ) : tenders.length === 0 ? (
-          <div className="p-6 text-tx-soft">{t('dashboard.empty')}</div>
-        ) : (
-          <table className="w-full text-sm">
-            <tbody>
-              {shown.map((tn) => (
-                <tr key={tn.id} className="border-b border-paper-2 last:border-0 hover:bg-paper">
-                  <td className="whitespace-nowrap px-5 py-3 text-tx-soft" dir="ltr">
-                    {tn.serial ?? '—'}
-                  </td>
-                  <td className="px-5 py-3">
-                    <Link to={`/tenders/${tn.id}`} className="font-semibold text-teal-600">
-                      {tn.title}
-                    </Link>
-                  </td>
-                  <td className="px-5 py-3 text-tx-soft">{t(`type.${tn.type}`)}</td>
-                  <td className="px-5 py-3">
-                    <StatusBadge status={tn.status} />
-                  </td>
-                  {isManager && (
-                    <td className="px-5 py-3" title={t('score.title')}>
-                      {scoreOf(tn.id) ? (
-                        <GradeBadge grade={scoreOf(tn.id)!.grade} total={scoreOf(tn.id)!.total} />
-                      ) : (
-                        <span className="text-tx-mute">—</span>
-                      )}
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      {loading ? (
+        <div className="card p-6 text-tx-soft">{t('common.loading')}</div>
+      ) : tenders.length === 0 ? (
+        <div className="card p-6 text-tx-soft">{t('dashboard.empty')}</div>
+      ) : (
+        <TenderList tenders={tenders} scoreOf={scoreOf} showScore={isManager} />
+      )}
     </div>
   );
 }
