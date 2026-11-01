@@ -30,6 +30,7 @@ async function ensureUser(
   displayName: string,
   role: string,
   supplierId?: string,
+  phone?: string,
 ) {
   let uid: string;
   try {
@@ -46,6 +47,7 @@ async function ensureUser(
     displayName,
     role: role as never,
     supplierId,
+    ...(phone ? { phone } : {}),
     createdAt: now,
   });
   console.log(`  user ${email} (${role})${supplierId ? ' supplier=' + supplierId : ''}`);
@@ -57,7 +59,7 @@ await ensureUser('manager@obms.test', 'password', 'דנה מנהלת', 'tender_m
 await ensureUser('legal@obms.test', 'password', 'עו״ד פריה', 'legal');
 await ensureUser('finance@obms.test', 'password', 'סבן כספים', 'finance');
 await ensureUser('security@obms.test', 'password', 'לנה ביטחון', 'security');
-await ensureUser('requester@obms.test', 'password', 'מרקוס מזמין', 'requester');
+await ensureUser('requester@obms.test', 'password', 'מרקוס מזמין', 'requester', undefined, '03-5550123');
 
 console.log('Seeding suppliers + supplier accounts…');
 const suppliers = [
@@ -123,10 +125,24 @@ await templatesRepo.upsert({
   googleTemplateDocId: null,
   bodyTemplate: [
     '## פרטי המכרז',
-    'גוף מזמין: {{org}}',
-    'תיאור השירות הנדרש: {{description}}',
-    'היקף כוח אדם נדרש: {{headcount}} אנשי צוות',
-    'משך ההתקשרות: {{duration}}',
+    'מספר הבל"מ: {{bid_number}}',
+    'שם הנמען על המעטפה: {{envelope_addressee}}',
+    'נציג המזמין: {{requester_name}}, טלפון {{requester_phone}}',
+    '## תקופת ההתקשרות',
+    'תקופת ההתקשרות הראשונה: {{initial_period_months}} חודשים',
+    'מספר תקופות אופציה: {{option_periods}}',
+    'סך מצטבר (התקשרות ואופציה): {{total_months}}',
+    '## הגשת ההצעות',
+    'יום הגשת ההצעות: {{submission_day}}',
+    'מיקום תיבת ההצעות: {{bid_box_location}}',
+    'תוקף ההצעה: {{offer_validity_days}} ימים',
+    'מועד אחרון לשאלות הבהרה: {{clarification_deadline}}',
+    'כתובת דוא"ל לשאלות הבהרה: {{clarification_email}}',
+    '## ערבות הצעה',
+    'סכום ערבות ההצעה: {{guarantee_amount}} ₪ ({{guarantee_amount_words}})',
+    'תוקף הערבות: {{guarantee_validity_days}} ימים',
+    '## הסכם',
+    'נציג המזמין בהסכם: {{contract_representative}}',
     '## דרישות מקצועיות',
     'על נותן השירות להציג ניסיון מוכח וכוח אדם מוסמך לתחום.',
     '## תנאי סף',
@@ -135,11 +151,39 @@ await templatesRepo.upsert({
     '[נוסח לדוגמה בסביבת הדגמה — יוחלף בנוסח המאושר: אופן הגשת ההצעה]',
     ...DEMO_LEGAL_SECTIONS,
   ].join('\n'),
+  // Form order, required flags and system-filled fields follow the services create-form spec.
+  // Fields without a rule or value yet are `hidden`: not asked, and left blank until one is set.
   params: [
-    { key: 'org', labelHe: 'גוף מזמין', type: 'text', required: true },
-    { key: 'description', labelHe: 'תיאור השירות', type: 'textarea', required: true },
-    { key: 'headcount', labelHe: 'היקף כוח אדם', type: 'number', required: true },
-    { key: 'duration', labelHe: 'משך ההתקשרות', type: 'text', required: true },
+    { key: 'estimate', labelHe: 'אומדן (₪) — פנימי, לא יפורסם', type: 'number', required: true, internal: true, order: 4 },
+    { key: 'guarantee_amount', labelHe: 'סכום ערבות ההצעה (₪)', type: 'number', required: false, order: 5, defaultFrom: 'guarantee_pct' },
+    { key: 'guarantee_validity_days', labelHe: 'תוקף ההצעה וערבות ההצעה (ימים)', type: 'number', required: false, order: 6 },
+    { key: 'initial_period_months', labelHe: 'תקופת ההתקשרות הראשונה (חודשים)', type: 'number', required: false, order: 7 },
+    { key: 'option_periods', labelHe: 'מספר תקופות אופציה', type: 'number', required: false, order: 8 },
+    { key: 'clarification_deadline', labelHe: 'מועד אחרון לשאלות הבהרה', type: 'date', required: false, order: 10 },
+    // ---- filled by the system ----
+    { key: 'bid_number', labelHe: 'מספר הבל"מ', type: 'text', required: false },
+    { key: 'guarantee_amount_words', labelHe: 'סכום ערבות ההצעה במילים', type: 'text', required: false, fill: { kind: 'formula', formula: 'guarantee_words' } },
+    { key: 'offer_validity_days', labelHe: 'תוקף ההצעה (ימים)', type: 'number', required: false, fill: { kind: 'copy', from: 'guarantee_validity_days' } },
+    { key: 'total_months', labelHe: 'סך מצטבר חודשים (התקשרות ואופציה)', type: 'number', required: false, fill: { kind: 'formula', formula: 'total_months' } },
+    { key: 'envelope_addressee', labelHe: 'שם הנמען על המעטפה', type: 'text', required: false, fill: { kind: 'formula', formula: 'manager_name' } },
+    { key: 'submission_day', labelHe: 'יום הגשת ההצעות', type: 'text', required: false, fill: { kind: 'formula', formula: 'submission_day' } },
+    { key: 'bid_box_location', labelHe: 'מיקום תיבת ההצעות', type: 'text', required: false, fill: { kind: 'fixed', value: 'מרכז למורשת מודיעין' } },
+    { key: 'requester_name', labelHe: 'שם נציגת המזמין', type: 'text', required: false, fill: { kind: 'formula', formula: 'requester_name' } },
+    { key: 'requester_phone', labelHe: 'טלפון נציגת המזמין', type: 'text', required: false, fill: { kind: 'formula', formula: 'requester_phone' } },
+    { key: 'clarification_email', labelHe: 'כתובת דוא"ל לשאלות הבהרה', type: 'text', required: false, fill: { kind: 'formula', formula: 'manager_email' } },
+    { key: 'contract_representative', labelHe: 'נציג המזמין בהסכם (פרק ד׳)', type: 'text', required: false, fill: { kind: 'formula', formula: 'manager_name' } },
+    // ---- not asked, no rule or value yet ----
+    { key: 'service_providers_total', labelHe: 'סך נותני השירות', type: 'number', required: false, hidden: true },
+    { key: 'core_providers', labelHe: 'מספר נותני שירות בגרעין ההקמה', type: 'number', required: false, hidden: true },
+    { key: 'service_location', labelHe: 'מקום ביצוע השירות', type: 'text', required: false, hidden: true },
+    { key: 'overlap_grant', labelHe: 'מענק תקופת חפיפה (₪)', type: 'number', required: false, hidden: true },
+    { key: 'guarantee_office', labelHe: 'משרד בכתב הערבות', type: 'text', required: false, hidden: true },
+    { key: 'map_target', labelHe: 'יעד מפת ההגעה (נספח 2)', type: 'text', required: false, hidden: true },
+    { key: 'signing_year', labelHe: 'שנת חתימת ההסכם', type: 'number', required: false, hidden: true },
+    { key: 'damages_cap', labelHe: 'תקרת פיצוי מוסכם (סעיף 3)', type: 'number', required: false, hidden: true },
+    { key: 'meals_monthly_payment', labelHe: 'תשלום חודשי קבוע עבור ארוחות (₪)', type: 'number', required: false, hidden: true },
+    { key: 'meals_bank_details', labelHe: 'פרטי חשבון הבנק לארוחות', type: 'text', required: false, hidden: true },
+    { key: 'transport_offset', labelHe: 'קיזוז תשלום הסעות (₪)', type: 'number', required: false, hidden: true },
   ],
 });
 await templatesRepo.upsert({

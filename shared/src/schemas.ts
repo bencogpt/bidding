@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { TENDER_STATUSES } from './tender.js';
+import { SYSTEM_FORMULAS } from './templates.js';
 import type { SupervisionSummary, ValueSource, BidDraftRecord } from './supervision.js';
 import { createTenderTeamFields, type CaseTeam, type TeamRole } from './team.js';
 
@@ -27,6 +28,7 @@ export const userDocSchema = z.object({
   displayName: z.string().min(1),
   role: roleSchema,
   googleEmail: z.string().email().optional(),
+  phone: z.string().optional(), // the requester's contact number on the tender document
   supplierId: z.string().optional(), // present for supplier accounts
   createdAt: z.number(), // epoch ms
 });
@@ -60,6 +62,16 @@ export const templateDocSchema = z.object({
       type: z.enum(['text', 'number', 'date', 'textarea']),
       required: z.boolean().default(true),
       internal: z.boolean().optional(),
+      order: z.number().optional(),
+      hidden: z.boolean().optional(),
+      defaultFrom: z.enum(['guarantee_pct']).optional(),
+      fill: z
+        .discriminatedUnion('kind', [
+          z.object({ kind: z.literal('fixed'), value: z.string() }),
+          z.object({ kind: z.literal('copy'), from: z.string() }),
+          z.object({ kind: z.literal('formula'), formula: z.enum(SYSTEM_FORMULAS) }),
+        ])
+        .optional(),
     }),
   ),
   // reference "good example" bid documents for this type (manager-curated links)
@@ -200,7 +212,8 @@ export type AuditDoc = z.infer<typeof auditDocSchema>;
 // ---- Callable function payloads ----
 
 export const createTenderInput = z.object({
-  title: z.string().min(1),
+  title: z.string().optional(), // blank: the system names the case from its type and serial
+  brief: z.string().optional(), // the requester's summary (also the AI draft's input)
   type: tenderTypeSchema,
   params: z.record(z.union([z.string(), z.number()])),
   submissionDeadline: z.number().nullable().optional(),

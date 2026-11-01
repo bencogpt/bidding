@@ -1,6 +1,26 @@
 // Pure helpers for binding a Google Doc template to a tender type. Shared by functions
 // (the bind callable) and tests — no I/O here.
 
+/**
+ * A value the system fills in itself instead of asking the manager: a fixed text, a copy of another
+ * field, or a named formula (see serviceFields.ts).
+ */
+export type SystemFill =
+  | { kind: 'fixed'; value: string }
+  | { kind: 'copy'; from: string }
+  | { kind: 'formula'; formula: SystemFormula };
+
+export const SYSTEM_FORMULAS = [
+  'guarantee_words', // bid-guarantee amount spelled out in Hebrew
+  'total_months', // first contract period + optional periods
+  'submission_day', // weekday of the submission deadline
+  'manager_name', // the tender manager creating the case
+  'manager_email',
+  'requester_name', // the requester on the case team
+  'requester_phone',
+] as const;
+export type SystemFormula = (typeof SYSTEM_FORMULAS)[number];
+
 export interface TemplateParam {
   key: string;
   labelHe: string;
@@ -9,6 +29,14 @@ export interface TemplateParam {
   // Confidential value (e.g. the estimate / אומדן, GLOBAL_RULES G6): kept internal, never filled
   // into the published document.
   internal?: boolean;
+  // Position on the create form, ascending; fields without one come after the ordered ones.
+  order?: number;
+  // Filled by the system: never asked on the form and never drafted by the AI.
+  fill?: SystemFill;
+  // Neither asked nor filled: stays blank until a rule exists for it.
+  hidden?: boolean;
+  // Pre-filled while the manager has not typed a value (still editable).
+  defaultFrom?: 'guarantee_pct';
 }
 
 const CONFIDENTIAL_KEY_RE = /budget|estimate|אומדן|תקציב/i;
@@ -145,4 +173,19 @@ export function parseDocId(urlOrId: string): string | null {
 /** Public export endpoint for a link-viewable Google Doc (plain text). */
 export function docExportTxtUrl(docId: string): string {
   return `https://docs.google.com/document/d/${docId}/export?format=txt`;
+}
+
+/** Whether the system supplies this field, so the form never asks for it and the AI never drafts it. */
+export const isSystemParam = (p: { key: string; fill?: SystemFill }): boolean =>
+  isAutoSerialParam(p) || !!p.fill;
+
+/** The fields the create form asks for, in display order (stable for fields without an order). */
+export function askedParams<T extends { key: string; fill?: SystemFill; hidden?: boolean; order?: number }>(
+  params: readonly T[],
+): T[] {
+  return params
+    .filter((p) => !isSystemParam(p) && !p.hidden)
+    .map((p, i) => ({ p, i }))
+    .sort((a, b) => (a.p.order ?? Infinity) - (b.p.order ?? Infinity) || a.i - b.i)
+    .map(({ p }) => p);
 }
