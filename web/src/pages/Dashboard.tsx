@@ -17,7 +17,7 @@ export default function Dashboard() {
   const scoreOf = (id: string) => scores.find((s) => s.tenderId === id);
 
   return (
-    <div>
+    <div className="flex h-full flex-col">
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="font-display text-2xl font-bold">
