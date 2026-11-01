@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { requiredRolesFor } from '@obms/shared';
+import { rolesOf } from '../lib/roles';
 import type { Role, TenderDoc } from '@obms/shared';
 import { useAccess, useUsers } from '../lib/hooks';
 
@@ -11,7 +11,7 @@ export default function QuartetCard({ tender }: { tender: TenderDoc }) {
 
   // The רביעייה: requester, the tender manager (owner), then the case's other roles. A member is
   // verified when the user in the slot really holds the system role that slot requires.
-  const required = tender.requiredRoles ?? requiredRolesFor(tender.type);
+  const required = rolesOf(tender);
   const quartet: { key: string; uid?: string; expected: Role }[] = [
     ...required
       .filter((r) => r === 'requester')

@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { TENDER_STATUSES, TENDER_TYPES, requiredRolesFor } from '@obms/shared';
+import { TENDER_STATUSES, TENDER_TYPES } from '@obms/shared';
+import { rolesOf } from '../lib/roles';
 import type { ScoreGrade, TenderDoc, TenderStatus, TenderType } from '@obms/shared';
 import { GradeBadge } from './ScoreCard';
 import { useUsers } from '../lib/hooks';
@@ -40,7 +41,7 @@ function StageTag({ status }: { status: TenderStatus }) {
  */
 function Quartet({ tender }: { tender: TenderDoc }) {
   const { t } = useTranslation();
-  const required = tender.requiredRoles ?? requiredRolesFor(tender.type);
+  const required = rolesOf(tender);
   const steps = [
     ...required.filter((r) => r === 'requester').map((r) => ({ key: r, done: !!tender.team?.[r] })),
     { key: 'manager', done: true },
