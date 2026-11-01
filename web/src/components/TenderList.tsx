@@ -44,6 +44,25 @@ function StageTag({ status }: { status: TenderStatus }) {
   );
 }
 
+const AVATAR_COLORS = ['#6a4fe0', '#2f6fe0', '#0a8fc2', '#0a9a8e', '#1f9d5f', '#8a5cf0'];
+
+/** Small round picture of a person: coloured initials, the colour stable per name. */
+function Avatar({ name }: { name: string }) {
+  const initials = name
+    .split(' ')
+    .map((w) => w[0])
+    .join('');
+  const hue = [...name].reduce((a, c) => a + c.charCodeAt(0), 0) % AVATAR_COLORS.length;
+  return (
+    <span
+      className="inline-grid h-[22px] w-[22px] shrink-0 place-items-center rounded-full text-[10px] font-semibold text-white"
+      style={{ background: AVATAR_COLORS[hue] }}
+    >
+      {initials}
+    </span>
+  );
+}
+
 /**
  * The "רביעייה" as one compact bar: a segment per role (דורש, רכש, then the case's other roles)
  * and an n/N count. The tender manager (רכש) owns the case so is always filled; every other
@@ -173,6 +192,9 @@ export default function TenderList({
               <tr>
                 <th className="px-5 py-3 text-start font-medium">{t('dashboard.col.serial')}</th>
                 <th className="px-5 py-3 text-start font-medium">{t('dashboard.col.name')}</th>
+                {users.length > 0 && (
+                  <th className="px-5 py-3 text-start font-medium">{t('dashboard.col.manager')}</th>
+                )}
                 <th className="px-5 py-3 text-start font-medium">{t('dashboard.col.type')}</th>
                 <th className="px-5 py-3 text-start font-medium">{t('dashboard.col.stage')}</th>
                 <th className="px-5 py-3 text-start font-medium">{t('dashboard.col.team')}</th>
@@ -203,8 +225,19 @@ export default function TenderList({
                       >
                         {tn.title}
                       </Link>
-                      {owner && <div className="text-xs text-tx-mute">{owner}</div>}
                     </td>
+                    {users.length > 0 && (
+                      <td className="px-5 py-3">
+                        {owner ? (
+                          <span className="inline-flex items-center gap-2 whitespace-nowrap">
+                            <Avatar name={owner} />
+                            {owner}
+                          </span>
+                        ) : (
+                          <span className="text-tx-mute">—</span>
+                        )}
+                      </td>
+                    )}
                     <td className="px-5 py-3 text-tx-soft">{t(`type.${tn.type}`)}</td>
                     <td className="px-5 py-3">
                       <StageTag status={tn.status} />

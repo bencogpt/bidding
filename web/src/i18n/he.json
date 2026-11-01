@@ -394,6 +394,7 @@
   "dashboard.noMatch": "לא נמצאו מכרזים התואמים את הסינון.",
   "dashboard.col.serial": "מספר",
   "dashboard.col.name": "שם",
+  "dashboard.col.manager": "מנהל מכרז",
   "dashboard.col.type": "סוג",
   "dashboard.col.stage": "שלב",
   "dashboard.col.team": "רביעייה",
