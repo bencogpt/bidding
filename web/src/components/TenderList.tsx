@@ -214,8 +214,8 @@ export default function TenderList({
                     className="cursor-pointer border-t border-paper-2 hover:bg-paper"
                     onClick={() => open(tn.id)}
                   >
-                    <td className="whitespace-nowrap px-5 py-3 text-tx-soft" dir="ltr">
-                      {tn.serial ?? '—'}
+                    <td className="whitespace-nowrap px-5 py-3 text-tx-soft">
+                      <span dir="ltr">{tn.serial ?? '—'}</span>
                     </td>
                     <td className="px-5 py-3">
                       <Link
