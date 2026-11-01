@@ -395,7 +395,7 @@
   "dashboard.col.name": "שם",
   "dashboard.col.type": "סוג",
   "dashboard.col.stage": "שלב",
-  "dashboard.col.team": "צוות המכרז",
+  "dashboard.col.team": "רביעייה",
   "dashboard.col.updated": "עודכן",
   "dashboard.teamAssigned": "{{role}}: שויך",
   "dashboard.teamMissing": "{{role}}: טרם שויך",

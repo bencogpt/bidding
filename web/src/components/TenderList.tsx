@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { TENDER_STATUSES, TENDER_TYPES, requiredRolesFor } from '@obms/shared';
@@ -30,25 +30,27 @@ function Pie({ pct }: { pct: number }) {
   );
 }
 
-/** One chip per required role: filled once a user is assigned to that slot. */
+/** The "רביעייה": one chip per required role, joined by ›, green once a user is assigned to that slot. */
 function TeamChips({ tender }: { tender: TenderDoc }) {
   const { t } = useTranslation();
   const roles = tender.requiredRoles ?? requiredRolesFor(tender.type);
   return (
     <div className="flex flex-wrap items-center gap-1">
-      {roles.map((r) => {
+      {roles.map((r, i) => {
         const done = !!tender.team?.[r];
         const role = t(`role.${r}`);
         return (
-          <span
-            key={r}
-            title={t(done ? 'dashboard.teamAssigned' : 'dashboard.teamMissing', { role })}
-            className={`rounded-full px-2 py-0.5 text-xs ${
-              done ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
-            }`}
-          >
-            {role}
-          </span>
+          <Fragment key={r}>
+            {i > 0 && <span className="text-tx-mute">›</span>}
+            <span
+              title={t(done ? 'dashboard.teamAssigned' : 'dashboard.teamMissing', { role })}
+              className={`whitespace-nowrap rounded-full px-2 py-0.5 text-xs ${
+                done ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+              }`}
+            >
+              {role}
+            </span>
+          </Fragment>
         );
       })}
     </div>
