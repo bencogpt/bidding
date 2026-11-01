@@ -53,6 +53,11 @@ function googleClients() {
   };
 }
 
+/** The spellings of a placeholder that detectPlaceholders treats as the same field. */
+export function placeholderSpellings(key: string): string[] {
+  return [`{{${key}}}`, `{{ ${key} }}`, `{{${key} }}`, `{{ ${key}}}`];
+}
+
 // Unfilled placeholders stay visible as {{key}} (matching real Docs mode) so the supervisor and
 // the manager see the gap — never silently papered over.
 function fillTemplate(body: string, params: Record<string, string | number>): string {
@@ -112,12 +117,16 @@ export async function generateTenderDocument(
     });
     const docId = copy.data.id!;
     const params = { title: tender.title, ...tender.params };
-    const requests = Object.entries(params).map(([key, value]) => ({
-      replaceAllText: {
-        containsText: { text: `{{${key}}}`, matchCase: false },
-        replaceText: String(value),
-      },
-    }));
+    // Placeholders typed by hand sometimes carry spaces ("{{ key }}", "{{key }}") — the template
+    // sync reads them as the same field, so the fill must match those spellings too.
+    const requests = Object.entries(params).flatMap(([key, value]) =>
+      placeholderSpellings(key).map((text) => ({
+        replaceAllText: {
+          containsText: { text, matchCase: false },
+          replaceText: String(value),
+        },
+      })),
+    );
     if (requests.length) {
       await docs.documents.batchUpdate({ documentId: docId, requestBody: { requests } });
     }

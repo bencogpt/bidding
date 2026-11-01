@@ -12,7 +12,7 @@ import type {
   BidDraft,
   ExternalSupplierSuggestion,
 } from '@obms/shared';
-import { TENDER_TYPE_LABELS_HE, isAutoSerialParam, isConfidentialParam, templateIdFor } from '@obms/shared';
+import { TENDER_TYPE_LABELS_HE, isAutoParam, isConfidentialParam, templateIdFor } from '@obms/shared';
 import type { LoadedSkill } from './skillsRegistry.js';
 
 const CLUSTER_MODEL = process.env.ANTHROPIC_CLUSTER_MODEL ?? 'claude-sonnet-4-6';
@@ -310,7 +310,7 @@ export async function draftBidContent(
   try {
     const paramKeys = template.params
       // the system fills the bid number itself (case serial)
-      .filter((p) => !isConfidentialParam(p) && !isAutoSerialParam(p))
+      .filter((p) => !isConfidentialParam(p) && !isAutoParam(p))
       .map((p) => ({ key: p.key, labelHe: p.labelHe, type: p.type }));
     const allowed = new Set(paramKeys.map((p) => p.key));
     const resp = await client.messages.create({
