@@ -1,13 +1,29 @@
-import { Fragment, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { TENDER_STATUSES, TENDER_TYPES, requiredRolesFor } from '@obms/shared';
 import type { ScoreGrade, TenderDoc, TenderStatus, TenderType } from '@obms/shared';
-import StatusBadge from './StatusBadge';
 import { GradeBadge } from './ScoreCard';
+import { useUsers } from '../lib/hooks';
 
 type View = 'table' | 'cards';
 type Score = { grade: ScoreGrade; total: number } | undefined;
+type StatusFilter = TenderStatus | 'active' | '';
+
+/** Statuses after which the case needs no more day-to-day work. */
+const DONE_STATUSES: TenderStatus[] = ['evaluated', 'awarded'];
+export const isActive = (s: TenderStatus) => !DONE_STATUSES.includes(s);
+
+/** One solid colour per stage, running along a single journey from writing to award. */
+const STAGE_COLOR: Record<TenderStatus, string> = {
+  draft: '#8a5cf0',
+  internal_review: '#5a4fe0',
+  ready: '#2f6fe0',
+  published: '#0a8fc2',
+  responses: '#0a9a8e',
+  evaluated: '#1f9d5f',
+  awarded: '#177a4a',
+};
 
 const fmtDate = (ms: number) =>
   new Date(ms).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' });
@@ -16,25 +32,24 @@ const fmtDate = (ms: number) =>
 const progressOf = (s: TenderStatus) =>
   Math.round((TENDER_STATUSES.indexOf(s) / (TENDER_STATUSES.length - 1)) * 100);
 
-function Pie({ pct }: { pct: number }) {
+function StageTag({ status }: { status: TenderStatus }) {
+  const { t } = useTranslation();
   return (
     <span
-      className="inline-block h-4 w-4 shrink-0 rounded-full"
-      style={{
-        background: `conic-gradient(#0e8c8c ${pct}%, #eef1f7 0)`,
-        WebkitMask:
-          'radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px))',
-        mask: 'radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px))',
-      }}
-    />
+      className="inline-block whitespace-nowrap rounded px-3 py-0.5 text-xs font-semibold text-white"
+      style={{ background: STAGE_COLOR[status] }}
+    >
+      {t(`status.${status}`)}
+    </span>
   );
 }
 
 /**
- * The "רביעייה": the case roles in working order, joined by ›. The tender manager (רכש) owns the
- * case so is always filled; every other role is green once a user is assigned to its slot.
+ * The "רביעייה" as one compact bar: a segment per role (דורש, רכש, then the case's other roles)
+ * and an n/N count. The tender manager (רכש) owns the case so is always filled; every other
+ * segment fills once a user is assigned to that slot.
  */
-function TeamChips({ tender }: { tender: TenderDoc }) {
+function Quartet({ tender }: { tender: TenderDoc }) {
   const { t } = useTranslation();
   const required = tender.requiredRoles ?? requiredRolesFor(tender.type);
   const steps = [
@@ -42,25 +57,25 @@ function TeamChips({ tender }: { tender: TenderDoc }) {
     { key: 'manager', done: true },
     ...required.filter((r) => r !== 'requester').map((r) => ({ key: r, done: !!tender.team?.[r] })),
   ];
+  const filled = steps.filter((s) => s.done).length;
   return (
-    <div className="flex flex-wrap items-center gap-1">
-      {steps.map(({ key, done }, i) => {
-        const role = t(`quartet.${key}`);
-        return (
-          <Fragment key={key}>
-            {i > 0 && <span className="text-tx-mute">›</span>}
-            <span
+    <span className="inline-flex items-center gap-2 align-middle">
+      <span className="inline-flex gap-[3px]">
+        {steps.map(({ key, done }) => {
+          const role = t(`quartet.${key}`);
+          return (
+            <i
+              key={key}
               title={t(done ? 'dashboard.teamAssigned' : 'dashboard.teamMissing', { role })}
-              className={`whitespace-nowrap rounded-full px-2 py-0.5 text-xs ${
-                done ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
-              }`}
-            >
-              {role}
-            </span>
-          </Fragment>
-        );
-      })}
-    </div>
+              className={`block h-2 w-[18px] rounded-sm ${done ? 'bg-teal' : 'bg-tx-mute/30'}`}
+            />
+          );
+        })}
+      </span>
+      <span className="text-xs tabular-nums text-tx-soft">
+        {filled}/{steps.length}
+      </span>
+    </span>
   );
 }
 
@@ -68,17 +83,22 @@ export default function TenderList({
   tenders,
   scoreOf,
   showScore,
+  defaultActiveOnly = false,
 }: {
   tenders: TenderDoc[];
   scoreOf: (id: string) => Score;
   showScore: boolean;
+  defaultActiveOnly?: boolean;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const users = useUsers(); // manager-only directory; empty for other roles
   const [view, setView] = useState<View>('table');
   const [search, setSearch] = useState('');
   const [type, setType] = useState<TenderType | ''>('');
-  const [status, setStatus] = useState<TenderStatus | ''>('');
+  const [status, setStatus] = useState<StatusFilter>(defaultActiveOnly ? 'active' : '');
+
+  const ownerName = (uid: string) => users.find((u) => u.uid === uid)?.displayName;
 
   const shown = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -86,7 +106,7 @@ export default function TenderList({
       (tn) =>
         (!needle || `${tn.serial ?? ''} ${tn.title}`.toLowerCase().includes(needle)) &&
         (!type || tn.type === type) &&
-        (!status || tn.status === status),
+        (!status || (status === 'active' ? isActive(tn.status) : tn.status === status)),
     );
   }, [tenders, search, type, status]);
 
@@ -131,9 +151,10 @@ export default function TenderList({
           <select
             className="input w-40"
             value={status}
-            onChange={(e) => setStatus(e.target.value as TenderStatus | '')}
+            onChange={(e) => setStatus(e.target.value as StatusFilter)}
           >
             <option value="">{t('dashboard.allStatuses')}</option>
+            <option value="active">{t('dashboard.activeOnly')}</option>
             {TENDER_STATUSES.map((v) => (
               <option key={v} value={v}>
                 {t(`status.${v}`)}
@@ -149,7 +170,7 @@ export default function TenderList({
         <div className="card overflow-auto">
           <table className="w-full text-sm">
             <thead className="bg-paper text-xs text-tx-mute">
-              <tr className="text-start">
+              <tr>
                 <th className="px-5 py-3 text-start font-medium">{t('dashboard.col.serial')}</th>
                 <th className="px-5 py-3 text-start font-medium">{t('dashboard.col.name')}</th>
                 <th className="px-5 py-3 text-start font-medium">{t('dashboard.col.type')}</th>
@@ -164,6 +185,7 @@ export default function TenderList({
             <tbody>
               {shown.map((tn) => {
                 const sc = scoreOf(tn.id);
+                const owner = ownerName(tn.ownerUid);
                 return (
                   <tr
                     key={tn.id}
@@ -181,16 +203,14 @@ export default function TenderList({
                       >
                         {tn.title}
                       </Link>
+                      {owner && <div className="text-xs text-tx-mute">{owner}</div>}
                     </td>
                     <td className="px-5 py-3 text-tx-soft">{t(`type.${tn.type}`)}</td>
                     <td className="px-5 py-3">
-                      <span className="inline-flex items-center gap-2">
-                        <Pie pct={progressOf(tn.status)} />
-                        <StatusBadge status={tn.status} />
-                      </span>
+                      <StageTag status={tn.status} />
                     </td>
                     <td className="px-5 py-3">
-                      <TeamChips tender={tn} />
+                      <Quartet tender={tn} />
                     </td>
                     <td className="whitespace-nowrap px-5 py-3 text-xs text-tx-mute">
                       {fmtDate(tn.updatedAt)}
@@ -214,6 +234,7 @@ export default function TenderList({
         <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(290px,1fr))]">
           {shown.map((tn) => {
             const sc = showScore ? scoreOf(tn.id) : undefined;
+            const owner = ownerName(tn.ownerUid);
             return (
               <div
                 key={tn.id}
@@ -231,13 +252,14 @@ export default function TenderList({
                 </div>
                 <div className="font-display text-base font-semibold">{tn.title}</div>
                 <div className="flex items-center gap-2">
-                  <Pie pct={progressOf(tn.status)} />
-                  <StatusBadge status={tn.status} />
+                  <StageTag status={tn.status} />
+                  <span className="text-xs text-tx-mute">{progressOf(tn.status)}%</span>
                   {sc && <GradeBadge grade={sc.grade} total={sc.total} />}
                 </div>
-                <TeamChips tender={tn} />
-                <div className="mt-auto border-t border-paper-2 pt-3 text-xs text-tx-mute">
-                  {fmtDate(tn.updatedAt)}
+                <Quartet tender={tn} />
+                <div className="mt-auto flex justify-between border-t border-paper-2 pt-3 text-xs text-tx-mute">
+                  <span>{owner ?? ''}</span>
+                  <span>{fmtDate(tn.updatedAt)}</span>
                 </div>
               </div>
             );

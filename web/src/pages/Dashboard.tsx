@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useTenders, useCaseScores, useMyFeedbackRequests } from '../lib/hooks';
 import FeedbackForm from '../components/FeedbackForm';
 import { useAuth } from '../auth/AuthProvider';
-import TenderList from '../components/TenderList';
+import TenderList, { isActive } from '../components/TenderList';
 
 export default function Dashboard() {
   const { t } = useTranslation();
@@ -24,7 +24,10 @@ export default function Dashboard() {
             {isManager ? t('dashboard.allTenders') : t('dashboard.myTenders')}
           </h1>
           <div className="text-sm text-tx-soft">
-            {t('dashboard.count', { count: tenders.length })}
+            {t('dashboard.count', {
+              count: tenders.length,
+              active: tenders.filter((tn) => isActive(tn.status)).length,
+            })}
           </div>
         </div>
         {role === 'tender_manager' && (
@@ -76,7 +79,12 @@ export default function Dashboard() {
       ) : tenders.length === 0 ? (
         <div className="card p-6 text-tx-soft">{t('dashboard.empty')}</div>
       ) : (
-        <TenderList tenders={tenders} scoreOf={scoreOf} showScore={isManager} />
+        <TenderList
+          tenders={tenders}
+          scoreOf={scoreOf}
+          showScore={isManager}
+          defaultActiveOnly={isManager}
+        />
       )}
     </div>
   );
