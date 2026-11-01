@@ -5,25 +5,14 @@ import { TENDER_STATUSES, TENDER_TYPES, requiredRolesFor } from '@obms/shared';
 import type { ScoreGrade, TenderDoc, TenderStatus, TenderType } from '@obms/shared';
 import { GradeBadge } from './ScoreCard';
 import { useUsers } from '../lib/hooks';
+import { STAGE_COLOR, isActive } from '../lib/stages';
+import Avatar from './Avatar';
+
+export { isActive };
 
 type View = 'table' | 'cards';
 type Score = { grade: ScoreGrade; total: number } | undefined;
 type StatusFilter = TenderStatus | 'active' | '';
-
-/** Statuses after which the case needs no more day-to-day work. */
-const DONE_STATUSES: TenderStatus[] = ['evaluated', 'awarded'];
-export const isActive = (s: TenderStatus) => !DONE_STATUSES.includes(s);
-
-/** One solid colour per stage, running along a single journey from writing to award. */
-const STAGE_COLOR: Record<TenderStatus, string> = {
-  draft: '#8a5cf0',
-  internal_review: '#5a4fe0',
-  ready: '#2f6fe0',
-  published: '#0a8fc2',
-  responses: '#0a9a8e',
-  evaluated: '#1f9d5f',
-  awarded: '#177a4a',
-};
 
 const fmtDate = (ms: number) =>
   new Date(ms).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' });
@@ -40,25 +29,6 @@ function StageTag({ status }: { status: TenderStatus }) {
       style={{ background: STAGE_COLOR[status] }}
     >
       {t(`status.${status}`)}
-    </span>
-  );
-}
-
-const AVATAR_COLORS = ['#6a4fe0', '#2f6fe0', '#0a8fc2', '#0a9a8e', '#1f9d5f', '#8a5cf0'];
-
-/** Small round picture of a person: coloured initials, the colour stable per name. */
-function Avatar({ name }: { name: string }) {
-  const initials = name
-    .split(' ')
-    .map((w) => w[0])
-    .join('');
-  const hue = [...name].reduce((a, c) => a + c.charCodeAt(0), 0) % AVATAR_COLORS.length;
-  return (
-    <span
-      className="inline-grid h-[22px] w-[22px] shrink-0 place-items-center rounded-full text-[10px] font-semibold text-white"
-      style={{ background: AVATAR_COLORS[hue] }}
-    >
-      {initials}
     </span>
   );
 }

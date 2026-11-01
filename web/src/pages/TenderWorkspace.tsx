@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/AuthProvider';
 import {
@@ -17,17 +17,16 @@ import { REQUIRED_ROLES_BY_TYPE, missingRoles } from '@obms/shared';
 import TeamPanel from '../components/TeamPanel';
 import ChatPanel from '../components/ChatPanel';
 import { api } from '../lib/api';
-import StatusBadge from '../components/StatusBadge';
 import DocumentViewer from '../components/DocumentViewer';
 import AccessPanel from '../components/AccessPanel';
 import QuestionsPanel from '../components/QuestionsPanel';
 import EvaluationPanel from '../components/EvaluationPanel';
 import CasePanel from '../components/CasePanel';
 import QuartetCard from '../components/QuartetCard';
-import SupervisorPanel, { VerdictBadge } from '../components/SupervisorPanel';
+import SupervisorPanel from '../components/SupervisorPanel';
+import TenderHeader, { type HeaderAction } from '../components/TenderHeader';
 
-type Tab =
-  'case' | 'overview' | 'document' | 'supervisor' | 'chat' | 'access' | 'questions' | 'evaluation';
+type Tab = 'overview' | 'document' | 'supervisor' | 'access' | 'questions' | 'evaluation' | 'case';
 
 export default function TenderWorkspace() {
   const { id } = useParams();
@@ -42,7 +41,7 @@ export default function TenderWorkspace() {
   const answers = useAnswers(id);
   const submissions = useSubmissions(id);
   const template = useTemplate(tender?.type);
-  const [tab, setTab] = useState<Tab>('case');
+  const [tab, setTab] = useState<Tab>('overview');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   // Set when the supervisor blocked publication — offers the audited manager override.
@@ -94,68 +93,64 @@ export default function TenderWorkspace() {
 
   const showEval = ['responses', 'evaluated', 'awarded'].includes(tender.status);
   const tabs: { key: Tab; label: string }[] = [
-    { key: 'case', label: t('ws.case') },
     { key: 'overview', label: t('ws.overview') },
-    { key: 'document', label: t('ws.document') },
+    // The case team chat sits beside the document, so unread messages show on this tab.
+    {
+      key: 'document',
+      label: chat.unread ? `${t('ws.document')} (${chat.unread})` : t('ws.document'),
+    },
     { key: 'supervisor', label: t('ws.supervisor') },
-    { key: 'chat', label: chat.unread ? `${t('chat.tab')} (${chat.unread})` : t('chat.tab') },
     { key: 'access', label: t('ws.access') },
     { key: 'questions', label: t('ws.questions') },
     ...(showEval ? [{ key: 'evaluation' as Tab, label: t('ws.evaluation') }] : []),
+    { key: 'case', label: t('ws.case') },
   ];
+
+  // The next step for this case, shown as the header's main button.
+  let action: HeaderAction | undefined;
+  if (isManager) {
+    if (tender.status === 'draft') {
+      action = {
+        label: t('ws.sendToReview'),
+        onClick: () => transitionTo('internal_review'),
+        disabled: busy || missing.length > 0,
+        title: missing.length
+          ? t('team.missing', { roles: missing.map((r) => t(`role.${r}`)).join(', ') })
+          : undefined,
+      };
+    } else if (tender.status === 'internal_review') {
+      action = { label: t('ws.markReady'), onClick: () => transitionTo('ready'), disabled: busy };
+    } else if (tender.status === 'ready') {
+      action = {
+        label: busy ? t('sup.checking') : t('ws.publish'),
+        onClick: () => transitionTo('published'),
+        disabled: busy,
+      };
+    } else if (tender.status === 'responses' || tender.status === 'evaluated') {
+      action = { label: t('ws.toEvaluation'), onClick: () => setTab('evaluation') };
+    }
+  }
+  const ownerName =
+    users.find((u) => u.uid === tender.ownerUid)?.displayName ??
+    access.find((a) => a.principalId === tender.ownerUid)?.displayName;
 
   return (
     <div>
-      <Link to="/" className="text-sm text-teal-600">
-        ← {t('common.back')}
-      </Link>
-      <div className="mb-4 mt-2 flex items-start justify-between gap-4">
-        <div>
-          <h1 className="font-display text-2xl font-bold">{tender.title}</h1>
-          <div className="mt-2 flex items-center gap-2">
-            {tender.serial && (
-              <span className="chip font-semibold" dir="ltr">
-                {tender.serial}
-              </span>
-            )}
-            <span className="chip">{t(`type.${tender.type}`)}</span>
-            <StatusBadge status={tender.status} />
-            {tender.lastSupervision && <VerdictBadge verdict={tender.lastSupervision.verdict} />}
-          </div>
+      <TenderHeader tender={tender} ownerName={ownerName} action={action}>
+        <div className="mt-3 flex gap-1">
+          {tabs.map((tb) => (
+            <button
+              key={tb.key}
+              className={`px-4 py-2 text-sm font-semibold ${
+                tab === tb.key ? 'border-b-2 border-teal text-tx' : 'text-tx-mute'
+              }`}
+              onClick={() => setTab(tb.key)}
+            >
+              {tb.label}
+            </button>
+          ))}
         </div>
-        {isManager && (
-          <div className="flex gap-2">
-            {tender.status === 'draft' && (
-              <button
-                className="btn"
-                disabled={busy || missing.length > 0}
-                title={
-                  missing.length
-                    ? t('team.missing', { roles: missing.map((r) => t(`role.${r}`)).join(', ') })
-                    : ''
-                }
-                onClick={() => transitionTo('internal_review')}
-              >
-                {t('ws.sendToReview')}
-              </button>
-            )}
-            {tender.status === 'internal_review' && (
-              <button className="btn" disabled={busy} onClick={() => transitionTo('ready')}>
-                {t('ws.markReady')}
-              </button>
-            )}
-            {tender.status === 'ready' && (
-              <button
-                className="btn btn-gold"
-                disabled={busy}
-                onClick={() => transitionTo('published')}
-              >
-                {busy ? t('sup.checking') : t('ws.publish')}
-              </button>
-            )}
-          </div>
-        )}
-      </div>
+      </TenderHeader>
 
       {(initialCheck || (!tender.lastSupervision && isManager)) && (
         <div className="card mb-4 border-teal-200 bg-teal-soft p-3 text-sm text-teal-600">
@@ -185,20 +180,6 @@ export default function TenderWorkspace() {
         </div>
       )}
 
-      <div className="mb-4 flex gap-1 border-b border-paper-2">
-        {tabs.map((tb) => (
-          <button
-            key={tb.key}
-            className={`px-4 py-2 text-sm font-semibold ${
-              tab === tb.key ? 'border-b-2 border-gold text-tx' : 'text-tx-mute'
-            }`}
-            onClick={() => setTab(tb.key)}
-          >
-            {tb.label}
-          </button>
-        ))}
-      </div>
-
       {tab === 'overview' && (
         <div className="space-y-4">
           <QuartetCard tender={tender} />
@@ -213,9 +194,11 @@ export default function TenderWorkspace() {
         </div>
       )}
       {tab === 'document' && (
-        <DocumentViewer tenderId={tender.id} googleDocId={tender.googleDocId} />
+        <div className="grid items-start gap-4 lg:grid-cols-[1fr_340px]">
+          <DocumentViewer tenderId={tender.id} googleDocId={tender.googleDocId} />
+          <ChatPanel tenderId={tender.id} messages={chat.messages} />
+        </div>
       )}
-      {tab === 'chat' && <ChatPanel tenderId={tender.id} messages={chat.messages} />}
       {tab === 'access' && (
         <div className="mb-4">
           <TeamPanel tender={tender} users={users} access={access} canManage={isManager} />
