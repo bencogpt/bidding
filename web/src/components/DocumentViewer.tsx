@@ -80,12 +80,12 @@ export default function DocumentViewer({
   //  - "## title" lines (documents generated before the server wrote them as headings), and
   //  - chapter and annex lines such as "פרק ב'" or "נספח 3", which documents converted from Word
   //    carry as bare lines with no heading style.
-  const CHAPTER = /^(?:פרק|נספח)s+[p{L}d]{1,4}['׳]?s*(?:[-–—:]s*S.{0,50})?$/u;
+  const CHAPTER = /^(?:פרק|נספח)\s+[\p{L}\d]{1,4}['׳]?\s*(?:[-–—:]\s*\S.{0,50})?$/u;
   const promoteHeadings = () => {
     const d = frameRef.current?.contentDocument;
     d?.querySelectorAll('p').forEach((p) => {
       const text = p.textContent?.trim() ?? '';
-      const md = text.match(/^(#{1,3})s+(.*S)$/);
+      const md = text.match(/^(#{1,3})\s+(.*\S)$/);
       if (!md && !CHAPTER.test(text)) return;
       const h = d.createElement(`h${md ? Math.min(md[1].length + 1, 4) : 3}`);
       h.textContent = md ? md[2] : text;
