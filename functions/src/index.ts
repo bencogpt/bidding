@@ -44,6 +44,7 @@ import {
   detectPlaceholders,
   mergeSyncedParams,
   templateFieldsStatus,
+  hasPlaceholder,
   analyzeTemplateFieldsInput,
   applyTemplateConversionInput,
   docExportTxtUrl,
@@ -163,6 +164,13 @@ function validateParams(
   params: Record<string, string | number>,
 ): Record<string, string | number> {
   const clean: Record<string, string | number> = {};
+  const stillPlaceholders = template.params.filter((p) => hasPlaceholder(params[p.key])).map((p) => p.labelHe);
+  if (stillPlaceholders.length) {
+    throw new HttpsError(
+      'invalid-argument',
+      `יש להזין ערך במקום מציין המקום שהשאירה הטיוטה בשדות: ${stillPlaceholders.join(', ')}`,
+    );
+  }
   for (const p of template.params) {
     const v = params[p.key];
     const blank = v === undefined || String(v).trim() === '';

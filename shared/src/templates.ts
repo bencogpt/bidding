@@ -120,6 +120,12 @@ export function templateFieldsStatus(
   return { status: fields > 0 && unresolved === 0 ? 'ready' : 'needs_conversion', unresolved, fields };
 }
 
+/**
+ * A form value that still holds a placeholder — the AI draft writes {{UPPER_SNAKE}} where the brief
+ * doesn't give the value (G2) — is not a value: the manager must replace it before creating.
+ */
+export const hasPlaceholder = (v: unknown): boolean => /\{\{[^}]*\}\}/.test(String(v ?? ''));
+
 /** Accept a Google Docs URL or a raw doc id and return the document id, or null. */
 export function parseDocId(urlOrId: string): string | null {
   const trimmed = urlOrId.trim();

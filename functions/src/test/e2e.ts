@@ -170,16 +170,17 @@ async function main() {
   console.log(`✓ supervisor: provenance + G6 split + gate passed (${published.data.verdict})`);
 
   // A document with an unfilled placeholder is blocked; an audited override lets it through.
+  // The optional "milestones" field is left empty, so {{milestones}} stays in the document.
   const bad = (await call('createTender')({
     title: 'מכרז עם חוסר',
-    type: 'goods',
-    params: { org: 'משרד הביטחון', description: 'מצלמות, אחריות {{WARRANTY_YEARS}} שנים', quantity: 4 },
-    team: { requester: goodsTeam.requester, legal: legalUid }, // finance slot left empty
+    type: 'project',
+    params: { org: 'משרד הביטחון', scope: 'הקמת מערכת מצלמות', service: 'תחזוקה שנתית' },
+    team: { requester: goodsTeam.requester, legal: legalUid }, // finance + security slots left empty
   })) as { data: { id: string; serial: string; verdict: string | null; missingRoles: string[] } };
   assert.equal(bad.data.verdict, 'BLOCK', 'supervisor flags the placeholder at creation');
   const serialNo = (x: string) => Number(x.split('-')[2]);
   assert.equal(serialNo(bad.data.serial), serialNo(created.data.serial) + 1, 'serials are sequential; the rejected create consumed no number');
-  assert.deepEqual(bad.data.missingRoles, ['finance']);
+  assert.deepEqual(bad.data.missingRoles, ['finance', 'security']);
   let gateRefused = false;
   try {
     await call('transitionTender')({ tenderId: bad.data.id, to: 'internal_review' });
@@ -188,6 +189,7 @@ async function main() {
   }
   assert.ok(gateRefused, 'review is refused while a required role is empty');
   await call('assignTeamMember')({ tenderId: bad.data.id, role: 'finance', uid: goodsTeam.finance });
+  await call('assignTeamMember')({ tenderId: bad.data.id, role: 'security', uid: uidOf('security') });
   await call('transitionTender')({ tenderId: bad.data.id, to: 'internal_review' });
   console.log('✓ review gate: refused with an empty slot, passes once the team is complete');
   await call('transitionTender')({ tenderId: bad.data.id, to: 'ready' });
@@ -591,6 +593,18 @@ async function main() {
     missingRequired = /שדה חובה חסר/.test((e as Error).message);
   }
   assert.ok(missingRequired, 'an empty required template field is rejected');
+  let placeholderRejected = false;
+  try {
+    await call('createTender')({
+      title: 'שירות',
+      type: 'service',
+      params: { tender_number: '{{TENDER_NUMBER}}', service_subject: 'פיתוח', submission_date: '2026-12-01' },
+      team: svcTeam,
+    });
+  } catch (e) {
+    placeholderRejected = /מציין המקום/.test((e as Error).message);
+  }
+  assert.ok(placeholderRejected, 'a field still holding an AI-draft {{PLACEHOLDER}} is rejected');
   const svcCase = (await call('createTender')({
     title: 'מכרז שירותי פיתוח',
     type: 'service',

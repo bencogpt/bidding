@@ -7,6 +7,7 @@ import {
   isConfidentialParam,
   requiredRolesFor,
   templateFieldsStatus,
+  hasPlaceholder,
   type CaseTeam,
   type TeamRole,
   type TenderType,
@@ -81,8 +82,16 @@ export default function TenderCreate() {
     }
   };
 
+  // Fields still holding the AI draft's {{PLACEHOLDER}} — the brief didn't give the value.
+  const unfilled = (template?.params ?? []).filter((p) => hasPlaceholder(params[p.key]));
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (unfilled.length) {
+      setError(t('create.fillPlaceholders', { fields: unfilled.map((p) => p.labelHe).join(', ') }));
+      document.getElementById(`param-${unfilled[0].key}`)?.focus();
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -170,20 +179,23 @@ export default function TenderCreate() {
             </label>
             {p.type === 'textarea' ? (
               <textarea
-                className="input min-h-20"
+                id={`param-${p.key}`}
+                className={`input min-h-20 ${hasPlaceholder(params[p.key]) ? 'border-red-400 bg-red-50' : ''}`}
                 value={params[p.key] ?? ''}
                 onChange={(e) => setParam(p.key, e.target.value)}
                 required={p.required}
               />
             ) : (
               <input
-                className="input"
+                id={`param-${p.key}`}
+                className={`input ${hasPlaceholder(params[p.key]) ? 'border-red-400 bg-red-50' : ''}`}
                 type={p.type === 'number' ? 'number' : p.type === 'date' ? 'date' : 'text'}
                 value={params[p.key] ?? ''}
                 onChange={(e) => setParam(p.key, e.target.value)}
                 required={p.required}
               />
             )}
+            {hasPlaceholder(params[p.key]) && <div className="mt-1 text-xs text-red-600">{t('create.placeholderHint')}</div>}
           </div>
         ))}
 

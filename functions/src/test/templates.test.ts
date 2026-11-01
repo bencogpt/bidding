@@ -55,3 +55,12 @@ test('mergeSyncedParams keeps a confidential key internal if it reappears in the
   assert.equal(merged.find((p) => p.key === 'budget')?.internal, true);
   assert.equal(merged.length, 2);
 });
+
+test('hasPlaceholder: AI-draft {{PLACEHOLDER}} values are not filled values', async () => {
+  const { hasPlaceholder } = await import('@obms/shared');
+  assert.equal(hasPlaceholder('{{TENDER_NUMBER}}'), true);
+  assert.equal(hasPlaceholder('ערבות {{GUARANTEE_AMOUNT_WORDS}} ₪'), true);
+  assert.equal(hasPlaceholder('2026-07'), false);
+  assert.equal(hasPlaceholder(12), false);
+  assert.equal(hasPlaceholder(undefined), false);
+});
