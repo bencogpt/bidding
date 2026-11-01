@@ -132,7 +132,7 @@ export default function TenderList({
   const open = (id: string) => navigate(`/tenders/${id}`);
 
   return (
-    <div className="flex min-h-[360px] flex-1 flex-col">
+    <div className="flex min-h-0 flex-col">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex rounded bg-paper-2 p-0.5 text-sm" role="group">
           {(['table', 'cards'] as const).map((v) => (
@@ -186,7 +186,7 @@ export default function TenderList({
       {shown.length === 0 ? (
         <div className="card p-6 text-tx-soft">{t('dashboard.noMatch')}</div>
       ) : view === 'table' ? (
-        <div className="card min-h-0 flex-1 overflow-auto">
+        <div className="card min-h-0 overflow-auto">
           <table className="w-full text-sm">
             <thead className="sticky top-0 z-10 bg-paper text-xs text-tx-mute">
               <tr>
@@ -264,7 +264,7 @@ export default function TenderList({
           </table>
         </div>
       ) : (
-        <div className="grid min-h-0 flex-1 content-start gap-4 overflow-auto [grid-template-columns:repeat(auto-fill,minmax(290px,1fr))]">
+        <div className="grid min-h-0 content-start gap-4 overflow-auto [grid-template-columns:repeat(auto-fill,minmax(290px,1fr))]">
           {shown.map((tn) => {
             const sc = showScore ? scoreOf(tn.id) : undefined;
             const owner = ownerName(tn.ownerUid);
