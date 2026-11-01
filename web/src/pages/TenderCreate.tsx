@@ -111,7 +111,9 @@ export default function TenderCreate() {
         submissionDeadline: deadline ? new Date(deadline).getTime() : null,
         domainTags,
         evaluationCriteria: criteria,
-        draftId: draftId ?? undefined,
+        // Omit the key when there is no AI draft: the callable client turns undefined into null,
+        // which the optional string field on the server rejects.
+        ...(draftId ? { draftId } : {}),
         requestId: requestId.current,
         team: Object.fromEntries(requiredRoles.filter((r) => team[r]).map((r) => [r, team[r]])),
         extraRoles,
