@@ -59,7 +59,14 @@ const call = <I, O>(name: string) => {
 export const api = {
   createTender: call<
     CreateTenderInput,
-    { id: string; serial: string; docsSkipped: string[]; verdict: SupervisionVerdict | null; missingRoles: TeamRole[] }
+    {
+      id: string;
+      serial: string;
+      docsSkipped: string[];
+      verdict: SupervisionVerdict | null;
+      missingRoles: TeamRole[];
+      duplicate: boolean; // a retried submission — the case created the first time
+    }
   >('createTender'),
   assignTeamMember: call<AssignTeamMemberInput, { ok: true; docsSkipped: string[] }>('assignTeamMember'),
   setRequiredRoles: call<SetRequiredRolesInput, { requiredRoles: TeamRole[] }>('setRequiredRoles'),
@@ -73,7 +80,7 @@ export const api = {
   refreshTenderDocument: call<RefreshTenderDocumentInput, { ok: true; cached: boolean }>(
     'refreshTenderDocument',
   ),
-  runSupervision: call<RunSupervisionInput, SupervisionReport>('runSupervision'),
+  runSupervision: call<RunSupervisionInput, SupervisionReport | { skipped: true }>('runSupervision'),
   recomputeCaseScore: call<RecomputeCaseScoreInput, CaseScore>('recomputeCaseScore'),
   backfillCaseScores: call<Record<string, never>, { scored: number; failed: string[] }>(
     'backfillCaseScores',

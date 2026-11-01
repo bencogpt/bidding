@@ -45,6 +45,7 @@ import {
   mergeSyncedParams,
   templateFieldsStatus,
   hasPlaceholder,
+  isAutoSerialParam,
   analyzeTemplateFieldsInput,
   applyTemplateConversionInput,
   docExportTxtUrl,
@@ -80,6 +81,7 @@ import {
   internalRepo,
   settingsRepo,
   countersRepo,
+  caseCreationRepo,
 } from './repositories.js';
 import { transition } from './stateMachines/tenderFsm.js';
 import {
@@ -91,6 +93,8 @@ import {
   readTemplateDocText,
   googleIdentityOf,
   removeDocumentPermission,
+  discardGeneratedDocument,
+  type GeneratedDoc,
 } from './services/docsService.js';
 import {
   clusterQuestions,
@@ -164,7 +168,9 @@ function validateParams(
   params: Record<string, string | number>,
 ): Record<string, string | number> {
   const clean: Record<string, string | number> = {};
-  const stillPlaceholders = template.params.filter((p) => hasPlaceholder(params[p.key])).map((p) => p.labelHe);
+  const stillPlaceholders = template.params
+    .filter((p) => !isAutoSerialParam(p) && hasPlaceholder(params[p.key]))
+    .map((p) => p.labelHe);
   if (stillPlaceholders.length) {
     throw new HttpsError(
       'invalid-argument',
@@ -172,6 +178,7 @@ function validateParams(
     );
   }
   for (const p of template.params) {
+    if (isAutoSerialParam(p)) continue; // filled by the system with the case serial
     const v = params[p.key];
     const blank = v === undefined || String(v).trim() === '';
     if (blank) {
@@ -324,10 +331,35 @@ async function grantTeamAccess(
 }
 
 // ---- Tenders ----
-export const createTender = onCall(SUPERVISED, async (req) => {
+// Creating a case is all-or-nothing and retry-safe:
+//  1. validate everything (template, fields, team, AI draft) — nothing written yet;
+//  2. generate the document;
+//  3. write the case, team access, provenance and the request marker in ONE batch.
+// If anything fails, the generated document is discarded and nothing remains. A retried submission
+// (same requestId) returns the case it already created instead of making a copy. The supervisor
+// check runs right after, from the case page — creation itself takes seconds, not minutes.
+export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 }, async (req) => {
   const caller = requireManager(req);
   const input = parseInput(createTenderInput, req.data);
+  const requestId = input.requestId ?? null;
 
+  const alreadyCreated = async () => {
+    const prev = requestId ? await caseCreationRepo.existing(requestId, caller.uid) : null;
+    if (!prev) return null;
+    const t = await tendersRepo.get(prev.tenderId);
+    return {
+      id: prev.tenderId,
+      serial: prev.serial,
+      docsSkipped: [] as string[],
+      verdict: t?.lastSupervision?.verdict ?? null,
+      missingRoles: t ? missingRoles(t.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[t.type], t.team) : [],
+      duplicate: true,
+    };
+  };
+  const prior = await alreadyCreated();
+  if (prior) return prior;
+
+  // ---- 1. validate (no writes) ----
   const template = await templatesRepo.get(input.type);
   if (!template) {
     throw new HttpsError('failed-precondition', `אין תבנית לסוג המכרז: ${input.type}`);
@@ -352,9 +384,13 @@ export const createTender = onCall(SUPERVISED, async (req) => {
   // The case team: one user per required role, validated against the users' actual roles.
   const requiredRoles = requiredRolesFor(input.type, input.extraRoles ?? []);
   const { team, users: teamUsers } = await resolveTeam(input.team);
+  const owner = await usersRepo.get(caller.uid);
 
+  // ---- 2. serial + document ----
   const id = tendersRepo.newId();
   const serial = await countersRepo.nextSerial(new Date(now()).getFullYear());
+  // The bid number is the case serial — filled by the system, never typed or guessed.
+  for (const p of template.params) if (isAutoSerialParam(p)) publicParams[p.key] = serial;
   const tender: TenderDoc = {
     id,
     serial,
@@ -376,8 +412,6 @@ export const createTender = onCall(SUPERVISED, async (req) => {
     createdAt: now(),
     updatedAt: now(),
   };
-  await tendersRepo.create(tender);
-
   // Provenance (G11): exactly which template version, AI draft and skills built this tender.
   const provenance: TenderProvenance = {
     templateType: input.type,
@@ -393,13 +427,92 @@ export const createTender = onCall(SUPERVISED, async (req) => {
     paramSources: draft?.sources ?? {},
     editedByManager: draft
       ? Object.keys(publicParams).filter(
-          (k) => String(draft.params[k] ?? '') !== String(publicParams[k] ?? ''),
+          (k) => !isAutoSerialParam({ key: k }) && String(draft.params[k] ?? '') !== String(publicParams[k] ?? ''),
         )
       : [],
     recordedAt: now(),
   };
-  await internalRepo.setProvenance(id, provenance);
-  if (Object.keys(internalParams).length) await internalRepo.setParams(id, internalParams);
+  // Strict assignment: only the owning manager (edit) and the case team (comment) get access.
+  const access: AccessDoc[] = [
+    {
+      principalId: caller.uid,
+      kind: 'internal',
+      level: 'edit',
+      displayName: owner?.displayName ?? caller.name,
+      grantedBy: caller.uid,
+      grantedAt: now(),
+    },
+    ...teamUsers
+      .filter((u) => u.uid !== caller.uid)
+      .map((u) => ({
+        principalId: u.uid,
+        kind: 'internal' as const,
+        level: DEFAULT_INTERNAL_ACCESS[u.role] ?? 'comment',
+        displayName: u.displayName,
+        grantedBy: caller.uid,
+        grantedAt: now(),
+      })),
+  ];
+
+  // ---- 3. one atomic write ----
+  let gen: GeneratedDoc | null = null;
+  try {
+    gen = await generateTenderDocument(tender, template);
+    tender.googleDocId = gen.googleDocId;
+    tender.docExportPath = gen.exportPath;
+    await caseCreationRepo.commit({ tender, access, provenance, internalParams, requestId, uid: caller.uid });
+  } catch (err) {
+    if (gen) await discardGeneratedDocument(id, gen);
+    // A concurrent duplicate of this submission committed first — return that case.
+    const raced = await alreadyCreated();
+    if (raced) return raced;
+    console.error(`createTender failed (${serial}); nothing was saved`, err);
+    await auditRepo
+      .append({
+        entityType: 'tender',
+        entityId: id,
+        actorUid: caller.uid,
+        actorName: caller.name,
+        action: 'create_failed',
+        prevState: serial,
+        newState: null,
+        detail: `${input.title} — ${(err as Error).message}`.slice(0, 300),
+      })
+      .catch(() => undefined);
+    if (err instanceof HttpsError) throw err;
+    throw new HttpsError('internal', 'יצירת המכרז נכשלה ולא נשמר דבר. ניתן לנסות שוב.');
+  }
+
+  // ---- after commit: best-effort extras (never undo the case) ----
+  let skipped: string[] = [];
+  try {
+    // The caller's own token email is a real Google address when they signed in with SSO, so it
+    // is an acceptable fallback for the owner only.
+    const callerAddress = googleIdentityOf(owner ?? {}) ?? caller.email;
+    if (callerAddress) await setDocumentPermissions(gen.googleDocId, { writerEmails: [callerAddress] });
+    const recipients = splitDocsRecipients(teamUsers);
+    skipped = recipients.skipped;
+    if (recipients.writerEmails.length || recipients.commenterEmails.length) {
+      await setDocumentPermissions(gen.googleDocId, {
+        writerEmails: recipients.writerEmails,
+        commenterEmails: recipients.commenterEmails,
+      });
+    }
+  } catch (err) {
+    console.error(`createTender ${serial}: Docs permissions failed`, err);
+  }
+  const missing = missingRoles(requiredRoles, team);
+  await auditRepo.append({
+    entityType: 'tender',
+    entityId: id,
+    tenderId: id,
+    actorUid: caller.uid,
+    actorName: caller.name,
+    action: 'create',
+    prevState: null,
+    newState: 'draft',
+    detail: `${serial} · ${input.type}: ${input.title}`,
+  });
   await auditRepo.append({
     entityType: 'tender',
     entityId: id,
@@ -413,43 +526,6 @@ export const createTender = onCall(SUPERVISED, async (req) => {
       ? `draft ${draft.draftId} · ${provenance.skillsUsed.length} skills · ${provenance.editedByManager.length} edited`
       : 'manual',
   });
-
-  // System detects type -> generates the document from the matching template.
-  const gen = await generateTenderDocument(tender, template);
-  await tendersRepo.update(id, {
-    googleDocId: gen.googleDocId,
-    docExportPath: gen.exportPath,
-  });
-
-  // Strict assignment: only the owning manager (edit) and the case team (comment) get access —
-  // no other internal user sees the case.
-  const owner = await usersRepo.get(caller.uid);
-  await accessRepo.grant(id, {
-    principalId: caller.uid,
-    kind: 'internal',
-    level: 'edit',
-    displayName: owner?.displayName ?? caller.name,
-    grantedBy: caller.uid,
-    grantedAt: now(),
-  });
-  // The caller's own token email is a real Google address when they signed in with SSO, so it is
-  // an acceptable fallback for the owner only.
-  const callerAddress = googleIdentityOf(owner ?? {}) ?? caller.email;
-  if (callerAddress) await setDocumentPermissions(gen.googleDocId, { writerEmails: [callerAddress] });
-  const skipped = await grantTeamAccess(id, gen.googleDocId, teamUsers, caller.uid);
-
-  await auditRepo.append({
-    entityType: 'tender',
-    entityId: id,
-    tenderId: id,
-    actorUid: caller.uid,
-    actorName: caller.name,
-    action: 'create',
-    prevState: null,
-    newState: 'draft',
-    detail: `${serial} · ${input.type}: ${input.title}`,
-  });
-  const missing = missingRoles(requiredRoles, team);
   await auditRepo.append({
     entityType: 'tender',
     entityId: id,
@@ -467,9 +543,7 @@ export const createTender = onCall(SUPERVISED, async (req) => {
         .filter(Boolean)
         .join(' · ') || undefined,
   });
-  const supervision = await supervisorCheckpoint(caller, id, 'created');
-  await refreshCaseScore(SYSTEM, id);
-  return { id, serial, docsSkipped: skipped, verdict: supervision?.verdict ?? null, missingRoles: missing };
+  return { id, serial, docsSkipped: skipped, verdict: null, missingRoles: missing, duplicate: false };
 });
 
 export const transitionTender = onCall(SUPERVISED, async (req) => {
@@ -946,7 +1020,9 @@ export const runSupervision = onCall(SUPERVISED, async (req) => {
   const tender = await tendersRepo.get(input.tenderId);
   if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
   requireCaseAccess(caller, tender);
-  const report = await superviseTender(caller, input.tenderId, 'manual');
+  // Two tabs opening a new case must not run the initial check twice.
+  if (input.initial && tender.lastSupervision) return { skipped: true as const };
+  const report = await superviseTender(caller, input.tenderId, input.initial ? 'created' : 'manual');
   await refreshCaseScore(SYSTEM, input.tenderId);
   return report;
 });

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/AuthProvider';
@@ -46,6 +46,20 @@ export default function TenderWorkspace() {
   // Set when the supervisor blocked publication — offers the audited manager override.
   const [blocked, setBlocked] = useState(false);
   const [overrideReason, setOverrideReason] = useState('');
+  const [initialCheck, setInitialCheck] = useState(false);
+
+  // A new case is created in seconds; its first supervisor check starts here, once per case.
+  useEffect(() => {
+    if (!tender || role !== 'tender_manager' || tender.lastSupervision) return;
+    const key = `initial-supervision:${tender.id}`;
+    if (sessionStorage.getItem(key)) return;
+    sessionStorage.setItem(key, '1');
+    setInitialCheck(true);
+    api
+      .runSupervision({ tenderId: tender.id, initial: true })
+      .catch((e) => console.error('initial supervision failed', e))
+      .finally(() => setInitialCheck(false));
+  }, [tender?.id, tender?.lastSupervision, role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) return <div className="text-tx-soft">{t('common.loading')}</div>;
   if (!tender) return <div className="text-tx-soft">{denied ? t('team.notAssigned') : '404'}</div>;
@@ -130,6 +144,9 @@ export default function TenderWorkspace() {
         )}
       </div>
 
+      {(initialCheck || (!tender.lastSupervision && isManager)) && (
+        <div className="card mb-4 border-teal-200 bg-teal-soft p-3 text-sm text-teal-600">{t('sup.initialRunning')}</div>
+      )}
       {error && (
         <div className="card mb-4 space-y-2 border-red-200 p-4 text-sm">
           <div className="text-red-600">{error}</div>

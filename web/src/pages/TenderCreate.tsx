@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -8,6 +8,7 @@ import {
   requiredRolesFor,
   templateFieldsStatus,
   hasPlaceholder,
+  isAutoSerialParam,
   type CaseTeam,
   type TeamRole,
   type TenderType,
@@ -41,6 +42,9 @@ export default function TenderCreate() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const template = useTemplate(type);
+  // One id per form: if a submission's answer is lost and the user retries, the server returns the
+  // case it already created instead of making a copy.
+  const requestId = useRef(crypto.randomUUID());
   const users = useUsers();
   // Case team: one user per required role (type defaults + roles the manager adds).
   const [team, setTeam] = useState<CaseTeam>({});
@@ -83,7 +87,7 @@ export default function TenderCreate() {
   };
 
   // Fields still holding the AI draft's {{PLACEHOLDER}} — the brief didn't give the value.
-  const unfilled = (template?.params ?? []).filter((p) => hasPlaceholder(params[p.key]));
+  const unfilled = (template?.params ?? []).filter((p) => !isAutoSerialParam(p) && hasPlaceholder(params[p.key]));
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -108,6 +112,7 @@ export default function TenderCreate() {
         domainTags,
         evaluationCriteria: criteria,
         draftId: draftId ?? undefined,
+        requestId: requestId.current,
         team: Object.fromEntries(requiredRoles.filter((r) => team[r]).map((r) => [r, team[r]])),
         extraRoles,
       });
@@ -171,7 +176,12 @@ export default function TenderCreate() {
           <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} required />
         </div>
 
-        {template?.params.map((p) => (
+        {template?.params.filter(isAutoSerialParam).map((p) => (
+          <div key={p.key} className="rounded bg-paper-2 p-2 text-sm text-tx-soft">
+            {p.labelHe}: {t('create.autoSerial')}
+          </div>
+        ))}
+        {template?.params.filter((p) => !isAutoSerialParam(p)).map((p) => (
           <div key={p.key}>
             <label className="label">
               {p.labelHe}

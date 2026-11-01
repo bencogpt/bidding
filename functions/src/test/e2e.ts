@@ -149,8 +149,12 @@ async function main() {
   const prov = await getDoc(doc(db, 'tenders', tenderId, 'internal', 'provenance'));
   assert.equal(prov.data()?.templateType, 'goods', 'provenance records the template used');
   assert.equal(prov.data()?.templateId, 'T-A');
+  // Creation is fast; the case page starts the first supervisor check right after.
+  await call('runSupervision')({ tenderId, initial: true });
   const createdRuns = await getDocs(collection(db, 'tenders', tenderId, 'supervision'));
-  assert.ok(createdRuns.size >= 1, 'supervisor ran at creation');
+  assert.equal(createdRuns.size, 1, 'initial supervisor check ran');
+  const again = (await call('runSupervision')({ tenderId, initial: true })) as { data: { skipped?: boolean } };
+  assert.equal(again.data.skipped, true, 'a second "initial" check (another tab) is skipped');
 
   let earlyShareDenied = false;
   try {
@@ -177,7 +181,8 @@ async function main() {
     params: { org: 'משרד הביטחון', scope: 'הקמת מערכת מצלמות', service: 'תחזוקה שנתית' },
     team: { requester: goodsTeam.requester, legal: legalUid }, // finance + security slots left empty
   })) as { data: { id: string; serial: string; verdict: string | null; missingRoles: string[] } };
-  assert.equal(bad.data.verdict, 'BLOCK', 'supervisor flags the placeholder at creation');
+  const badCheck = (await call('runSupervision')({ tenderId: bad.data.id, initial: true })) as { data: { verdict: string } };
+  assert.equal(badCheck.data.verdict, 'BLOCK', 'supervisor flags the leftover placeholder in the new document');
   const serialNo = (x: string) => Number(x.split('-')[2]);
   assert.equal(serialNo(bad.data.serial), serialNo(created.data.serial) + 1, 'serials are sequential; the rejected create consumed no number');
   assert.deepEqual(bad.data.missingRoles, ['finance', 'security']);
@@ -598,20 +603,32 @@ async function main() {
     await call('createTender')({
       title: 'שירות',
       type: 'service',
-      params: { tender_number: '{{TENDER_NUMBER}}', service_subject: 'פיתוח', submission_date: '2026-12-01' },
+      params: { service_subject: '{{SERVICE_SUBJECT}}', submission_date: '2026-12-01' },
       team: svcTeam,
     });
   } catch (e) {
     placeholderRejected = /מציין המקום/.test((e as Error).message);
   }
   assert.ok(placeholderRejected, 'a field still holding an AI-draft {{PLACEHOLDER}} is rejected');
-  const svcCase = (await call('createTender')({
+  // The bid number is never asked: the system fills it with the case serial. A retried submission
+  // (same requestId) returns the same case — never a copy.
+  const svcInput = {
     title: 'מכרז שירותי פיתוח',
     type: 'service',
-    params: { tender_number: '2026-01', service_subject: 'פיתוח ותחזוקה', submission_date: '2026-12-01' },
+    params: { service_subject: 'פיתוח ותחזוקה', submission_date: '2026-12-01' },
     team: svcTeam,
-  })) as { data: { id: string } };
+    requestId: 'e2e-request-0001',
+  };
+  const svcCase = (await call('createTender')(svcInput)) as { data: { id: string; serial: string; duplicate: boolean } };
   assert.ok(svcCase.data.id, 'case created once every template field is filled');
+  assert.equal(svcCase.data.duplicate, false);
+  const svcTender = (await getDoc(doc(db, 'tenders', svcCase.data.id))).data()!;
+  assert.equal(svcTender.params.tender_number, svcCase.data.serial, 'bid number = case serial, filled by the system');
+  const retried = (await call('createTender')(svcInput)) as { data: { id: string; duplicate: boolean } };
+  assert.equal(retried.data.id, svcCase.data.id, 'retry returns the same case');
+  assert.equal(retried.data.duplicate, true);
+  const copies = await getDocs(query(collection(db, 'tenders'), where('title', '==', 'מכרז שירותי פיתוח')));
+  assert.equal(copies.size, 1, 'no duplicate case was created');
   console.log(`✓ template conversion: refused → analysed → converted (${report.data.fields} fields) → form enforced`);
 
   // ---- one-time migrations are idempotent ----

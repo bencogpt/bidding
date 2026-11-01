@@ -209,6 +209,8 @@ export const createTenderInput = z.object({
   evaluationCriteria: z.array(z.object({ name: z.string(), weight: z.number() })).optional(),
   // AI draft this tender was built from (provenance for the supervisor). Omitted when typed by hand.
   draftId: z.string().optional(),
+  // One id per form submission: a retried submission returns the case already created, never a copy.
+  requestId: z.string().min(8).max(100).optional(),
   ...createTenderTeamFields,
 });
 export type CreateTenderInput = z.infer<typeof createTenderInput>;
@@ -360,7 +362,11 @@ export const refreshTenderDocumentInput = z.object({
 });
 export type RefreshTenderDocumentInput = z.infer<typeof refreshTenderDocumentInput>;
 
-export const runSupervisionInput = z.object({ tenderId: z.string() });
+export const runSupervisionInput = z.object({
+  tenderId: z.string(),
+  // The first check right after creation (started by the case page); skipped if one already ran.
+  initial: z.boolean().optional(),
+});
 
 export const recomputeCaseScoreInput = z.object({ tenderId: z.string() });
 export type RecomputeCaseScoreInput = z.infer<typeof recomputeCaseScoreInput>;

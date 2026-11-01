@@ -138,6 +138,23 @@ export async function generateTenderDocument(
   return { googleDocId: docId, exportPath: null };
 }
 
+/**
+ * Undo a generated document when creating the case failed afterwards: the Google Doc goes to the
+ * Drive trash (restorable), the dev-mode HTML is deleted. Best-effort.
+ */
+export async function discardGeneratedDocument(tenderId: string, gen: GeneratedDoc): Promise<void> {
+  try {
+    if (gen.googleDocId && realMode()) {
+      const { drive } = googleClients();
+      await drive.files.update({ fileId: gen.googleDocId, requestBody: { trashed: true } });
+    } else if (gen.exportPath) {
+      await storage.bucket().file(gen.exportPath).delete({ ignoreNotFound: true });
+    }
+  } catch (e) {
+    console.warn(`discardGeneratedDocument(${tenderId}) failed:`, (e as Error).message);
+  }
+}
+
 /** Create a private, system-owned Google Doc template for a bid type (seeded with starter text). */
 export async function createTemplateDoc(
   title: string,

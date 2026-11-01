@@ -121,6 +121,13 @@ export function templateFieldsStatus(
 }
 
 /**
+ * Template fields the system fills itself: the bid number is the case serial (BID-2026-0042) —
+ * never asked in the form and never guessed by the AI.
+ */
+const AUTO_SERIAL_KEY_RE = /^(tender|bid)_(number|no|num)$/;
+export const isAutoSerialParam = (p: { key: string }): boolean => AUTO_SERIAL_KEY_RE.test(p.key);
+
+/**
  * A form value that still holds a placeholder — the AI draft writes {{UPPER_SNAKE}} where the brief
  * doesn't give the value (G2) — is not a value: the manager must replace it before creating.
  */

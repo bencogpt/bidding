@@ -125,6 +125,45 @@ export const countersRepo = {
   },
 };
 
+// ---- atomic case creation (all-or-nothing, retry-safe) ----
+export const caseCreationRepo = {
+  /** The case a previous submission with this request id already created (same user only). */
+  async existing(requestId: string, uid: string): Promise<{ tenderId: string; serial: string } | null> {
+    const s = await db.collection('createRequests').doc(requestId).get();
+    const d = s.data() as { tenderId: string; serial: string; uid: string } | undefined;
+    return d && d.uid === uid ? { tenderId: d.tenderId, serial: d.serial } : null;
+  },
+  /**
+   * Write the case and everything it needs in ONE batch: the tender, team access, provenance,
+   * confidential params and the request marker. Either all of it exists or none of it does.
+   */
+  async commit(c: {
+    tender: TenderDoc;
+    access: AccessDoc[];
+    provenance: TenderProvenance;
+    internalParams: Record<string, string | number>;
+    requestId: string | null;
+    uid: string;
+  }): Promise<void> {
+    const ref = db.collection('tenders').doc(c.tender.id);
+    const batch = db.batch();
+    batch.create(ref, c.tender);
+    for (const a of c.access) batch.set(ref.collection('access').doc(a.principalId), a);
+    batch.set(ref.collection('internal').doc('provenance'), c.provenance);
+    if (Object.keys(c.internalParams).length) batch.set(ref.collection('internal').doc('params'), c.internalParams);
+    if (c.requestId) {
+      // create() fails if this request already committed — a concurrent duplicate can't slip in.
+      batch.create(db.collection('createRequests').doc(c.requestId), {
+        tenderId: c.tender.id,
+        serial: c.tender.serial,
+        uid: c.uid,
+        at: now(),
+      });
+    }
+    await batch.commit();
+  },
+};
+
 // ---- tenders ----
 export const tendersRepo = {
   async listAll(): Promise<TenderDoc[]> {
