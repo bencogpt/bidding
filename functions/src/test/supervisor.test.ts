@@ -276,3 +276,12 @@ test('htmlToText extracts the dev-mode document text', () => {
   assert.ok(text.includes('כמות: 10'));
   assert.ok(!text.includes('p{}'));
 });
+
+test('the system-filled bid number is not flagged as an AI-invented value', () => {
+  const tpl = { ...goods, bodyTemplate: goods.bodyTemplate + '\nמספר הבל"ם: {{bid_number}}', params: [...goods.params, { key: 'bid_number', labelHe: 'מספר', type: 'text' as const, required: true }] };
+  const t = { ...tender, params: { ...tender.params, bid_number: 'BID-2026-0023' } };
+  const doc = fill(tpl.bodyTemplate, t.params);
+  const p = { ...provenance, templateHash: templateHash(tpl) };
+  const r = codes(base({ template: tpl, tender: t, docText: doc, provenance: p }));
+  assert.ok(!r.some((c) => c.startsWith('UNSOURCED')), r.join());
+});
