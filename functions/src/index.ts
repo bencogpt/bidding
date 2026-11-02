@@ -425,6 +425,10 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
   }
   const asked = validateParams(template, input.params);
 
+  const bidReq = await bidRequestsRepo.get(input.bidRequestId);
+  if (!bidReq) throw new HttpsError('not-found', 'הבקשה לא נמצאה.');
+  if (bidReq.status !== 'open') throw new HttpsError('failed-precondition', 'הבקשה כבר הומרה למכרז.');
+
   const draft = input.draftId ? await bidDraftsRepo.get(input.draftId) : null;
   if (input.draftId && (!draft || draft.createdBy !== caller.uid)) {
     throw new HttpsError('invalid-argument', 'טיוטת ה-AI לא נמצאה.');
@@ -454,7 +458,7 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
 
   // ---- 2. serial + document ----
   const id = tendersRepo.newId();
-  const serial = await countersRepo.nextSerial(new Date(now()).getFullYear());
+  const serial = bidReq.serial;
   // The bid number is the case serial — filled by the system, never typed or guessed.
   for (const p of template.params) if (isAutoSerialParam(p)) publicParams[p.key] = serial;
   // A blank title is named by the system: the type and the case serial.
@@ -495,7 +499,7 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
     googleTemplateDocId: template.googleTemplateDocId ?? null,
     draftId: draft?.draftId ?? null,
     draftType: draft?.type ?? null,
-    brief: draft?.brief ?? (input.brief?.trim() || null),
+    brief: draft?.brief ?? bidReq.brief,
     aiModel: draft?.model ?? null,
     aiStatus: draft?.status ?? null,
     skillsUsed: draft?.status === 'FAILED' ? [] : draft?.skillsUsed ?? [],
@@ -535,7 +539,7 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
     gen = await generateTenderDocument(tender, template);
     tender.googleDocId = gen.googleDocId;
     tender.docExportPath = gen.exportPath;
-    await caseCreationRepo.commit({ tender, access, provenance, internalParams, requestId, uid: caller.uid });
+    await caseCreationRepo.commit({ tender, access, provenance, internalParams, requestId, uid: caller.uid, bidRequestSerial: bidReq.serial });
   } catch (err) {
     if (gen) await discardGeneratedDocument(id, gen);
     // A concurrent duplicate of this submission committed first — return that case.

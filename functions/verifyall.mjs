@@ -22,7 +22,9 @@ const enc = (s) => new TextEncoder().encode(s);
 
 // 1) manager: create + share + publish (caches PDF)
 await login('manager@obms.test');
+const { data: request } = await call('createBidRequest')({ brief: 'בקשת בדיקה' });
 const { data: created } = await call('createTender')({
+  bidRequestId: request.serial,
   title: 'בדיקה מקיפה חיה',
   type: 'goods',
   params: { org: 'משרד הביטחון', description: 'מצלמות IP66', quantity: 6, budget: 300000 },

@@ -218,7 +218,6 @@ export const BRIEF_MAX_LENGTH = 5000;
 export const createTenderInput = z.object({
   title: z.string().optional(), // blank: the system names the case from its type and serial
   bidRequestId: z.string().regex(/^\d{4}-\d{1,3}$/), // the request being turned into this tender (its bid number)
-  brief: z.string().max(BRIEF_MAX_LENGTH).optional(), // the requester's summary (also the AI draft's input)
   type: tenderTypeSchema,
   params: z.record(z.union([z.string(), z.number()])),
   submissionDeadline: z.number().nullable().optional(),

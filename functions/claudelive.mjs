@@ -17,7 +17,9 @@ const call = (n) => httpsCallable(fns, n);
 const login = (e) => signInWithEmailAndPassword(auth, e, 'password');
 
 await login('manager@obms.test');
+const { data: request } = await call('createBidRequest')({ brief: 'בקשת בדיקה' });
 const { data: created } = await call('createTender')({
+  bidRequestId: request.serial,
   title: 'בדיקת Claude חיה',
   type: 'goods',
   params: { org: 'בדיקה', description: 'מצלמות אבטחה IP66', quantity: 8, budget: 400000 },

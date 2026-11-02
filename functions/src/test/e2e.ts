@@ -36,6 +36,8 @@ connectFunctionsEmulator(fns, '127.0.0.1', 5001);
 
 const call = (n: string) => httpsCallable(fns, n);
 const login = (email: string) => signInWithEmailAndPassword(auth, email, 'password');
+const newRequest = async (brief = 'דרישה לבדיקה'): Promise<string> =>
+  ((await call('createBidRequest')({ brief })) as { data: { serial: string } }).data.serial;
 
 async function main() {
   // ---- manager creates a goods tender ----
@@ -47,19 +49,21 @@ async function main() {
 
   const created = (await call('createTender')({
     title: 'מכרז טובין לבדיקה',
+    bidRequestId: await newRequest(),
     type: 'goods',
     params: { org: 'משרד הביטחון', description: 'מצלמות אבטחה', quantity: 10, budget: 500000 },
     team: goodsTeam,
   })) as { data: { id: string; serial: string } };
   const tenderId = created.data.id;
   assert.ok(tenderId, 'tender id returned');
-  assert.match(created.data.serial, /^BID-\d{4}-\d{4}$/, 'serial number assigned');
+  assert.match(created.data.serial, /^\d{4}-\d{1,3}$/, 'bid number assigned');
 
   // A team slot only accepts a user with exactly that role.
   let wrongRole = false;
   try {
     await call('createTender')({
       title: 'x',
+      bidRequestId: await newRequest(),
       type: 'goods',
       params: { org: 'o', description: 'd', quantity: 1 },
       team: { legal: uidOf('finance') },
@@ -177,6 +181,7 @@ async function main() {
   // The optional "milestones" field is left empty, so {{milestones}} stays in the document.
   const bad = (await call('createTender')({
     title: 'מכרז עם חוסר',
+    bidRequestId: await newRequest(),
     type: 'project',
     params: { org: 'משרד הביטחון', scope: 'הקמת מערכת מצלמות', service: 'תחזוקה שנתית' },
     team: { requester: goodsTeam.requester, legal: legalUid }, // finance + security slots left empty
@@ -562,7 +567,7 @@ async function main() {
   const svcTeam = { ...goodsTeam, security: uidOf('security') };
   let notConverted = false;
   try {
-    await call('createTender')({ title: 'שירות', type: 'service', params: {}, team: svcTeam });
+    await call('createTender')({ title: 'שירות', bidRequestId: await newRequest(), type: 'service', params: {}, team: svcTeam });
   } catch (e) {
     notConverted = /טרם הומרה/.test((e as Error).message);
   }
@@ -593,7 +598,7 @@ async function main() {
   assert.equal(svc.fieldsStatus, 'ready');
   let missingRequired = false;
   try {
-    await call('createTender')({ title: 'שירות', type: 'service', params: { tender_number: '2026-01' }, team: svcTeam });
+    await call('createTender')({ title: 'שירות', bidRequestId: await newRequest(), type: 'service', params: { tender_number: '2026-01' }, team: svcTeam });
   } catch (e) {
     missingRequired = /שדה חובה חסר/.test((e as Error).message);
   }
@@ -602,6 +607,7 @@ async function main() {
   try {
     await call('createTender')({
       title: 'שירות',
+      bidRequestId: await newRequest(),
       type: 'service',
       params: { service_subject: '{{SERVICE_SUBJECT}}' },
       team: svcTeam,
@@ -615,6 +621,7 @@ async function main() {
   // (same requestId) returns the same case — never a copy.
   const svcInput = {
     title: 'מכרז שירותי פיתוח',
+    bidRequestId: await newRequest(),
     type: 'service',
     params: { service_subject: 'פיתוח ותחזוקה' },
     team: svcTeam,
@@ -632,6 +639,28 @@ async function main() {
   assert.equal(retried.data.duplicate, true);
   const copies = await getDocs(query(collection(db, 'tenders'), where('title', '==', 'מכרז שירותי פיתוח')));
   assert.equal(copies.size, 1, 'no duplicate case was created');
+  // A request converts to exactly one tender.
+  const reqId = await newRequest('בקשה להמרה');
+  const input = { title: '', type: 'goods', params: { org: 'א', description: 'ב', quantity: 1, budget: 1 }, team: goodsTeam, bidRequestId: reqId };
+  const first = (await call('createTender')({ ...input })) as { data: { id: string; serial: string } };
+  assert.equal(first.data.serial, reqId, 'the tender keeps the request bid number');
+  const reqDoc = await getDoc(doc(db, 'bidRequests', reqId));
+  assert.equal(reqDoc.data()?.status, 'converted');
+  assert.equal(reqDoc.data()?.tenderId, first.data.id);
+  let secondFailed = false;
+  try {
+    await call('createTender')({ ...input });
+  } catch {
+    secondFailed = true;
+  }
+  assert.ok(secondFailed, 'a converted request cannot be converted again');
+  let unknownFailed = false;
+  try {
+    await call('createTender')({ ...input, bidRequestId: '2026-998' });
+  } catch {
+    unknownFailed = true;
+  }
+  assert.ok(unknownFailed, 'an unknown request is rejected');
   console.log(`✓ template conversion: refused → analysed → converted (${report.data.fields} fields) → form enforced`);
 
   // ---- one-time migrations are idempotent ----

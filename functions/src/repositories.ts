@@ -1,5 +1,6 @@
 // Repository layer: the ONLY place that touches Firestore directly (constitution:
 // Repository Pattern — no raw firestore.collection(...).set(...) outside this file).
+import { HttpsError } from 'firebase-functions/v2/https';
 import { db, now } from './lib/admin.js';
 import { isInternalRole, formatSerial } from '@obms/shared';
 import type {
@@ -173,23 +174,31 @@ export const caseCreationRepo = {
     internalParams: Record<string, string | number>;
     requestId: string | null;
     uid: string;
+    bidRequestSerial: string;
   }): Promise<void> {
     const ref = db.collection('tenders').doc(c.tender.id);
-    const batch = db.batch();
-    batch.create(ref, c.tender);
-    for (const a of c.access) batch.set(ref.collection('access').doc(a.principalId), a);
-    batch.set(ref.collection('internal').doc('provenance'), c.provenance);
-    if (Object.keys(c.internalParams).length) batch.set(ref.collection('internal').doc('params'), c.internalParams);
-    if (c.requestId) {
-      // create() fails if this request already committed — a concurrent duplicate can't slip in.
-      batch.create(db.collection('createRequests').doc(c.requestId), {
-        tenderId: c.tender.id,
-        serial: c.tender.serial,
-        uid: c.uid,
-        at: now(),
-      });
-    }
-    await batch.commit();
+    const reqRef = db.collection('bidRequests').doc(c.bidRequestSerial);
+    await db.runTransaction(async (tx) => {
+      // Read first: the request must still be open, or a second manager would create a twin.
+      const reqSnap = await tx.get(reqRef);
+      if (!reqSnap.exists || reqSnap.get('status') !== 'open') {
+        throw new HttpsError('failed-precondition', 'הבקשה כבר הומרה למכרז.');
+      }
+      tx.create(ref, c.tender);
+      for (const a of c.access) tx.set(ref.collection('access').doc(a.principalId), a);
+      tx.set(ref.collection('internal').doc('provenance'), c.provenance);
+      if (Object.keys(c.internalParams).length) tx.set(ref.collection('internal').doc('params'), c.internalParams);
+      if (c.requestId) {
+        // create() fails if this request already committed — a concurrent duplicate can't slip in.
+        tx.create(db.collection('createRequests').doc(c.requestId), {
+          tenderId: c.tender.id,
+          serial: c.tender.serial,
+          uid: c.uid,
+          at: now(),
+        });
+      }
+      tx.update(reqRef, { status: 'converted', tenderId: c.tender.id, convertedAt: now() });
+    });
   },
 };
 
