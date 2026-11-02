@@ -24,6 +24,8 @@ export async function transition(
     );
   }
   await tendersRepo.update(tenderId, { status: to });
+  // Every review round starts with no approvals.
+  if (to === 'internal_review') await tendersRepo.clearApprovals(tenderId);
   await auditRepo.append({
     entityType: 'tender',
     entityId: tenderId,

@@ -2,6 +2,7 @@
 // Run via:  firebase emulators:exec --only auth,firestore,functions,storage \
 //             "npm run seed && node functions/lib/test/e2e.js"
 import assert from 'node:assert/strict';
+import { REQUIRE_APPROVALS } from '@obms/shared';
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
@@ -36,6 +37,17 @@ connectFunctionsEmulator(fns, '127.0.0.1', 5001);
 
 const call = (n: string) => httpsCallable(fns, n);
 const login = (email: string) => signInWithEmailAndPassword(auth, email, 'password');
+
+// Each given role signs off the tender in review, then the manager is signed back in.
+async function approveAs(tenderId: string, roles: string[]) {
+  for (const role of roles) {
+    await signOut(auth);
+    await login(role + '@obms.test');
+    await call('approveTender')({ tenderId, approve: true });
+  }
+  await signOut(auth);
+  await login('manager@obms.test');
+}
 
 async function main() {
   // ---- manager creates a goods tender ----
@@ -165,6 +177,14 @@ async function main() {
   assert.ok(earlyShareDenied, 'suppliers cannot be granted access before publication');
 
   await call('transitionTender')({ tenderId, to: 'internal_review' });
+  let notApproved = false;
+  try {
+    await call('transitionTender')({ tenderId, to: 'ready' });
+  } catch (e) {
+    notApproved = /ממתין לאישור/.test((e as Error).message);
+  }
+  assert.ok(notApproved || !REQUIRE_APPROVALS, 'final approval is refused until every role has approved');
+  await approveAs(tenderId, ['requester', 'legal', 'finance']);
   await call('transitionTender')({ tenderId, to: 'ready' });
   const published = (await call('transitionTender')({ tenderId, to: 'published' })) as {
     data: { verdict: string };
@@ -197,6 +217,7 @@ async function main() {
   await call('assignTeamMember')({ tenderId: bad.data.id, role: 'security', uid: uidOf('security') });
   await call('transitionTender')({ tenderId: bad.data.id, to: 'internal_review' });
   console.log('✓ review gate: refused with an empty slot, passes once the team is complete');
+  await approveAs(bad.data.id, ['requester', 'legal', 'finance', 'security']);
   await call('transitionTender')({ tenderId: bad.data.id, to: 'ready' });
   let blocked = false;
   try {

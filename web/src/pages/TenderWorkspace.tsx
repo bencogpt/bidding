@@ -13,7 +13,7 @@ import {
   useTemplate,
   useChat,
 } from '../lib/hooks';
-import { REQUIRED_ROLES_BY_TYPE, missingRoles } from '@obms/shared';
+import { REQUIRED_ROLES_BY_TYPE, REQUIRE_APPROVALS, missingRoles, missingApprovals } from '@obms/shared';
 import TeamPanel from '../components/TeamPanel';
 import ChatPanel from '../components/ChatPanel';
 import { api } from '../lib/api';
@@ -79,7 +79,8 @@ export default function TenderWorkspace() {
     setBusy(true);
     setError('');
     try {
-      await api.transitionTender({ tenderId: tender.id, to, overrideReason: override });
+      // Left out when absent: an undefined field is sent as null, which the server rejects.
+      await api.transitionTender({ tenderId: tender.id, to, ...(override ? { overrideReason: override } : {}) });
       setBlocked(false);
       setOverrideReason('');
     } catch (e) {
@@ -88,6 +89,23 @@ export default function TenderWorkspace() {
         setBlocked(true);
         setTab('supervisor');
       }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Sign-offs of the case team in internal review: one per required role.
+  const requiredRoles = tender.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[tender.type] ?? [];
+  const waiting = missingApprovals(requiredRoles, tender.team, tender.approvals);
+  const myApproved = requiredRoles.some((r) => tender.team?.[r] === user?.uid && !waiting.includes(r));
+  const iHoldSlot = requiredRoles.some((r) => tender.team?.[r] === user?.uid);
+  const setApproval = async (approve: boolean) => {
+    setBusy(true);
+    setError('');
+    try {
+      await api.approveTender({ tenderId: tender.id, approve });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -113,7 +131,7 @@ export default function TenderWorkspace() {
   if (isManager) {
     if (tender.status === 'draft') {
       action = {
-        label: t('ws.sendToReview'),
+        label: t('ws.finalApprove'),
         onClick: () => transitionTo('internal_review'),
         disabled: busy || missing.length > 0,
         title: missing.length
@@ -121,7 +139,14 @@ export default function TenderWorkspace() {
           : undefined,
       };
     } else if (tender.status === 'internal_review') {
-      action = { label: t('ws.markReady'), onClick: () => transitionTo('ready'), disabled: busy };
+      action = {
+        label: t('ws.finalApprove'),
+        onClick: () => transitionTo('ready'),
+        disabled: busy || (REQUIRE_APPROVALS && waiting.length > 0),
+        title: REQUIRE_APPROVALS && waiting.length
+          ? t('ws.awaitingApproval', { roles: waiting.map((r) => t(`role.${r}`)).join(', ') })
+          : undefined,
+      };
     } else if (tender.status === 'ready') {
       action = {
         label: busy ? t('sup.checking') : t('ws.publish'),
@@ -132,13 +157,24 @@ export default function TenderWorkspace() {
       action = { label: t('ws.toEvaluation'), onClick: () => setTab('evaluation') };
     }
   }
+  // A team member (not the manager) signs off through the same button.
+  if (REQUIRE_APPROVALS && !isManager && iHoldSlot && tender.status === 'internal_review') {
+    action = myApproved
+      ? { label: t('ws.withdrawApproval'), onClick: () => setApproval(false), disabled: busy }
+      : { label: t('ws.approve'), onClick: () => setApproval(true), disabled: busy };
+  }
   const ownerName =
     users.find((u) => u.uid === tender.ownerUid)?.displayName ??
     access.find((a) => a.principalId === tender.ownerUid)?.displayName;
 
   return (
     <div>
-      <TenderHeader tender={tender} ownerName={ownerName} action={action}>
+      <TenderHeader
+        tender={tender}
+        ownerName={ownerName}
+        action={action}
+        approvals={REQUIRE_APPROVALS ? { slots: requiredRoles.map((r) => !waiting.includes(r)) } : undefined}
+      >
         <div className="mt-3 flex gap-1">
           {tabs.map((tb) => (
             <button
@@ -194,7 +230,7 @@ export default function TenderWorkspace() {
       {tab === 'document' && (
         <div className="grid items-start gap-4 lg:grid-cols-[1fr_340px]">
           <DocumentViewer tenderId={tender.id} googleDocId={tender.googleDocId} />
-          <ChatPanel tenderId={tender.id} messages={chat.messages} />
+          <ChatPanel tenderId={tender.id} title={tender.title} messages={chat.messages} />
         </div>
       )}
       {tab === 'access' && (

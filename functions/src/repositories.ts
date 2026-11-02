@@ -1,7 +1,9 @@
 // Repository layer: the ONLY place that touches Firestore directly (constitution:
 // Repository Pattern — no raw firestore.collection(...).set(...) outside this file).
+import { FieldValue } from 'firebase-admin/firestore';
 import { db, now } from './lib/admin.js';
 import { isInternalRole, formatSerial } from '@obms/shared';
+import type { TeamRole, TeamApproval } from '@obms/shared';
 import type {
   TenderDoc,
   AccessDoc,
@@ -188,6 +190,20 @@ export const tendersRepo = {
     await db.collection('tenders').doc(id).set(stripUndefined({ ...patch, updatedAt: now() }), {
       merge: true,
     });
+  },
+  /** Record (or, with null, withdraw) one role's approval. Written by path so the others stay. */
+  async setApproval(id: string, role: TeamRole, approval: TeamApproval | null): Promise<void> {
+    await db
+      .collection('tenders')
+      .doc(id)
+      .update({
+        [`approvals.${role}`]: approval ?? FieldValue.delete(),
+        updatedAt: now(),
+      });
+  },
+  /** Start a clean round of approvals (a review begins). */
+  async clearApprovals(id: string): Promise<void> {
+    await db.collection('tenders').doc(id).update({ approvals: FieldValue.delete() });
   },
 };
 

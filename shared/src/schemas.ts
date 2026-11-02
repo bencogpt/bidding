@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { TENDER_STATUSES } from './tender.js';
 import type { SupervisionSummary, ValueSource, BidDraftRecord } from './supervision.js';
-import { createTenderTeamFields, type CaseTeam, type TeamRole } from './team.js';
+import { createTenderTeamFields, type CaseApprovals, type CaseTeam, type TeamRole } from './team.js';
 
 // Inline string-literal tuples so z.enum infers a literal union (passing values from a
 // const object widens to a non-tuple and fails tsc).
@@ -121,6 +121,7 @@ export type TenderDoc = z.infer<typeof tenderDocSchema> & {
   team?: CaseTeam; // role → uid (one user per required role)
   requiredRoles?: TeamRole[];
   memberUids?: string[]; // owner + team: the only internal users (besides managers) who see the case
+  approvals?: CaseApprovals; // role → sign-off during internal review; cleared when a review starts
 };
 
 export const accessDocSchema = z.object({
