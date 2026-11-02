@@ -16,7 +16,7 @@ const fmtWithTime = (ms: number) => {
 const fromParam = (v: unknown): string | null => {
   const s = String(v ?? '').trim();
   if (!s || s.includes('{{')) return null; // empty, or the placeholder is still unfilled
-  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const iso = s.match(/^(\d{4})[-/](\d{2})[-/](\d{2})/); // 2026-12-16 or 2026/12/16
   if (iso) return `${iso[3]}.${iso[2]}.${iso[1]}`;
   return /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s) ? s.replace(/\//g, '.') : s;
 };
@@ -42,20 +42,30 @@ export default function DatesCard({
     { label: 'overview.datePublish', value: fmt(tender.createdAt) },
     {
       label: 'overview.dateConference',
-      value: paramValue(
-        ['כנס מציעים', 'כנס ספקים'],
-        ['bidders_conference', 'bidders_conference_date', 'conference_date', 'bidder_conference_date'],
-      ),
+      // gathering_date / gathering_hour are the fields these templates use for the conference.
+      value: [
+        paramValue(
+          ['כנס מציעים', 'כנס ספקים'],
+          ['gathering_date', 'bidders_conference_date', 'conference_date'],
+        ),
+        fromParam(tender.params.gathering_hour),
+      ]
+        .reverse()
+        .filter(Boolean)
+        .join(' ') || null,
     },
     {
       label: 'overview.dateQuestions',
-      value: paramValue(['מועד אחרון לשאלות'], ['questions_deadline', 'clarification_deadline']),
+      value: paramValue(
+        ['מועד אחרון לשאלות'],
+        ['clarifications_deadline', 'clarification_deadline', 'questions_deadline'],
+      ),
     },
     {
       label: 'overview.dateSubmission',
       value: tender.submissionDeadline
         ? fmtWithTime(tender.submissionDeadline)
-        : fromParam(tender.params.submission_date),
+        : fromParam(tender.params.submission_date ?? tender.params.submission_day_date),
     },
   ];
 
