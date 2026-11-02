@@ -15,7 +15,6 @@ import Suppliers from './pages/Suppliers';
 import Templates from './pages/Templates';
 import Reports from './pages/Reports';
 import Audit from './pages/Audit';
-import DocxTest from './pages/DocxTest';
 import SupplierPortal from './pages/SupplierPortal';
 import SupplierTender from './pages/SupplierTender';
 
@@ -59,7 +58,6 @@ export default function App() {
         <Route path="/suppliers" element={<Suppliers />} />
         <Route path="/reports" element={managerOnly(<Reports />)} />
         <Route path="/audit" element={managerOnly(<Audit />)} />
-        <Route path="/docx-test" element={managerOnly(<DocxTest />)} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
