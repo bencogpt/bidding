@@ -23,6 +23,7 @@ import {
   serverTimestamp,
 } from 'firebase/firestore';
 import { getFunctions, connectFunctionsEmulator, httpsCallable } from 'firebase/functions';
+import { SKILL_IDS } from '@obms/shared';
 import { initializeApp as initAdmin } from 'firebase-admin/app';
 import { getFirestore as adminFirestore } from 'firebase-admin/firestore';
 
@@ -497,7 +498,7 @@ async function main() {
   const catalog = (await call('getSkillsCatalog')({})) as {
     data: { skills: unknown[]; required: { goods: string[] }; legalSections: unknown[] };
   };
-  assert.equal(catalog.data.skills.length, 19, 'all skills in the catalog');
+  assert.equal(catalog.data.skills.length, SKILL_IDS.length, 'all skills in the catalog');
   assert.ok(catalog.data.required.goods.includes('s11-legal-compliance'), 'goods requires the legal skill');
   assert.equal(catalog.data.legalSections.length, 9, '9 mandatory legal sections');
   console.log('✓ skills catalog served read-only');
