@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   TENDER_TYPES,
@@ -10,7 +10,6 @@ import {
   hasPlaceholder,
   isAutoSerialParam,
   askedParams,
-  BRIEF_MAX_LENGTH,
   guaranteeDefault,
   shekelsInWords,
   SERVICE_KEYS,
@@ -21,7 +20,7 @@ import {
   type TeamRole,
   type TenderType,
 } from '@obms/shared';
-import { useTemplate, useUsers } from '../lib/hooks';
+import { useBidRequest, useTemplate, useUsers } from '../lib/hooks';
 import { api } from '../lib/api';
 import TagsInput from '../components/TagsInput';
 
@@ -44,20 +43,22 @@ const NO = 'לא';
 export default function TenderCreate() {
   const { t } = useTranslation();
   const nav = useNavigate();
+  const { serial } = useParams();
+  const { request } = useBidRequest(serial);
+  const brief = request?.brief ?? '';
   const [title, setTitle] = useState('');
-  const [type, setType] = useState<TenderType>(TENDER_TYPES.service);
+  const [type, setType] = useState<TenderType | ''>('');
   const [deadline, setDeadline] = useState('');
   const [params, setParams] = useState<Record<string, string>>({});
   const [domainTags, setDomainTags] = useState<string[]>([]);
   const [criteria, setCriteria] = useState<Criterion[]>([]);
-  const [brief, setBrief] = useState('');
   // AI draft provenance: linked to the tender so the supervisor can trace every value.
   const [draftId, setDraftId] = useState<string | null>(null);
   const [draftNote, setDraftNote] = useState('');
   const [drafting, setDrafting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const template = useTemplate(type);
+  const template = useTemplate(type || undefined);
   // One id per form: if a submission's answer is lost and the user retries, the server returns the
   // case it already created instead of making a copy.
   const requestId = useRef(crypto.randomUUID());
@@ -65,7 +66,7 @@ export default function TenderCreate() {
   // Case team: one user per required role (type defaults + roles the manager adds).
   const [team, setTeam] = useState<CaseTeam>({});
   const [extraRoles, setExtraRoles] = useState<TeamRole[]>([]);
-  const requiredRoles = requiredRolesFor(type, extraRoles);
+  const requiredRoles = requiredRolesFor(type || TENDER_TYPES.service, extraRoles);
   // A template that still has Word-style blanks (XXXX / ____) can't be used until it is converted.
   const templateStatus = template
     ? templateFieldsStatus(template.bodyTemplate ?? '', template.supplierFillQuotes ?? [])
@@ -98,14 +99,15 @@ export default function TenderCreate() {
       (p.defaultFrom === 'guarantee_pct' ? String(guaranteeDefault(params[SERVICE_KEYS.estimate]) ?? '') : '')
     );
   };
-  const runDraft = async () => {
+  const runDraft = async (forType: TenderType) => {
     if (brief.trim().length < 3) return;
     setDrafting(true);
     setError('');
     try {
-      const d = await api.draftBid({ type, brief });
+      const d = await api.draftBid({ type: forType, brief });
       setDraftId(d.draftId);
-      const labelOf = (k: string) => template?.params.find((p) => p.key === k)?.labelHe ?? k;
+      // labels come from the template of the type just picked
+      const labelOf = (k: string) => (forType === type ? template : undefined)?.params.find((p) => p.key === k)?.labelHe ?? k;
       setDraftNote(
         d.status === 'FAILED'
           ? t('create.draftFailed')
@@ -117,8 +119,7 @@ export default function TenderCreate() {
       setParams(Object.fromEntries(Object.entries(d.params ?? {}).map(([k, v]) => [k, String(v)])));
       setDomainTags(d.domainTags ?? []);
       setCriteria(d.evaluationCriteria ?? []);
-      if (d.submissionDeadlineDays)
-        setDeadline(toLocalInput(Date.now() + d.submissionDeadlineDays * 86400000));
+      if (d.submissionDeadlineDays) setDeadline(toLocalInput(Date.now() + d.submissionDeadlineDays * 86400000));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -126,15 +127,25 @@ export default function TenderCreate() {
     }
   };
 
+  // Picking (or changing) the type discards the previous draft and drafts again from that template.
+  const pickType = (next: TenderType | '') => {
+    setType(next);
+    setParams({});
+    setTitle('');
+    setDomainTags([]);
+    setCriteria([]);
+    setDeadline('');
+    setDraftId(null); // a draft is bound to the template type it was made for
+    setDraftNote('');
+    if (next) void runDraft(next);
+  };
+
   // Fields still holding the AI draft's {{PLACEHOLDER}} — the brief didn't give the value.
   const unfilled = asked.filter((p) => hasPlaceholder(params[p.key]));
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (ordered && brief.trim().length < 3) {
-      setError(t('create.briefRequired'));
-      return;
-    }
+    if (!type || !serial) return;
     if (unfilled.length) {
       setError(t('create.fillPlaceholders', { fields: unfilled.map((p) => p.labelHe).join(', ') }));
       document.getElementById(`param-${unfilled[0].key}`)?.focus();
@@ -165,7 +176,7 @@ export default function TenderCreate() {
       }
       const { id } = await api.createTender({
         title,
-        brief,
+        bidRequestId: serial,
         type,
         params: numericParams,
         submissionDeadline: deadline ? new Date(deadline).getTime() : null,
@@ -255,28 +266,32 @@ export default function TenderCreate() {
     </div>
   );
 
+  if (request === undefined) return <div className="p-6 text-tx-soft">{t('common.loading')}</div>;
+  if (request === null) return <div className="p-6 text-red-600">{t('req.notFound')}</div>;
+  if (request.status === 'converted')
+    return (
+      <div className="mx-auto max-w-2xl card space-y-3 p-6">
+        <div>{t('req.alreadyConverted')}</div>
+        {request.tenderId && (
+          <Link to={`/tenders/${request.tenderId}`} className="btn btn-gold">
+            {t('req.openCase')}
+          </Link>
+        )}
+      </div>
+    );
+
   return (
     <div className="mx-auto max-w-2xl">
-      <h1 className="mb-2 font-display text-2xl font-bold">{t('create.title')}</h1>
-      <p className="mb-6 text-sm text-tx-soft">{t('create.typeNote')}</p>
-
-      {/* Agentic brief → AI draft */}
-      <div className="card mb-5 space-y-3 p-6">
-        <div>
-          <label className="label">{t('create.brief')}{ordered && <span className="text-red-600"> *</span>}</label>
-          <textarea
-            className="input min-h-20"
-            maxLength={BRIEF_MAX_LENGTH}
-            placeholder={t('create.briefPlaceholder')}
-            value={brief}
-            onChange={(e) => setBrief(e.target.value)}
-          />
+      <h1 className="mb-2 font-display text-2xl font-bold">{t('req.phase2Title')}</h1>
+      <p className="mb-6 text-sm text-tx-soft">{t('req.phase2Hint')}</p>
+      <div className="card mb-5 space-y-2 p-6">
+        <div className="text-sm">
+          <span className="text-tx-soft">{t('req.bidNumber')}: </span>
+          <span className="font-semibold">{request.serial}</span>
+          <span className="mr-4 text-tx-soft">{t('req.requestedBy')}: </span>
+          {request.requesterName}
         </div>
-        <button type="button" className="btn btn-gold" disabled={drafting || brief.trim().length < 3} onClick={runDraft}>
-          {drafting ? t('create.drafting') : `✨ ${t('create.aiDraft')}`}
-        </button>
-        <p className="text-xs text-tx-mute">{t('create.aiDraftHint')}</p>
-        {draftNote && <div className="rounded bg-amber-100 p-2 text-xs text-amber-700">{draftNote}</div>}
+        <div className="whitespace-pre-wrap rounded bg-paper-2 p-3 text-sm">{request.brief}</div>
       </div>
 
       {notConverted && (
@@ -290,20 +305,20 @@ export default function TenderCreate() {
           <select
             className="input"
             value={type}
-            onChange={(e) => {
-              setType(e.target.value as TenderType);
-              setParams({});
-              setDraftId(null); // a draft is bound to the template type it was made for
-              setDraftNote('');
-            }}
+            onChange={(e) => pickType(e.target.value as TenderType | '')}
           >
+            <option value="">{t('req.pickType')}</option>
             {Object.values(TENDER_TYPES).map((tt) => (
               <option key={tt} value={tt}>
                 {t(`type.${tt}`)}
               </option>
             ))}
           </select>
+          {drafting && <div className="mt-2 text-sm text-tx-soft">{t('create.drafting')}</div>}
+          {draftNote && <div className="mt-2 rounded bg-amber-100 p-2 text-xs text-amber-700">{draftNote}</div>}
         </div>
+        {type && (
+          <>
         <div>
           <label className="label">{t('create.tenderTitle')}</label>
           <input
@@ -400,8 +415,11 @@ export default function TenderCreate() {
 
         {!ordered && deadlineField}
 
+          </>
+        )}
+
         {error && <div className="text-sm text-red-600">{error}</div>}
-        <button className="btn btn-gold" disabled={busy || notConverted}>
+        <button className="btn btn-gold" disabled={busy || drafting || notConverted}>
           {busy ? t('create.creating') : t('create.submit')}
         </button>
       </form>

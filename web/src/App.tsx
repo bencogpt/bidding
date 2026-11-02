@@ -47,12 +47,12 @@ export default function App() {
     <Routes>
       <Route element={<InternalLayout />}>
         <Route path="/" element={<Dashboard />} />
-        <Route path="/tenders/new" element={managerOnly(<TenderCreate />)} />
         <Route
           path="/requests/new"
           element={role === 'tender_manager' || role === 'requester' ? <RequestCreate /> : <Navigate to="/" replace />}
         />
-        <Route path="/tenders/:id"element={<TenderWorkspace />} />
+        <Route path="/requests/:serial" element={managerOnly(<TenderCreate />)} />
+        <Route path="/tenders/:id" element={<TenderWorkspace />} />
         <Route path="/templates" element={managerOnly(<Templates />)} />
         <Route path="/users" element={managerOnly(<InternalUsers />)} />
         <Route path="/suppliers" element={<Suppliers />} />
