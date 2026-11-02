@@ -83,6 +83,10 @@ scope, and for now the address and PO box). Fill a field only if the brief
 or requester input states it clearly.
 Write what they said and record the sentence as the source.
 
+Email addresses (for example, the address for clarification questions) are
+always specified by the user and change per bid. Never default, guess or
+copy one from an earlier bid or an example.
+
 For every other field, leave `{{FIELD_NAME}}` and raise a `MISSING_INFO`
 flag (G2). Never copy a value from an example bid (G1). Don't fill the
 estimate or any confidential field (G6).
