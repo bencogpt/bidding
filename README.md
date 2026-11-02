@@ -58,6 +58,76 @@ isolated external view.
 | Human oversight of AI | §5.5 | Advisory banner + manual award override |
 | Blind review / anonymization | §6.2 | Supplier A–D codes + de-anonymize action |
 
+## Firebase app — what has been built so far
+
+The static demo above is the original prototype. The real Hebrew (RTL) system lives in
+`shared/`, `functions/` and `web/` (Firebase project `biding-system`); see `RUNNING.md` to run it
+on the emulators. Work done so far on the tender-creation flow:
+
+- **Services create form reordered** to the agreed field table: required flags, system-filled
+  fields (guarantee amount in words, total months, submission weekday, manager/requester details,
+  fixed texts such as the bid box location), a "qualitative bid" checkbox and an
+  economic/quality score split (quality = 100 − economic).
+- **Two-phase creation** — requester opens a request, procurement completes it. See the next section.
+- **Tests:** unit tests for the bid-number format and allocator, Firestore rules tests for
+  `bidRequests`, and e2e checks for conversion (single, double and concurrent).
+- **Not yet done:** a manual browser click-through of both phases; the AI draft needs an Anthropic
+  API key to run (it cannot in the emulator).
+
+### Two-phase tender creation
+
+Creating a tender is split into two screens and two roles. Design:
+`docs/superpowers/specs/2026-11-02-two-phase-create-request-design.md`; implementation plan:
+`docs/superpowers/plans/2026-11-02-two-phase-create-request.md`.
+
+```
+requester ──► Phase 1: open a request ──► bidRequests/{bid number}  (status: open)
+                                                    │
+tender manager ◄── dashboard "בקשות ממתינות" ◄──────┘
+      │
+      └──► Phase 2: pick סוג המכרז ─► LLM drafts from that type's template
+                  ─► manager completes the form ─► createTender
+                  ─► tender (same bid number)  +  request marked converted (one transaction)
+```
+
+**Phase 1 — "שלב 1 — פתיחת בקשה (הדורש)"** (`/requests/new`, requester or tender manager)
+- The only field is תקציר המכרז (required, 3 to 5000 characters after trimming).
+- Submitting creates the request and shows its bid number. The number is kept with the case and
+  appears in the generated בל"מ document. No AI call and no document are produced at this step.
+- A retried submit (same form) returns the request already opened instead of creating a second one.
+
+**Bid number** — `[year]-[n]`, for example `2026-31`
+- `n` is a random number from 1 to 999. Leading zeros are dropped (031 becomes 31).
+- The year is the Israel-time year, so a request created at 00:30 on 1 January is already next year.
+- The number is the document id of the request, so it is unique per year. On a collision the
+  system draws again; if all 999 numbers of a year are used it fails with a clear Hebrew error.
+- It replaces the old `BID-YYYY-NNNN` serial for new cases only; existing cases keep theirs.
+
+**Phase 2 — "שלב 2 — השלמת הבל"מ (איש רכש)"** (`/requests/:serial`, tender manager only)
+- The manager opens a request from the "בקשות ממתינות" list on the dashboard. The bid number and
+  the requester's summary are shown read-only at the top.
+- Choosing סוג המכרז triggers the LLM draft from that type's template. Changing the type discards
+  the previous draft and drafts again; a slow earlier draft can never overwrite a newer one.
+- The rest is the ordered form for that type. The case requester defaults to the person who
+  opened the request.
+- An unknown request, or one that was already converted, shows a clear message (the converted one
+  links to its case) instead of an empty form.
+
+**Backend**
+- `createBidRequest` callable: requester or tender manager. Validates the summary, allocates the
+  number, writes `bidRequests/{serial}`, adds an audit entry.
+- `createTender` now takes `bidRequestId` (the request's bid number) instead of a summary. It
+  creates the tender, its access and provenance, and marks the request `converted` in a single
+  Firestore transaction, so a request becomes exactly one tender even if two managers try at once.
+  `createTender` and `draftBid` remain tender-manager only.
+- Firestore rules: a requester reads only their own requests, managers read all, and nobody writes
+  from the client.
+
+**Try it** (emulators and `npm run seed` running, see `RUNNING.md`)
+1. Log in as `requester@obms.test` / `password`, open **בקשה חדשה**, enter a summary and submit.
+2. Log in as `manager@obms.test` / `password`, open the request under **בקשות ממתינות**, pick a
+   type, complete the form and create the case. The case carries the request's bid number.
+
 ## Notes
 
 - Static prototype: all data is mocked in `data.js`; state changes live in-memory
