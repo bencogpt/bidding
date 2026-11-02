@@ -47,7 +47,7 @@ npm run dev:web
 | ספק (מרידיאן) | b@meridian.test | password |
 
 ## End-to-end flow to verify
-1. Sign in as `manager@obms.test` → **מכרז חדש** → choose *מכרז טובין*, fill params → create.
+1. Sign in as `manager@obms.test` → **בל"מ חדש** → choose *מכרז טובין*, fill params → create.
    System generates the document from the goods template.
 2. In the workspace open **מסמך המכרז** → the rendered doc shows (manager-only edit notice).
 3. **שיתוף והרשאות** → share with a supplier + assign legal/finance reviewers → **עדכן הרשאות**.

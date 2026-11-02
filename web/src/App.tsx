@@ -8,6 +8,7 @@ import InternalUsers from './pages/InternalUsers';
 import InternalLayout from './layouts/InternalLayout';
 import SupplierLayout from './layouts/SupplierLayout';
 import Dashboard from './pages/Dashboard';
+import MyDesk from './pages/MyDesk';
 import TenderCreate from './pages/TenderCreate';
 import TenderWorkspace from './pages/TenderWorkspace';
 import Suppliers from './pages/Suppliers';
@@ -45,7 +46,8 @@ export default function App() {
   return (
     <Routes>
       <Route element={<InternalLayout />}>
-        <Route path="/" element={<Dashboard />} />
+        <Route path="/" element={<MyDesk />} />
+        <Route path="/all" element={<Dashboard />} />
         <Route path="/tenders/new" element={managerOnly(<TenderCreate />)} />
         <Route path="/tenders/:id" element={<TenderWorkspace />} />
         <Route path="/templates" element={managerOnly(<Templates />)} />

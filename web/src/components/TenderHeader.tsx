@@ -40,7 +40,7 @@ export default function TenderHeader({
     <div className="sticky top-0 z-20 -mx-8 -mt-8 mb-4 border-b border-paper-2 bg-paper px-8 pt-5">
       <div className="card flex items-center gap-3 px-5 py-4">
         <Link
-          to="/"
+          to="/all"
           title={t('ws.backToAll')}
           className="grid h-8 w-8 shrink-0 self-start place-items-center rounded border border-paper-2 text-tx-soft hover:border-tx-mute hover:text-tx"
         >

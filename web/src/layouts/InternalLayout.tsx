@@ -31,7 +31,7 @@ export default function InternalLayout() {
   const isManager = role === 'tender_manager';
   const pendingFeedback = useMyFeedbackRequests(user?.uid);
   // The dashboard list uses the full width and height of the screen; other pages stay a centred column.
-  const fullScreen = useLocation().pathname === '/';
+  const fullScreen = useLocation().pathname === '/all';
 
   return (
     <div className="flex h-full">
@@ -41,7 +41,8 @@ export default function InternalLayout() {
           <div className="text-xs text-white/50">{t('app.subtitle')}</div>
         </div>
         <nav className="flex-1 space-y-1">
-          <NavItem to="/" label={t('nav.dashboard')} badge={pendingFeedback.length} />
+          <NavItem to="/" label={t('nav.myDesk')} badge={pendingFeedback.length} />
+          <NavItem to="/all" label={t('nav.dashboard')} />
           {isManager && <NavItem to="/tenders/new" label={t('nav.newTender')} />}
           {isManager && <NavItem to="/templates" label={t('nav.templates')} />}
           {isManager && <NavItem to="/users" label={t('nav.users')} />}
