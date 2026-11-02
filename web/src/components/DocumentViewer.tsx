@@ -6,8 +6,6 @@ import { useAuth } from '../auth/AuthProvider';
 
 // Renders the tender document fetched through a Cloud Function (authorization checked
 // server-side). Suppliers see the same in-system render — never the raw Google Doc.
-type Doc = { kind: 'html'; content: string } | { kind: 'pdf'; dataUrl: string };
-
 // ok = every field in the section is filled; gaps = {{placeholders}} are still unfilled.
 type OutlineItem = { text: string; level: number; status: 'ok' | 'gaps' };
 
@@ -25,7 +23,9 @@ export default function DocumentViewer({
     isInternalRole(role ?? undefined) && googleDocId
       ? `https://docs.google.com/document/d/${googleDocId}/edit`
       : null;
-  const [doc, setDoc] = useState<Doc | null>(null);
+  const [html, setHtml] = useState<string | null>(null);
+  // Editing swaps the read-only render for the Google Doc editor (same permissions as the Doc).
+  const [editing, setEditing] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -34,25 +34,20 @@ export default function DocumentViewer({
   const [fullscreen, setFullscreen] = useState(false);
   const [active, setActive] = useState(0);
 
+  // Reloads when leaving the editor, so the render shows what was just edited.
   useEffect(() => {
+    if (editing) return;
     let alive = true;
     setLoading(true);
     api
       .getTenderDocument({ tenderId })
-      .then((r) => {
-        if (!alive) return;
-        setDoc(
-          r.kind === 'pdf'
-            ? { kind: 'pdf', dataUrl: `data:application/pdf;base64,${r.dataBase64}` }
-            : { kind: 'html', content: r.content },
-        );
-      })
+      .then((r) => alive && setHtml(r.content))
       .catch((e) => alive && setError(e instanceof Error ? e.message : String(e)))
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
     };
-  }, [tenderId]);
+  }, [tenderId, editing]);
 
   useEffect(() => {
     const onChange = () => setFullscreen(document.fullscreenElement === boxRef.current);
@@ -95,6 +90,15 @@ export default function DocumentViewer({
     });
   };
   const readOutline = () => {
+    // Exported documents carry fixed widths; keep them inside the frame (no sideways scrolling).
+    const d = frameRef.current?.contentDocument;
+    if (d?.head) {
+      const fit = d.createElement('style');
+      fit.textContent =
+        'html,body{overflow-x:hidden}body{width:auto!important;box-sizing:border-box}' +
+        '*{max-width:100%;box-sizing:border-box}';
+      d.head.appendChild(fit);
+    }
     promoteHeadings();
     const hs = headingsOf();
     setOutline(
@@ -114,8 +118,12 @@ export default function DocumentViewer({
       setActive(idx);
     });
   };
-  const jumpTo = (i: number) =>
-    headingsOf()[i]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  // Scroll only the document frame: scrollIntoView would also scroll the surrounding page.
+  const jumpTo = (i: number) => {
+    const w = frameRef.current?.contentWindow;
+    const h = headingsOf()[i];
+    if (w && h) w.scrollTo({ top: h.getBoundingClientRect().top + w.scrollY - 8, behavior: 'smooth' });
+  };
 
   const print = () => {
     const w = frameRef.current?.contentWindow;
@@ -137,15 +145,15 @@ export default function DocumentViewer({
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-paper-2 bg-gold-soft/40 px-4 py-2 text-xs text-gold-deep">
         <span>{docUrl ? t('ws.docCollaborate') : t('ws.docManagerOnly')}</span>
         <span className="no-print flex items-center gap-2">
-          {doc?.kind === 'html' && (
+          {!editing && (
             <button className="btn btn-sm" onClick={print}>
               {t('doc.print')}
             </button>
           )}
-          {doc?.kind === 'pdf' && (
-            <a className="btn btn-sm" href={doc.dataUrl} download={`tender-${tenderId}.pdf`}>
-              {t('doc.download')}
-            </a>
+          {docUrl && (
+            <button className="btn btn-sm" onClick={() => setEditing((e) => !e)}>
+              {editing ? t('doc.doneEditing') : t('doc.edit')}
+            </button>
           )}
           <button className="btn btn-sm" onClick={toggleFullscreen}>
             {fullscreen ? t('doc.exitFullscreen') : t('doc.fullscreen')}
@@ -158,7 +166,7 @@ export default function DocumentViewer({
         </span>
       </div>
       <div className="flex min-h-0 flex-1">
-        {outline.length > 1 && (
+        {!editing && outline.length > 1 && (
           <nav className="w-56 shrink-0 overflow-y-auto border-e border-paper-2 p-3 text-sm">
             <div className="mb-2 px-1 text-xs font-semibold text-tx-mute">{t('doc.outline')}</div>
             <ul className="space-y-0.5">
@@ -187,14 +195,21 @@ export default function DocumentViewer({
           </nav>
         )}
         <div className="min-w-0 flex-1 bg-paper-2 p-4">
-          <iframe
-            ref={frameRef}
-            title="tender-document"
-            srcDoc={doc?.kind === 'html' ? doc.content : undefined}
-            src={doc?.kind === 'pdf' ? doc.dataUrl : undefined}
-            onLoad={readOutline}
-            className={`mx-auto block w-full max-w-4xl border-0 bg-white shadow-card ${frameHeight}`}
-          />
+          {editing && docUrl ? (
+            <iframe
+              title="tender-document-editor"
+              src={docUrl}
+              className={`block w-full border-0 bg-white shadow-card ${frameHeight}`}
+            />
+          ) : (
+            <iframe
+              ref={frameRef}
+              title="tender-document"
+              srcDoc={html ?? undefined}
+              onLoad={readOutline}
+              className={`mx-auto block w-full max-w-4xl border-0 bg-white shadow-card ${frameHeight}`}
+            />
+          )}
         </div>
       </div>
     </div>

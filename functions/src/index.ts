@@ -91,7 +91,7 @@ import {
   generateTenderDocument,
   getViewable,
   setDocumentPermissions,
-  cacheTenderPdf,
+  cacheTenderHtml,
   createTemplateDoc as createTemplateDocInDrive,
   readTemplateDocText,
   googleIdentityOf,
@@ -583,9 +583,9 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
   await transition(caller, input.tenderId, input.to);
 
   if (input.to === 'published' && gate) {
-    // Cache the exported PDF at publish so suppliers load it fast (no live Google export).
+    // Cache the exported HTML at publish so suppliers load it fast (no live Google export).
     const tender = await tendersRepo.get(input.tenderId);
-    const path = tender ? await cacheTenderPdf(tender) : null;
+    const path = tender ? await cacheTenderHtml(tender) : null;
     await tendersRepo.update(input.tenderId, {
       ...(path ? { docExportPath: path } : {}),
       publishedDocHash: gate.docHash,
@@ -602,7 +602,7 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
   return { ok: true, verdict };
 });
 
-// Manager re-exports + re-caches the bid PDF after editing the Google Doc. Once suppliers can
+// Manager re-exports + re-caches the bid document after editing the Google Doc. Once suppliers can
 // see the document, the edited version goes through the supervisor gate again.
 export const refreshTenderDocument = onCall(SUPERVISED, async (req) => {
   const caller = requireManager(req);
@@ -613,7 +613,7 @@ export const refreshTenderDocument = onCall(SUPERVISED, async (req) => {
     const gate = await supervisorGate(caller, input.tenderId, 'refresh', input.overrideReason);
     await tendersRepo.update(input.tenderId, { publishedDocHash: gate.docHash });
   }
-  const path = await cacheTenderPdf(tender);
+  const path = await cacheTenderHtml(tender);
   if (path) await tendersRepo.update(input.tenderId, { docExportPath: path });
   await auditRepo.append({
     entityType: 'tender',
@@ -756,7 +756,7 @@ export const getTenderDocument = onCall({ secrets: DOCS_SECRETS }, async (req) =
   } else {
     requireCaseAccess(caller, tender);
   }
-  return getViewable(tender);
+  return getViewable(tender, caller.role !== 'supplier');
 });
 
 // ---- Clarification Q&A ----

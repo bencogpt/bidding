@@ -93,8 +93,7 @@ export const api = {
   grantAccess: call<GrantAccessInput, { ok: true; docsSkipped: string[] }>('grantAccess'),
   getTenderDocument: call<
     { tenderId: string },
-    | { kind: 'html'; content: string; title: string }
-    | { kind: 'pdf'; dataBase64: string; title: string }
+    { kind: 'html'; content: string; title: string }
   >('getTenderDocument'),
   askQuestion: call<AskQuestionInput, { id: string }>('askQuestion'),
   clusterTenderQuestions: call<

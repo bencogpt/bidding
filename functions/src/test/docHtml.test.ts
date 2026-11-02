@@ -21,3 +21,14 @@ test('blank lines are dropped and a line of only # is a paragraph', () => {
   assert.equal(bodyToHtml('\n\n'), '');
   assert.equal(bodyToHtml('##'), '<p>##</p>');
 });
+
+test('exported Docs HTML is made right-to-left and loses its left alignment and scripts', async () => {
+  const { rtlifyExportedHtml } = await import('../services/docHtml.js');
+  const out = rtlifyExportedHtml(
+    '<html><head><script>x()</script></head><body><p style="text-align:left;color:red">שלום</p></body></html>',
+  );
+  assert.match(out, /<html dir="rtl" lang="he">/);
+  assert.doesNotMatch(out, /<script|text-align:\s*left/);
+  assert.match(out, /color:red/);
+  assert.match(out, /<style>[\s\S]*direction:rtl[\s\S]*<\/style><\/head>/);
+});

@@ -23,6 +23,8 @@ import QuestionsPanel from '../components/QuestionsPanel';
 import EvaluationPanel from '../components/EvaluationPanel';
 import CasePanel from '../components/CasePanel';
 import QuartetCard from '../components/QuartetCard';
+import NextActionCard from '../components/NextActionCard';
+import DatesCard from '../components/DatesCard';
 import SupervisorPanel from '../components/SupervisorPanel';
 import TenderHeader, { type HeaderAction } from '../components/TenderHeader';
 
@@ -182,14 +184,10 @@ export default function TenderWorkspace() {
 
       {tab === 'overview' && (
         <div className="space-y-4">
-          <QuartetCard tender={tender} />
-          <div className="card space-y-2 p-6 text-sm">
-            {Object.entries(tender.params).map(([k, v]) => (
-              <div key={k} className="flex gap-2">
-                <span className="font-semibold text-tx-soft">{k}:</span>
-                <span>{String(v)}</span>
-              </div>
-            ))}
+          <div className="grid items-start gap-4 lg:grid-cols-3">
+            <NextActionCard tender={tender} action={action} onOpenDocument={() => setTab('document')} />
+            <QuartetCard tender={tender} />
+            <DatesCard tender={tender} template={template} />
           </div>
         </div>
       )}
@@ -225,7 +223,19 @@ export default function TenderWorkspace() {
         />
       )}
       {tab === 'evaluation' && <EvaluationPanel tender={tender} submissions={submissions} />}
-      {tab === 'case' && <CasePanel tender={tender} />}
+      {tab === 'case' && (
+        <div className="space-y-4">
+          <CasePanel tender={tender} />
+          <div className="card space-y-2 p-6 text-sm">
+            {Object.entries(tender.params).map(([k, v]) => (
+              <div key={k} className="flex gap-2">
+                <span className="font-semibold text-tx-soft">{k}:</span>
+                <span>{String(v)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {tab === 'supervisor' && <SupervisorPanel tender={tender} template={template} />}
     </div>
   );
