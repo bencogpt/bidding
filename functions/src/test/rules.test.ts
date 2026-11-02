@@ -45,7 +45,9 @@ before(async () => {
       memberUids: ['mgr', 'ul'],
     });
     await setDoc(doc(db, 'tenders/t1/access/ul'), { principalId: 'ul', kind: 'internal', level: 'comment' });
-    await setDoc(doc(db, 'auditLog/a1'), { id: 'a1', tenderId: 't1', action: 'create', at: 1 });
+    await setDoc(doc(db, 'bidRequests/2026-31'), { serial: '2026-31', brief: 'א', requesterUid: 'ur', status: 'open' });
+    await setDoc(doc(db, 'bidRequests/2026-32'), { serial: '2026-32', brief: 'ב', requesterUid: 'other', status: 'open' });
+    await setDoc(doc(db, 'auditLog/a1'),{ id: 'a1', tenderId: 't1', action: 'create', at: 1 });
     await setDoc(doc(db, 'tenders/t1/chat/m0'), { id: 'm0', uid: 'mgr', name: 'M', role: 'tender_manager', text: 'שלום', createdAt: 1 });
     // An unpublished tender the supplier somehow holds access to (defense in depth).
     await setDoc(doc(db, 'tenders/t2'), { id: 't2', title: 'T2', status: 'ready' });
@@ -104,6 +106,21 @@ const supplierA = () =>
   env.authenticatedContext('ua', { role: 'supplier', supplierId: 'sup_a' }).firestore();
 const supplierB = () =>
   env.authenticatedContext('ub', { role: 'supplier', supplierId: 'sup_b' }).firestore();
+const requester = () => env.authenticatedContext('ur', { role: 'requester' }).firestore();
+
+test('requester reads only their own bid requests', async () => {
+  await assertSucceeds(getDoc(doc(requester(), 'bidRequests/2026-31')));
+  await assertFails(getDoc(doc(requester(), 'bidRequests/2026-32')));
+  await assertSucceeds(getDocs(query(collection(requester(), 'bidRequests'), where('requesterUid', '==', 'ur'))));
+  await assertFails(getDocs(collection(requester(), 'bidRequests')));
+});
+
+test('manager reads every bid request; nobody writes from the client', async () => {
+  await assertSucceeds(getDoc(doc(manager(), 'bidRequests/2026-32')));
+  await assertFails(setDoc(doc(requester(), 'bidRequests/2026-99'), { serial: '2026-99', requesterUid: 'ur' }));
+  await assertFails(setDoc(doc(manager(), 'bidRequests/2026-99'), { serial: '2026-99' }));
+  await assertFails(getDoc(doc(supplierA(), 'bidRequests/2026-31')));
+});
 // A non-manager internal role, to exercise the isInternal() branch rather than isManager().
 const legal = () => env.authenticatedContext('ul', { role: 'legal' }).firestore();
 // An internal user who is NOT on t1's team.

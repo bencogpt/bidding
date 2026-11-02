@@ -17,7 +17,9 @@ const fns = getFunctions(app, 'europe-west1');
 const call = (n) => httpsCallable(fns, n);
 
 await signInWithEmailAndPassword(auth, 'manager@obms.test', 'password');
+const { data: request } = await call('createBidRequest')({ brief: 'בקשת בדיקה' });
 const { data: created } = await call('createTender')({
+  bidRequestId: request.serial,
   title: 'בדיקת מטמון PDF',
   type: 'goods',
   params: { org: 'בדיקה', description: 'מצלמות', quantity: 3, budget: 100000 },

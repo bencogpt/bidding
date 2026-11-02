@@ -158,12 +158,12 @@ test('mergeSyncedParams keeps form order, hidden and fill rules across a re-sync
   assert.equal(merged.some((p) => p.key === 'removed_from_doc'), false, 'an ordinary field gone from the doc is dropped');
 });
 
-test('a brief longer than BRIEF_MAX_LENGTH is rejected by createTender and the AI draft', async () => {
-  const { createTenderInput, draftBidInput, BRIEF_MAX_LENGTH } = await import('@obms/shared');
+test('a brief longer than BRIEF_MAX_LENGTH is rejected by createBidRequest and the AI draft', async () => {
+  const { createBidRequestInput, draftBidInput, BRIEF_MAX_LENGTH } = await import('@obms/shared');
   const ok = 'א'.repeat(BRIEF_MAX_LENGTH);
   const tooLong = ok + 'א';
-  assert.equal(createTenderInput.safeParse({ type: 'service', params: {}, brief: ok }).success, true);
-  assert.equal(createTenderInput.safeParse({ type: 'service', params: {}, brief: tooLong }).success, false);
+  assert.equal(createBidRequestInput.safeParse({ brief: ok }).success, true);
+  assert.equal(createBidRequestInput.safeParse({ brief: tooLong }).success, false);
   assert.equal(draftBidInput.safeParse({ type: 'service', brief: ok }).success, true);
   assert.equal(draftBidInput.safeParse({ type: 'service', brief: tooLong }).success, false);
 });

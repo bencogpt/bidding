@@ -194,6 +194,13 @@ service cloud.firestore {
       allow write: if false; // function-only (updateScoringTargets)
     }
 
+    // ---- bid requests (phase 1) ----
+    // The requester sees their own; managers see all. Created and converted by functions only.
+    match /bidRequests/{serial} {
+      allow read: if isManager() || (isInternal() && resource.data.requesterUid == request.auth.uid);
+      allow write: if false;
+    }
+
     // ---- audit log (immutable, append-only via functions) ----
     // managers read everything; team members only the trail of their own cases (queried by tenderId)
     match /auditLog/{entryId} {

@@ -2,6 +2,7 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { setGlobalOptions } from 'firebase-functions/v2';
 import {
   createTenderInput,
+  createBidRequestInput,
   grantAccessInput,
   askQuestionInput,
   answerQuestionsInput,
@@ -72,7 +73,7 @@ import {
 } from '@obms/shared';
 import { randomBytes } from 'node:crypto';
 import { auth, db, now } from './lib/admin.js';
-import { requireAuth, requireManager, requireInternal, requireCaseAccess } from './lib/context.js';
+import { requireAuth, requireRole, requireManager, requireInternal, requireCaseAccess } from './lib/context.js';
 import { parseInput } from './lib/validate.js';
 import {
   tendersRepo,
@@ -88,8 +89,10 @@ import {
   internalRepo,
   settingsRepo,
   countersRepo,
+  bidRequestsRepo,
   caseCreationRepo,
 } from './repositories.js';
+import { allocateBidNumber, israelYear } from './services/bidNumber.js';
 import { transition } from './stateMachines/tenderFsm.js';
 import {
   generateTenderDocument,
@@ -340,6 +343,44 @@ async function grantTeamAccess(
   return skipped;
 }
 
+// Phase 1: the requester's summary becomes a request with its bid number. No AI, no document yet.
+export const createBidRequest = onCall(async (req) => {
+  const caller = requireRole(req, 'requester', 'tender_manager');
+  const input = parseInput(createBidRequestInput, req.data);
+  if (input.requestId) {
+    const prev = await bidRequestsRepo.byClientRequestId(caller.uid, input.requestId);
+    if (prev) return { serial: prev.serial, duplicate: true };
+  }
+  const createdAt = now();
+  const serial = await allocateBidNumber(israelYear(createdAt), {
+    random: Math.random,
+    claim: (serial, n) =>
+      bidRequestsRepo.tryCreate({
+        serial,
+        year: Number(serial.split('-')[0]),
+        n,
+        brief: input.brief,
+        requesterUid: caller.uid,
+        requesterName: caller.name,
+        status: 'open',
+        tenderId: null,
+        clientRequestId: input.requestId,
+        createdAt,
+        convertedAt: null,
+      }),
+  });
+  await auditRepo.append({
+    entityType: 'bidRequest',
+    entityId: serial,
+    actorUid: caller.uid,
+    actorName: caller.name,
+    action: 'create_request',
+    prevState: null,
+    newState: 'open',
+  });
+  return { serial, duplicate: false };
+});
+
 // ---- Tenders ----
 // Creating a case is all-or-nothing and retry-safe:
 //  1. validate everything (template, fields, team, AI draft) — nothing written yet;
@@ -384,6 +425,10 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
   }
   const asked = validateParams(template, input.params);
 
+  const bidReq = await bidRequestsRepo.get(input.bidRequestId);
+  if (!bidReq) throw new HttpsError('not-found', 'הבקשה לא נמצאה.');
+  if (bidReq.status !== 'open') throw new HttpsError('failed-precondition', 'הבקשה כבר הומרה למכרז.');
+
   const draft = input.draftId ? await bidDraftsRepo.get(input.draftId) : null;
   if (input.draftId && (!draft || draft.createdBy !== caller.uid)) {
     throw new HttpsError('invalid-argument', 'טיוטת ה-AI לא נמצאה.');
@@ -396,7 +441,14 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
 
   // The case team: one user per required role, validated against the users' actual roles.
   const requiredRoles = requiredRolesFor(input.type, input.extraRoles ?? []);
-  const { team, users: teamUsers } = await resolveTeam(input.team);
+  // The person who opened the request is the case requester unless the manager chose someone else;
+  // the default applies only if that user still holds the requester role.
+  let teamInput = input.team;
+  if (!teamInput?.requester) {
+    const opener = await usersRepo.get(bidReq.requesterUid);
+    if (opener?.role === 'requester') teamInput = { ...(teamInput ?? {}), requester: opener.uid };
+  }
+  const { team, users: teamUsers } = await resolveTeam(teamInput);
   const owner = await usersRepo.get(caller.uid);
 
   // Calculated and fixed fields (guarantee default and words, total months, manager and requester
@@ -413,7 +465,7 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
 
   // ---- 2. serial + document ----
   const id = tendersRepo.newId();
-  const serial = await countersRepo.nextSerial(new Date(now()).getFullYear());
+  const serial = bidReq.serial;
   // The bid number is the case serial — filled by the system, never typed or guessed.
   for (const p of template.params) if (isAutoSerialParam(p)) publicParams[p.key] = serial;
   // A blank title is named by the system: the type and the case serial.
@@ -454,7 +506,7 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
     googleTemplateDocId: template.googleTemplateDocId ?? null,
     draftId: draft?.draftId ?? null,
     draftType: draft?.type ?? null,
-    brief: draft?.brief ?? (input.brief?.trim() || null),
+    brief: draft?.brief ?? bidReq.brief,
     aiModel: draft?.model ?? null,
     aiStatus: draft?.status ?? null,
     skillsUsed: draft?.status === 'FAILED' ? [] : draft?.skillsUsed ?? [],
@@ -494,7 +546,7 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
     gen = await generateTenderDocument(tender, template);
     tender.googleDocId = gen.googleDocId;
     tender.docExportPath = gen.exportPath;
-    await caseCreationRepo.commit({ tender, access, provenance, internalParams, requestId, uid: caller.uid });
+    await caseCreationRepo.commit({ tender, access, provenance, internalParams, requestId, uid: caller.uid, bidRequestSerial: bidReq.serial });
   } catch (err) {
     if (gen) await discardGeneratedDocument(id, gen);
     // A concurrent duplicate of this submission committed first — return that case.

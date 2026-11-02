@@ -15,6 +15,7 @@ import { api } from './api';
 import { useAuth } from '../auth/AuthProvider';
 import type {
   TenderDoc,
+  BidRequestDoc,
   TemplateDoc,
   SupplierDoc,
   AccessDoc,
@@ -92,6 +93,57 @@ export function useTender(id: string | undefined) {
   return { tender, loading, denied };
 }
 
+// The manager sees every open request (procurement's inbox); anyone else only their own.
+// Sorted in the browser — filtering on status/requester plus ordering would need a composite index.
+export function useBidRequests() {
+  const { user, role } = useAuth();
+  const [requests, setRequests] = useState<BidRequestDoc[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    if (!user) return;
+    const base = collection(db, 'bidRequests');
+    const q =
+      role === 'tender_manager' ? query(base, where('status', '==', 'open')) : query(base, where('requesterUid', '==', user.uid));
+    return onSnapshot(
+      q,
+      (snap) => {
+        setRequests(snap.docs.map((d) => d.data() as BidRequestDoc).sort((a, b) => b.createdAt - a.createdAt));
+        setLoading(false);
+      },
+      (e) => {
+        console.error('useBidRequests: query error', e);
+        setRequests([]);
+        setLoading(false);
+      },
+    );
+  }, [user, role]);
+  return { requests, loading };
+}
+
+/** undefined while loading, null when it does not exist. */
+export function useBidRequest(serial: string | undefined) {
+  const [request, setRequest] = useState<BidRequestDoc | null | undefined>(undefined);
+  useEffect(() => {
+    setRequest(undefined);
+    if (!serial) return;
+    // A malformed id (e.g. an encoded "/") would make doc() throw: treat it as not found.
+    if (!/^\d{4}-\d{1,3}$/.test(serial)) {
+      setRequest(null);
+      return;
+    }
+    return onSnapshot(
+      doc(db, 'bidRequests', serial),
+      (s) => setRequest(s.exists() ? (s.data() as BidRequestDoc) : null),
+      (e) => {
+        console.error('useBidRequest: snapshot error', e);
+        // Only a definitive answer reads as "not found"; a transient error stays loading.
+        if (e.code === 'permission-denied' || e.code === 'not-found') setRequest(null);
+      },
+    );
+  }, [serial]);
+  return { request };
+}
+
 export function useTemplates() {
   const [templates, setTemplates] = useState<TemplateDoc[]>([]);
   useEffect(() => {
@@ -105,10 +157,15 @@ export function useTemplates() {
 export function useTemplate(type: TenderType | undefined) {
   const [template, setTemplate] = useState<TemplateDoc | null>(null);
   useEffect(() => {
+    setTemplate(null); // never show the previous type's template while the new one loads
     if (!type) return;
-    void getDoc(doc(db, 'templates', type)).then((d) =>
-      setTemplate(d.exists() ? (d.data() as TemplateDoc) : null),
-    );
+    let alive = true;
+    void getDoc(doc(db, 'templates', type)).then((d) => {
+      if (alive) setTemplate(d.exists() ? (d.data() as TemplateDoc) : null);
+    });
+    return () => {
+      alive = false;
+    };
   }, [type]);
   return template;
 }
