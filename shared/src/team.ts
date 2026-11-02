@@ -23,6 +23,15 @@ export function formatSerial(year: number, n: number): string {
   return `BID-${year}-${String(n).padStart(4, '0')}`;
 }
 
+/** Largest n of a bid number: three random digits, 1..999. */
+export const BID_NUMBER_MAX = 999;
+
+/** 2026-31 — the bid number: the year, then n without leading zeros (031 is written 31). */
+export function formatBidNumber(year: number, n: number): string {
+  if (!Number.isInteger(n) || n < 1 || n > BID_NUMBER_MAX) throw new RangeError(`bid number out of range: ${n}`);
+  return `${year}-${n}`;
+}
+
 /** Type defaults plus the manager's extra roles, in canonical order, without duplicates. */
 export function requiredRolesFor(type: TenderType, extra: readonly string[] = []): TeamRole[] {
   const set = new Set<string>([...REQUIRED_ROLES_BY_TYPE[type], ...extra]);

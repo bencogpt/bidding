@@ -217,6 +217,7 @@ export const BRIEF_MAX_LENGTH = 5000;
 
 export const createTenderInput = z.object({
   title: z.string().optional(), // blank: the system names the case from its type and serial
+  bidRequestId: z.string().regex(/^\d{4}-\d{1,3}$/), // the request being turned into this tender (its bid number)
   brief: z.string().max(BRIEF_MAX_LENGTH).optional(), // the requester's summary (also the AI draft's input)
   type: tenderTypeSchema,
   params: z.record(z.union([z.string(), z.number()])),
@@ -231,6 +232,28 @@ export const createTenderInput = z.object({
   ...createTenderTeamFields,
 });
 export type CreateTenderInput = z.infer<typeof createTenderInput>;
+
+// ---- bid requests (phase 1: the requester's summary + bid number) ----
+export const bidRequestDocSchema = z.object({
+  serial: z.string(), // 2026-31 — also the document id
+  year: z.number(),
+  n: z.number(),
+  brief: z.string(),
+  requesterUid: z.string(),
+  requesterName: z.string(),
+  status: z.enum(['open', 'converted']),
+  tenderId: z.string().nullable(),
+  clientRequestId: z.string().optional(),
+  createdAt: z.number(),
+  convertedAt: z.number().nullable(),
+});
+export type BidRequestDoc = z.infer<typeof bidRequestDocSchema>;
+
+export const createBidRequestInput = z.object({
+  brief: z.string().trim().min(3).max(BRIEF_MAX_LENGTH),
+  requestId: z.string().min(8).max(100).optional(), // one per form: a retried submit returns the same request
+});
+export type CreateBidRequestInput = z.infer<typeof createBidRequestInput>;
 
 export const draftBidInput = z.object({
   type: tenderTypeSchema,
