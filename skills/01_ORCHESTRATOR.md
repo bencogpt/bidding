@@ -166,6 +166,7 @@ any order or in parallel. All of them read the approved spec:
 
 | Skill | Produces |
 |---|---|
+| S20 (runs first) | Default, computed and contract-unique field values, and the date-order check. Never overrides a value the bid manager or requester specified |
 | S02 | SLA table and explanation clause (services bids, or products with maintenance) |
 | S03 | Threshold conditions, evaluation criteria and weights, pricing approach |
 | S12 | Pricing table for suppliers |

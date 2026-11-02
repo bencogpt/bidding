@@ -26,9 +26,9 @@ export default function Dashboard() {
             })}
           </div>
         </div>
-        {role === 'tender_manager' && (
-          <Link to="/tenders/new" className="btn btn-gold">
-            + {t('nav.newTender')}
+        {(role === 'tender_manager' || role === 'requester') && (
+          <Link to="/requests/new" className="btn btn-gold">
+            + {t('nav.newRequest')}
           </Link>
         )}
       </div>

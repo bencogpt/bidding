@@ -37,6 +37,8 @@ connectFunctionsEmulator(fns, '127.0.0.1', 5001);
 
 const call = (n: string) => httpsCallable(fns, n);
 const login = (email: string) => signInWithEmailAndPassword(auth, email, 'password');
+const newRequest = async (brief = 'דרישה לבדיקה'): Promise<string> =>
+  ((await call('createBidRequest')({ brief })) as { data: { serial: string } }).data.serial;
 
 // Each given role signs off the tender in review, then the manager is signed back in.
 async function approveAs(tenderId: string, roles: string[]) {
@@ -59,19 +61,22 @@ async function main() {
 
   const created = (await call('createTender')({
     title: 'מכרז טובין לבדיקה',
+    bidRequestId: await newRequest(),
     type: 'goods',
     params: { org: 'משרד הביטחון', description: 'מצלמות אבטחה', quantity: 10, budget: 500000 },
     team: goodsTeam,
   })) as { data: { id: string; serial: string } };
   const tenderId = created.data.id;
   assert.ok(tenderId, 'tender id returned');
-  assert.match(created.data.serial, /^BID-\d{4}-\d{4}$/, 'serial number assigned');
+  assert.match(created.data.serial, /^\d{4}-\d{1,3}$/, 'bid number assigned');
 
   // A team slot only accepts a user with exactly that role.
   let wrongRole = false;
+  const wrongRoleReq = await newRequest();
   try {
     await call('createTender')({
       title: 'x',
+      bidRequestId: wrongRoleReq,
       type: 'goods',
       params: { org: 'o', description: 'd', quantity: 1 },
       team: { legal: uidOf('finance') },
@@ -80,6 +85,7 @@ async function main() {
     wrongRole = true;
   }
   assert.ok(wrongRole, 'a finance user cannot fill the legal slot');
+  assert.equal((await getDoc(doc(db, 'bidRequests', wrongRoleReq))).data()?.status, 'open', 'a failed create leaves its request open');
 
   const tdoc = await getDoc(doc(db, 'tenders', tenderId));
   assert.ok(tdoc.exists(), 'tender doc persisted');
@@ -197,14 +203,13 @@ async function main() {
   // The optional "milestones" field is left empty, so {{milestones}} stays in the document.
   const bad = (await call('createTender')({
     title: 'מכרז עם חוסר',
+    bidRequestId: await newRequest(),
     type: 'project',
     params: { org: 'משרד הביטחון', scope: 'הקמת מערכת מצלמות', service: 'תחזוקה שנתית' },
     team: { requester: goodsTeam.requester, legal: legalUid }, // finance + security slots left empty
   })) as { data: { id: string; serial: string; verdict: string | null; missingRoles: string[] } };
   const badCheck = (await call('runSupervision')({ tenderId: bad.data.id, initial: true })) as { data: { verdict: string } };
   assert.equal(badCheck.data.verdict, 'BLOCK', 'supervisor flags the leftover placeholder in the new document');
-  const serialNo = (x: string) => Number(x.split('-')[2]);
-  assert.equal(serialNo(bad.data.serial), serialNo(created.data.serial) + 1, 'serials are sequential; the rejected create consumed no number');
   assert.deepEqual(bad.data.missingRoles, ['finance', 'security']);
   let gateRefused = false;
   try {
@@ -583,7 +588,7 @@ async function main() {
   const svcTeam = { ...goodsTeam, security: uidOf('security') };
   let notConverted = false;
   try {
-    await call('createTender')({ title: 'שירות', type: 'service', params: {}, team: svcTeam });
+    await call('createTender')({ title: 'שירות', bidRequestId: await newRequest(), type: 'service', params: {}, team: svcTeam });
   } catch (e) {
     notConverted = /טרם הומרה/.test((e as Error).message);
   }
@@ -614,7 +619,7 @@ async function main() {
   assert.equal(svc.fieldsStatus, 'ready');
   let missingRequired = false;
   try {
-    await call('createTender')({ title: 'שירות', type: 'service', params: { tender_number: '2026-01' }, team: svcTeam });
+    await call('createTender')({ title: 'שירות', bidRequestId: await newRequest(), type: 'service', params: { tender_number: '2026-01' }, team: svcTeam });
   } catch (e) {
     missingRequired = /שדה חובה חסר/.test((e as Error).message);
   }
@@ -623,6 +628,7 @@ async function main() {
   try {
     await call('createTender')({
       title: 'שירות',
+      bidRequestId: await newRequest(),
       type: 'service',
       params: { service_subject: '{{SERVICE_SUBJECT}}' },
       team: svcTeam,
@@ -636,6 +642,7 @@ async function main() {
   // (same requestId) returns the same case — never a copy.
   const svcInput = {
     title: 'מכרז שירותי פיתוח',
+    bidRequestId: await newRequest(),
     type: 'service',
     params: { service_subject: 'פיתוח ותחזוקה' },
     team: svcTeam,
@@ -653,6 +660,59 @@ async function main() {
   assert.equal(retried.data.duplicate, true);
   const copies = await getDocs(query(collection(db, 'tenders'), where('title', '==', 'מכרז שירותי פיתוח')));
   assert.equal(copies.size, 1, 'no duplicate case was created');
+  // A request converts to exactly one tender.
+  const reqId = await newRequest('בקשה להמרה');
+  const input = { title: '', type: 'goods', params: { org: 'א', description: 'ב', quantity: 1, budget: 1 }, team: goodsTeam, bidRequestId: reqId };
+  const first = (await call('createTender')({ ...input })) as { data: { id: string; serial: string } };
+  assert.equal(first.data.serial, reqId, 'the tender keeps the request bid number');
+  const reqDoc = await getDoc(doc(db, 'bidRequests', reqId));
+  assert.equal(reqDoc.data()?.status, 'converted');
+  assert.equal(reqDoc.data()?.tenderId, first.data.id);
+  let secondFailed = false;
+  try {
+    await call('createTender')({ ...input });
+  } catch (e) {
+    secondFailed = (e as { code?: string }).code === 'functions/failed-precondition';
+  }
+  assert.ok(secondFailed, 'a converted request cannot be converted again');
+  let unknownFailed = false;
+  try {
+    await call('createTender')({ ...input, bidRequestId: '2026-998' });
+  } catch (e) {
+    unknownFailed = (e as { code?: string }).code === 'functions/not-found';
+  }
+  assert.ok(unknownFailed, 'an unknown request is rejected');
+  // Two simultaneous conversions of one request: exactly one tender is created.
+  const raceReq = await newRequest('בקשה לתחרות');
+  const raceInput = { title: '', type: 'goods', params: { org: 'א', description: 'ב', quantity: 1, budget: 1 }, team: goodsTeam, bidRequestId: raceReq };
+  const race = await Promise.allSettled([
+    call('createTender')({ ...raceInput, requestId: 'e2e-race-a' }),
+    call('createTender')({ ...raceInput, requestId: 'e2e-race-b' }),
+  ]);
+  assert.equal(race.filter((r) => r.status === 'fulfilled').length, 1, 'exactly one concurrent conversion succeeds');
+  const raceLoser = race.find((r) => r.status === 'rejected') as PromiseRejectedResult | undefined;
+  assert.equal((raceLoser?.reason as { code?: string } | undefined)?.code, 'functions/failed-precondition', 'the other is rejected as already converted');
+  const raceTenders = await getDocs(query(collection(db, 'tenders'), where('serial', '==', raceReq)));
+  assert.equal(raceTenders.size, 1, 'exactly one tender has the request serial');
+
+  // The person who opened the request becomes the case requester when the manager does not pick one.
+  await signOut(auth);
+  await login('requester@obms.test');
+  const openedReq = await newRequest('בקשה של דורש');
+  await signOut(auth);
+  await login('manager@obms.test');
+  const { requester: _omit, ...teamNoRequester } = goodsTeam;
+  void _omit;
+  const defaulted = (await call('createTender')({
+    title: '',
+    type: 'goods',
+    params: { org: 'א', description: 'ב', quantity: 1, budget: 1 },
+    team: teamNoRequester,
+    bidRequestId: openedReq,
+  })) as { data: { id: string } };
+  const defaultedTender = (await getDoc(doc(db, 'tenders', defaulted.data.id))).data()!;
+  assert.equal(defaultedTender.team.requester, uidOf('requester'), 'the request opener is the case requester');
+  assert.ok(defaultedTender.memberUids.includes(uidOf('requester')), 'and is a member of the case');
   console.log(`✓ template conversion: refused → analysed → converted (${report.data.fields} fields) → form enforced`);
 
   // ---- one-time migrations are idempotent ----

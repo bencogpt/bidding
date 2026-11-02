@@ -22,7 +22,9 @@ try {
 }
 
 try {
+  const { data: request } = await httpsCallable(fns, 'createBidRequest')({ brief: 'בקשת בדיקה' });
   const r = await httpsCallable(fns, 'createTender')({
+    bidRequestId: request.serial,
     title: 'בדיקת פריסה חיה',
     type: 'goods',
     params: { org: 'בדיקה', description: 'מצלמות אבטחה', quantity: 5, budget: 100000 },

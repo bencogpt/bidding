@@ -27,6 +27,7 @@ export const SKILL_IDS = [
   's17-security-requirements',
   's18-security-offer-review',
   's19-supplier-conference-deck',
+  's20-bid-defaults-and-computed-fields',
 ] as const;
 export type SkillId = (typeof SKILL_IDS)[number];
 
@@ -39,6 +40,7 @@ export function templateIdFor(type: TenderType): OrchestratorTemplateId {
 
 // Drafting skills each bid type must be drafted with (ORCHESTRATOR phases 1–5).
 const GOODS_SKILLS: SkillId[] = [
+  's20-bid-defaults-and-computed-fields',
   's01-requester-spec',
   's03-procurement-strategy-thresholds',
   's04-procurement-merge-and-style',
