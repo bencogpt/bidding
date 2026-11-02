@@ -24,6 +24,7 @@ import type {
   FeedbackDoc,
   SkillTipsRun,
   ConversionRun,
+  BidRequestDoc,
 } from '@obms/shared';
 
 const stripUndefined = <T extends Record<string, unknown>>(o: T): T =>
@@ -122,6 +123,34 @@ export const countersRepo = {
       const last = ((await tx.get(ref)).data()?.last as number | undefined) ?? 0;
       if (n > last) tx.set(ref, { last: n, year }, { merge: true });
     });
+  },
+};
+
+// ---- bid requests (the requester's summary; doc id = the bid number, which is the uniqueness lock) ----
+export const bidRequestsRepo = {
+  /** Create the request; false (nothing written) if this bid number already exists. */
+  async tryCreate(r: BidRequestDoc): Promise<boolean> {
+    try {
+      await db.collection('bidRequests').doc(r.serial).create(stripUndefined(r));
+      return true;
+    } catch (err) {
+      if ((err as { code?: number }).code === 6) return false; // gRPC ALREADY_EXISTS
+      throw err;
+    }
+  },
+  async get(serial: string): Promise<BidRequestDoc | null> {
+    const s = await db.collection('bidRequests').doc(serial).get();
+    return s.exists ? (s.data() as BidRequestDoc) : null;
+  },
+  /** The request a previous submit of the same form already created (same user only). */
+  async byClientRequestId(uid: string, clientRequestId: string): Promise<BidRequestDoc | null> {
+    const q = await db
+      .collection('bidRequests')
+      .where('requesterUid', '==', uid)
+      .where('clientRequestId', '==', clientRequestId)
+      .limit(1)
+      .get();
+    return q.empty ? null : (q.docs[0].data() as BidRequestDoc);
   },
 };
 

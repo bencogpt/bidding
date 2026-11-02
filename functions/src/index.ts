@@ -2,6 +2,7 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { setGlobalOptions } from 'firebase-functions/v2';
 import {
   createTenderInput,
+  createBidRequestInput,
   grantAccessInput,
   askQuestionInput,
   answerQuestionsInput,
@@ -72,7 +73,7 @@ import {
 } from '@obms/shared';
 import { randomBytes } from 'node:crypto';
 import { auth, db, now } from './lib/admin.js';
-import { requireAuth, requireManager, requireInternal, requireCaseAccess } from './lib/context.js';
+import { requireAuth, requireRole, requireManager, requireInternal, requireCaseAccess } from './lib/context.js';
 import { parseInput } from './lib/validate.js';
 import {
   tendersRepo,
@@ -88,8 +89,10 @@ import {
   internalRepo,
   settingsRepo,
   countersRepo,
+  bidRequestsRepo,
   caseCreationRepo,
 } from './repositories.js';
+import { allocateBidNumber, israelYear } from './services/bidNumber.js';
 import { transition } from './stateMachines/tenderFsm.js';
 import {
   generateTenderDocument,
@@ -339,6 +342,44 @@ async function grantTeamAccess(
   }
   return skipped;
 }
+
+// Phase 1: the requester's summary becomes a request with its bid number. No AI, no document yet.
+export const createBidRequest = onCall(async (req) => {
+  const caller = requireRole(req, 'requester', 'tender_manager');
+  const input = parseInput(createBidRequestInput, req.data);
+  if (input.requestId) {
+    const prev = await bidRequestsRepo.byClientRequestId(caller.uid, input.requestId);
+    if (prev) return { serial: prev.serial, duplicate: true };
+  }
+  const createdAt = now();
+  const serial = await allocateBidNumber(israelYear(createdAt), {
+    random: Math.random,
+    claim: (serial, n) =>
+      bidRequestsRepo.tryCreate({
+        serial,
+        year: Number(serial.split('-')[0]),
+        n,
+        brief: input.brief,
+        requesterUid: caller.uid,
+        requesterName: caller.name,
+        status: 'open',
+        tenderId: null,
+        clientRequestId: input.requestId,
+        createdAt,
+        convertedAt: null,
+      }),
+  });
+  await auditRepo.append({
+    entityType: 'bidRequest',
+    entityId: serial,
+    actorUid: caller.uid,
+    actorName: caller.name,
+    action: 'create_request',
+    prevState: null,
+    newState: 'open',
+  });
+  return { serial, duplicate: false };
+});
 
 // ---- Tenders ----
 // Creating a case is all-or-nothing and retry-safe:
