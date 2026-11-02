@@ -15,6 +15,7 @@ import { api } from './api';
 import { useAuth } from '../auth/AuthProvider';
 import type {
   TenderDoc,
+  BidRequestDoc,
   TemplateDoc,
   SupplierDoc,
   AccessDoc,
@@ -90,6 +91,47 @@ export function useTender(id: string | undefined) {
     );
   }, [id]);
   return { tender, loading, denied };
+}
+
+// The manager sees every open request (procurement's inbox); anyone else only their own.
+// Sorted in the browser — filtering on status/requester plus ordering would need a composite index.
+export function useBidRequests() {
+  const { user, role } = useAuth();
+  const [requests, setRequests] = useState<BidRequestDoc[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    if (!user) return;
+    const base = collection(db, 'bidRequests');
+    const q =
+      role === 'tender_manager' ? query(base, where('status', '==', 'open')) : query(base, where('requesterUid', '==', user.uid));
+    return onSnapshot(
+      q,
+      (snap) => {
+        setRequests(snap.docs.map((d) => d.data() as BidRequestDoc).sort((a, b) => b.createdAt - a.createdAt));
+        setLoading(false);
+      },
+      (e) => {
+        console.error('useBidRequests: query error', e);
+        setRequests([]);
+        setLoading(false);
+      },
+    );
+  }, [user, role]);
+  return { requests, loading };
+}
+
+/** undefined while loading, null when it does not exist. */
+export function useBidRequest(serial: string | undefined) {
+  const [request, setRequest] = useState<BidRequestDoc | null | undefined>(undefined);
+  useEffect(() => {
+    if (!serial) return;
+    return onSnapshot(
+      doc(db, 'bidRequests', serial),
+      (s) => setRequest(s.exists() ? (s.data() as BidRequestDoc) : null),
+      () => setRequest(null),
+    );
+  }, [serial]);
+  return { request };
 }
 
 export function useTemplates() {

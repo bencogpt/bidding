@@ -2,6 +2,7 @@ import { httpsCallable } from 'firebase/functions';
 import { functions } from './firebase';
 import type {
   CreateTenderInput,
+  CreateBidRequestInput,
   GrantAccessInput,
   AskQuestionInput,
   AnswerQuestionsInput,
@@ -57,6 +58,7 @@ const call = <I, O>(name: string) => {
 };
 
 export const api = {
+  createBidRequest: call<CreateBidRequestInput, { serial: string; duplicate: boolean }>('createBidRequest'),
   createTender: call<
     CreateTenderInput,
     {

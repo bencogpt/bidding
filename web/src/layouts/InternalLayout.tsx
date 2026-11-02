@@ -42,7 +42,7 @@ export default function InternalLayout() {
         </div>
         <nav className="flex-1 space-y-1">
           <NavItem to="/" label={t('nav.dashboard')} badge={pendingFeedback.length} />
-          {isManager && <NavItem to="/tenders/new" label={t('nav.newTender')} />}
+          {(isManager || role === 'requester') && <NavItem to="/requests/new" label={t('nav.newRequest')} />}
           {isManager && <NavItem to="/templates" label={t('nav.templates')} />}
           {isManager && <NavItem to="/users" label={t('nav.users')} />}
           <NavItem to="/suppliers" label={t('nav.suppliers')} />
