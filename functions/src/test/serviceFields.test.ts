@@ -167,3 +167,14 @@ test('a brief longer than BRIEF_MAX_LENGTH is rejected by createTender and the A
   assert.equal(draftBidInput.safeParse({ type: 'service', brief: ok }).success, true);
   assert.equal(draftBidInput.safeParse({ type: 'service', brief: tooLong }).success, false);
 });
+
+test('quality share is 100 minus the economic share, and absent for a bad value', () => {
+  const params: TemplateParam[] = [
+    { key: 'quality_pct', labelHe: 'איכותי', type: 'number', required: false, fill: { kind: 'formula', formula: 'quality_pct' } },
+  ];
+  const ctx = { submissionDeadline: null };
+  assert.equal(resolveSystemFills(params, { economic_pct: 70 }, ctx).quality_pct, 30);
+  assert.equal(resolveSystemFills(params, { economic_pct: 100 }, ctx).quality_pct, 0);
+  assert.equal('quality_pct' in resolveSystemFills(params, { economic_pct: 130 }, ctx), false);
+  assert.equal('quality_pct' in resolveSystemFills(params, {}, ctx), false);
+});

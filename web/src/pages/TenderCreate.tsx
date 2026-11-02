@@ -31,8 +31,13 @@ function toLocalInput(ms: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-// On a template with a field order, the submission deadline sits after the fields numbered below this.
+// On a template with a field order, the submission deadline sits after the fields numbered below
+// DEADLINE_ORDER, the case team after those below TEAM_ORDER and the domain tags after those below TAGS_ORDER.
 const DEADLINE_ORDER = 9;
+const TEAM_ORDER = 11;
+const TAGS_ORDER = 15;
+const YES = 'כן';
+const NO = 'לא';
 
 export default function TenderCreate() {
   const { t } = useTranslation();
@@ -71,12 +76,26 @@ export default function TenderCreate() {
   const asked = askedParams(template?.params ?? []);
   const ordered = asked.some((p) => p.order !== undefined);
   const beforeDeadline = ordered ? asked.filter((p) => (p.order ?? Infinity) < DEADLINE_ORDER) : asked;
-  const afterDeadline = ordered ? asked.filter((p) => (p.order ?? Infinity) >= DEADLINE_ORDER) : [];
-  // A field with a default (the bid guarantee) shows it until the manager types a value.
-  const valueOf = (p: TemplateParam): string =>
-    params[p.key] ??
-    (p.defaultFrom === 'guarantee_pct' ? String(guaranteeDefault(params[SERVICE_KEYS.estimate]) ?? '') : '');
-
+  const orderOf = (p: TemplateParam) => p.order ?? Infinity;
+  // System-filled fixed values the form shows read-only, in their place among the asked fields.
+  const shown = ordered ? (template?.params ?? []).filter((p) => p.display && p.fill?.kind === 'fixed') : [];
+  const beforeTeam = ordered
+    ? [...asked, ...shown]
+        .filter((p) => orderOf(p) >= DEADLINE_ORDER && orderOf(p) < TEAM_ORDER)
+        .sort((a, b) => orderOf(a) - orderOf(b))
+    : [];
+  const afterTags = ordered ? asked.filter((p) => orderOf(p) >= TAGS_ORDER) : [];
+  const qualitative = params.is_qualitative === YES;
+  // A field with a default (the bid guarantee) shows it until the manager types a value; the checkbox
+  // starts unticked; a non-qualitative bid is scored 100% on price.
+  const valueOf = (p: TemplateParam): string => {
+    if (p.type === 'checkbox') return params[p.key] ?? NO;
+    if (p.key === SERVICE_KEYS.economicPct && !qualitative) return '100';
+    return (
+      params[p.key] ??
+      (p.defaultFrom === 'guarantee_pct' ? String(guaranteeDefault(params[SERVICE_KEYS.estimate]) ?? '') : '')
+    );
+  };
   const runDraft = async () => {
     if (brief.trim().length < 3) return;
     setDrafting(true);
@@ -119,6 +138,21 @@ export default function TenderCreate() {
       document.getElementById(`param-${unfilled[0].key}`)?.focus();
       return;
     }
+    if (ordered) {
+      const missingTeam = requiredRoles.filter((r) => !team[r]);
+      if (missingTeam.length) {
+        setError(t('create.teamRequired', { roles: missingTeam.map((r) => t(`role.${r}`)).join(', ') }));
+        return;
+      }
+      if (!domainTags.length) {
+        setError(t('create.tagsRequired'));
+        return;
+      }
+      if (!deadline) {
+        setError(t('create.deadlineRequired'));
+        return;
+      }
+    }
     setBusy(true);
     setError('');
     try {
@@ -148,6 +182,14 @@ export default function TenderCreate() {
   };
 
   const renderParam = (p: TemplateParam) => {
+    if (p.display && p.fill?.kind === 'fixed') {
+      return (
+        <div key={p.key}>
+          <label className="label">{p.labelHe}</label>
+          <input id={`param-${p.key}`} className="input bg-paper-2" value={p.fill.value} readOnly />
+        </div>
+      );
+    }
     const value = valueOf(p);
     const bad = hasPlaceholder(params[p.key]);
     return (
@@ -157,7 +199,14 @@ export default function TenderCreate() {
           {p.required && <span className="text-red-600"> *</span>}
           {isConfidentialParam(p) && <span className="mr-2 text-xs text-red-600">{t('create.confidential')}</span>}
         </label>
-        {p.type === 'textarea' ? (
+        {p.type === 'checkbox' ? (
+          <input
+            id={`param-${p.key}`}
+            type="checkbox"
+            checked={value === YES}
+            onChange={(e) => setParam(p.key, e.target.checked ? YES : NO)}
+          />
+        ) : p.type === 'textarea' ? (
           <textarea
             id={`param-${p.key}`}
             className={`input min-h-20 ${bad ? 'border-red-400 bg-red-50' : ''}`}
@@ -173,7 +222,13 @@ export default function TenderCreate() {
             value={value}
             onChange={(e) => setParam(p.key, e.target.value)}
             required={p.required}
+            min={p.key === SERVICE_KEYS.economicPct ? 0 : undefined}
+            max={p.key === SERVICE_KEYS.economicPct ? 100 : undefined}
+            disabled={p.key === SERVICE_KEYS.economicPct && !qualitative}
           />
+        )}
+        {p.key === SERVICE_KEYS.economicPct && Number(value) >= 0 && Number(value) <= 100 && value !== '' && (
+          <div className="mt-1 text-xs text-tx-mute">{t('create.qualityShare', { pct: 100 - Number(value) })}</div>
         )}
         {bad && <div className="mt-1 text-xs text-red-600">{t('create.placeholderHint')}</div>}
         {p.defaultFrom === 'guarantee_pct' && (
@@ -188,8 +243,11 @@ export default function TenderCreate() {
 
   const deadlineField = (
     <div>
-      <label className="label">{t('create.deadline')}</label>
-      <input className="input" type="datetime-local" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+      <label className="label">
+        {t('create.deadline')}
+        {ordered && <span className="text-red-600"> *</span>}
+      </label>
+      <input className="input" type="datetime-local" value={deadline} onChange={(e) => setDeadline(e.target.value)} required={ordered} />
     </div>
   );
 
@@ -260,10 +318,13 @@ export default function TenderCreate() {
         ))}
         {beforeDeadline.map(renderParam)}
         {ordered && deadlineField}
-        {afterDeadline.map(renderParam)}
+        {beforeTeam.map(renderParam)}
 
         <div>
-          <label className="label">{t('team.title')}</label>
+          <label className="label">
+            {t('team.title')}
+            {ordered && <span className="text-red-600"> *</span>}
+          </label>
           <p className="mb-2 text-xs text-tx-mute">{t('team.createHint')}</p>
           <div className="space-y-2">
             {requiredRoles.map((r) => (
@@ -304,9 +365,14 @@ export default function TenderCreate() {
         </div>
 
         <div>
-          <label className="label">{t('create.domainTags')}</label>
+          <label className="label">
+            {t('create.domainTags')}
+            {ordered && <span className="text-red-600"> *</span>}
+          </label>
           <TagsInput value={domainTags} onChange={setDomainTags} placeholder={t('create.domainTagsHint')} />
         </div>
+
+        {afterTags.map(renderParam)}
 
         {criteria.length > 0 && (
           <div>

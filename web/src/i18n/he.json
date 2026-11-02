@@ -420,6 +420,10 @@
   "create.autoSerial": "יוקצה אוטומטית — מספר המכרז במערכת (BID-…)",
   "create.briefRequired": "יש למלא את תקציר המכרז.",
   "create.titleAuto": "אם יושאר ריק — ייקבע אוטומטית",
+  "create.teamRequired": "יש לבחור את חברי צוות המכרז: {{roles}}",
+  "create.tagsRequired": "יש להזין לפחות תגית תחום אחת.",
+  "create.deadlineRequired": "יש להזין את מועד הגשת ההצעות.",
+  "create.qualityShare": "איכותי: {{pct}}%",
   "create.guaranteeHint": "ברירת מחדל: 2.5% מהאומדן — ניתן לעריכה",
   "sup.initialRunning": "הסוכן המפקח בודק את המסמך החדש… (כ-1–2 דקות; אפשר להמשיך לעבוד)"
 }

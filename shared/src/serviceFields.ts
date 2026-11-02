@@ -8,6 +8,7 @@ export const SERVICE_KEYS = {
   guaranteeAmount: 'guarantee_amount',
   initialMonths: 'initial_period_months',
   optionPeriods: 'option_periods',
+  economicPct: 'economic_pct',
 } as const;
 
 /** The bid guarantee defaults to this share of the estimate (editable by the manager). */
@@ -125,6 +126,10 @@ function formulaValue(formula: string, values: Values, ctx: FillContext): string
     }
     case 'total_months':
       return totalMonths(values[SERVICE_KEYS.initialMonths], values[SERVICE_KEYS.optionPeriods]) ?? undefined;
+    case 'quality_pct': {
+      const e = Number(values[SERVICE_KEYS.economicPct]);
+      return values[SERVICE_KEYS.economicPct] !== undefined && Number.isFinite(e) && e >= 0 && e <= 100 ? 100 - e : undefined;
+    }
     case 'submission_day':
       return ctx.submissionDeadline ? hebrewWeekday(ctx.submissionDeadline) : undefined;
     case 'manager_name':

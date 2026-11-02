@@ -59,11 +59,12 @@ export const templateDocSchema = z.object({
     z.object({
       key: z.string(),
       labelHe: z.string(),
-      type: z.enum(['text', 'number', 'date', 'textarea']),
+      type: z.enum(['text', 'number', 'date', 'textarea', 'checkbox']),
       required: z.boolean().default(true),
       internal: z.boolean().optional(),
       order: z.number().optional(),
       hidden: z.boolean().optional(),
+      display: z.boolean().optional(),
       defaultFrom: z.enum(['guarantee_pct']).optional(),
       fill: z
         .discriminatedUnion('kind', [

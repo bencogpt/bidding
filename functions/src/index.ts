@@ -49,6 +49,7 @@ import {
   isAutoSerialParam,
   isSystemParam,
   resolveSystemFills,
+  SERVICE_KEYS,
   analyzeTemplateFieldsInput,
   applyTemplateConversionInput,
   docExportTxtUrl,
@@ -190,6 +191,9 @@ function validateParams(
     }
     if (p.type === 'number' && !Number.isFinite(Number(v))) {
       throw new HttpsError('invalid-argument', `השדה "${p.labelHe}" חייב להיות מספר.`);
+    }
+    if (p.key === SERVICE_KEYS.economicPct && (Number(v) < 0 || Number(v) > 100)) {
+      throw new HttpsError('invalid-argument', `השדה "${p.labelHe}" חייב להיות בין 0 ל-100.`);
     }
     clean[p.key] = p.type === 'number' ? Number(v) : v;
   }
