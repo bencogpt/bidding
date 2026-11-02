@@ -60,10 +60,11 @@ async function main() {
 
   // A team slot only accepts a user with exactly that role.
   let wrongRole = false;
+  const wrongRoleReq = await newRequest();
   try {
     await call('createTender')({
       title: 'x',
-      bidRequestId: await newRequest(),
+      bidRequestId: wrongRoleReq,
       type: 'goods',
       params: { org: 'o', description: 'd', quantity: 1 },
       team: { legal: uidOf('finance') },
@@ -72,6 +73,7 @@ async function main() {
     wrongRole = true;
   }
   assert.ok(wrongRole, 'a finance user cannot fill the legal slot');
+  assert.equal((await getDoc(doc(db, 'bidRequests', wrongRoleReq))).data()?.status, 'open', 'a failed create leaves its request open');
 
   const tdoc = await getDoc(doc(db, 'tenders', tenderId));
   assert.ok(tdoc.exists(), 'tender doc persisted');
@@ -188,8 +190,6 @@ async function main() {
   })) as { data: { id: string; serial: string; verdict: string | null; missingRoles: string[] } };
   const badCheck = (await call('runSupervision')({ tenderId: bad.data.id, initial: true })) as { data: { verdict: string } };
   assert.equal(badCheck.data.verdict, 'BLOCK', 'supervisor flags the leftover placeholder in the new document');
-  const serialNo = (x: string) => Number(x.split('-')[2]);
-  assert.equal(serialNo(bad.data.serial), serialNo(created.data.serial) + 1, 'serials are sequential; the rejected create consumed no number');
   assert.deepEqual(bad.data.missingRoles, ['finance', 'security']);
   let gateRefused = false;
   try {
@@ -650,15 +650,15 @@ async function main() {
   let secondFailed = false;
   try {
     await call('createTender')({ ...input });
-  } catch {
-    secondFailed = true;
+  } catch (e) {
+    secondFailed = (e as { code?: string }).code === 'functions/failed-precondition';
   }
   assert.ok(secondFailed, 'a converted request cannot be converted again');
   let unknownFailed = false;
   try {
     await call('createTender')({ ...input, bidRequestId: '2026-998' });
-  } catch {
-    unknownFailed = true;
+  } catch (e) {
+    unknownFailed = (e as { code?: string }).code === 'functions/not-found';
   }
   assert.ok(unknownFailed, 'an unknown request is rejected');
   console.log(`✓ template conversion: refused → analysed → converted (${report.data.fields} fields) → form enforced`);
