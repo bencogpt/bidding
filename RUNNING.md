@@ -79,6 +79,33 @@ node functions/verifysupervisor.mjs                  # live: draft → create �
 Model: `ANTHROPIC_SUPERVISOR_MODEL` (defaults to `ANTHROPIC_COMPARE_MODEL`). Under the emulator
 the AI review layer is skipped (verdict WARN); in production a missing key/failed review BLOCKs.
 
+## App Check (proof that requests come from our web app)
+Rollout in 5 phases. **Status: phase 1 done** — the web app starts App Check when
+`VITE_APPCHECK_SITE_KEY` is set; until then it is off and nothing changes for users.
+
+| Phase | What | Status |
+|---|---|---|
+| 0 | Enable App Check + reCAPTCHA Enterprise APIs; create the web site key (domains `biding-system.web.app`, `biding-system.firebaseapp.com`, `localhost`); register the web app in Firebase App Check | to do |
+| 1 | Web app initializes App Check (`web/src/lib/firebase.ts`) | **done** |
+| 2 | Monitor 2–3 days: verified vs unverified requests (console metrics; function logs `"app": "VALID"`) | to do |
+| 3 | Debug tokens for our Node scripts (`verify*.mjs`, maintenance scripts) | to do |
+| 4 | Enforce: `enforceAppCheck: true` on all callables + enforcement for Firestore and Storage | to do |
+| 5 | Verify: browser works, tokenless script refused, emulator e2e green | to do |
+
+**Rules every change must follow (so the next phases need no rework):**
+- **One Firebase app.** All browser code uses `app`, `db`, `auth`, `functions`, `storage` exported from
+  `web/src/lib/firebase.ts`. Never call `initializeApp` / `getFirestore` / `getFunctions` /
+  `getStorage` / `getAuth` anywhere else — such a client would bypass App Check.
+- **App Check starts first.** Keep `initializeAppCheck` before any service is created or used.
+- **New callable functions** go through `onCall` with the global options; never add a per-function
+  option that disables App Check (`enforceAppCheck: false`) — phase 4 turns it on globally.
+- **New Node scripts** that use the client SDK against the live project must accept a debug token
+  from the environment (`APP_CHECK_DEBUG_TOKEN`), or use the Admin SDK — after phase 4 a script
+  without one is refused.
+- **Never commit** a debug token or put one in `.env.example`; the site key is public and may be.
+- Local dev on `localhost` with App Check on: set `VITE_APPCHECK_DEBUG_TOKEN` (registered in the
+  Firebase console → App Check → Manage debug tokens). The emulators do not enforce App Check.
+
 ## Running against the LIVE project
 - Seed live: `SEED_TARGET=real GOOGLE_APPLICATION_CREDENTIALS=... npm run seed`
 - Web against live: `VITE_USE_EMULATOR=false npm run dev:web`
