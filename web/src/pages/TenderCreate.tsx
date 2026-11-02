@@ -9,6 +9,12 @@ import {
   templateFieldsStatus,
   hasPlaceholder,
   isAutoSerialParam,
+  askedParams,
+  BRIEF_MAX_LENGTH,
+  guaranteeDefault,
+  shekelsInWords,
+  SERVICE_KEYS,
+  type TemplateParam,
   isAutoParam,
   isAutoDeadlineParam,
   type CaseTeam,
@@ -27,11 +33,19 @@ function toLocalInput(ms: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// On a template with a field order, the submission deadline sits after the fields numbered below
+// DEADLINE_ORDER, the case team after those below TEAM_ORDER and the domain tags after those below TAGS_ORDER.
+const DEADLINE_ORDER = 9;
+const TEAM_ORDER = 11;
+const TAGS_ORDER = 15;
+const YES = 'כן';
+const NO = 'לא';
+
 export default function TenderCreate() {
   const { t } = useTranslation();
   const nav = useNavigate();
   const [title, setTitle] = useState('');
-  const [type, setType] = useState<TenderType>(TENDER_TYPES.goods);
+  const [type, setType] = useState<TenderType>(TENDER_TYPES.service);
   const [deadline, setDeadline] = useState('');
   const [params, setParams] = useState<Record<string, string>>({});
   const [domainTags, setDomainTags] = useState<string[]>([]);
@@ -60,6 +74,30 @@ export default function TenderCreate() {
 
   const setParam = (k: string, v: string) => setParams((p) => ({ ...p, [k]: v }));
 
+  // The fields the form asks for, in the template's order. System-filled and hidden ones are not here.
+  const asked = askedParams(template?.params ?? []);
+  const ordered = asked.some((p) => p.order !== undefined);
+  const beforeDeadline = ordered ? asked.filter((p) => (p.order ?? Infinity) < DEADLINE_ORDER) : asked;
+  const orderOf = (p: TemplateParam) => p.order ?? Infinity;
+  // System-filled fixed values the form shows read-only, in their place among the asked fields.
+  const shown = ordered ? (template?.params ?? []).filter((p) => p.display && p.fill?.kind === 'fixed') : [];
+  const beforeTeam = ordered
+    ? [...asked, ...shown]
+        .filter((p) => orderOf(p) >= DEADLINE_ORDER && orderOf(p) < TEAM_ORDER)
+        .sort((a, b) => orderOf(a) - orderOf(b))
+    : [];
+  const afterTags = ordered ? asked.filter((p) => orderOf(p) >= TAGS_ORDER) : [];
+  const qualitative = params.is_qualitative === YES;
+  // A field with a default (the bid guarantee) shows it until the manager types a value; the checkbox
+  // starts unticked; a non-qualitative bid is scored 100% on price.
+  const valueOf = (p: TemplateParam): string => {
+    if (p.type === 'checkbox') return params[p.key] ?? NO;
+    if (p.key === SERVICE_KEYS.economicPct && !qualitative) return '100';
+    return (
+      params[p.key] ??
+      (p.defaultFrom === 'guarantee_pct' ? String(guaranteeDefault(params[SERVICE_KEYS.estimate]) ?? '') : '')
+    );
+  };
   const runDraft = async () => {
     if (brief.trim().length < 3) return;
     setDrafting(true);
@@ -89,25 +127,45 @@ export default function TenderCreate() {
   };
 
   // Fields still holding the AI draft's {{PLACEHOLDER}} — the brief didn't give the value.
-  const unfilled = (template?.params ?? []).filter((p) => !isAutoParam(p) && hasPlaceholder(params[p.key]));
+  const unfilled = asked.filter((p) => hasPlaceholder(params[p.key]));
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (ordered && brief.trim().length < 3) {
+      setError(t('create.briefRequired'));
+      return;
+    }
     if (unfilled.length) {
       setError(t('create.fillPlaceholders', { fields: unfilled.map((p) => p.labelHe).join(', ') }));
       document.getElementById(`param-${unfilled[0].key}`)?.focus();
       return;
     }
+    if (ordered) {
+      const missingTeam = requiredRoles.filter((r) => !team[r]);
+      if (missingTeam.length) {
+        setError(t('create.teamRequired', { roles: missingTeam.map((r) => t(`role.${r}`)).join(', ') }));
+        return;
+      }
+      if (!domainTags.length) {
+        setError(t('create.tagsRequired'));
+        return;
+      }
+      if (!deadline) {
+        setError(t('create.deadlineRequired'));
+        return;
+      }
+    }
     setBusy(true);
     setError('');
     try {
       const numericParams: Record<string, string | number> = {};
-      for (const p of template?.params ?? []) {
-        const raw = params[p.key] ?? '';
+      for (const p of asked) {
+        const raw = valueOf(p);
         numericParams[p.key] = p.type === 'number' && raw !== '' ? Number(raw) : raw;
       }
       const { id } = await api.createTender({
         title,
+        brief,
         type,
         params: numericParams,
         submissionDeadline: deadline ? new Date(deadline).getTime() : null,
@@ -127,6 +185,76 @@ export default function TenderCreate() {
     }
   };
 
+  const renderParam = (p: TemplateParam) => {
+    if (p.display && p.fill?.kind === 'fixed') {
+      return (
+        <div key={p.key}>
+          <label className="label">{p.labelHe}</label>
+          <input id={`param-${p.key}`} className="input bg-paper-2" value={p.fill.value} readOnly />
+        </div>
+      );
+    }
+    const value = valueOf(p);
+    const bad = hasPlaceholder(params[p.key]);
+    return (
+      <div key={p.key}>
+        <label className="label">
+          {p.labelHe}
+          {p.required && <span className="text-red-600"> *</span>}
+          {isConfidentialParam(p) && <span className="mr-2 text-xs text-red-600">{t('create.confidential')}</span>}
+        </label>
+        {p.type === 'checkbox' ? (
+          <input
+            id={`param-${p.key}`}
+            type="checkbox"
+            checked={value === YES}
+            onChange={(e) => setParam(p.key, e.target.checked ? YES : NO)}
+          />
+        ) : p.type === 'textarea' ? (
+          <textarea
+            id={`param-${p.key}`}
+            className={`input min-h-20 ${bad ? 'border-red-400 bg-red-50' : ''}`}
+            value={value}
+            onChange={(e) => setParam(p.key, e.target.value)}
+            required={p.required}
+          />
+        ) : (
+          <input
+            id={`param-${p.key}`}
+            className={`input ${bad ? 'border-red-400 bg-red-50' : ''}`}
+            type={p.type === 'number' ? 'number' : p.type === 'date' ? 'date' : 'text'}
+            value={value}
+            onChange={(e) => setParam(p.key, e.target.value)}
+            required={p.required}
+            min={p.key === SERVICE_KEYS.economicPct ? 0 : undefined}
+            max={p.key === SERVICE_KEYS.economicPct ? 100 : undefined}
+            disabled={p.key === SERVICE_KEYS.economicPct && !qualitative}
+          />
+        )}
+        {p.key === SERVICE_KEYS.economicPct && Number(value) >= 0 && Number(value) <= 100 && value !== '' && (
+          <div className="mt-1 text-xs text-tx-mute">{t('create.qualityShare', { pct: 100 - Number(value) })}</div>
+        )}
+        {bad && <div className="mt-1 text-xs text-red-600">{t('create.placeholderHint')}</div>}
+        {p.defaultFrom === 'guarantee_pct' && (
+          <div className="mt-1 text-xs text-tx-mute">
+            {t('create.guaranteeHint')}
+            {Number(value) > 0 && Number(value) <= 999_999_999 && ` · ${shekelsInWords(Number(value))}`}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const deadlineField = (
+    <div>
+      <label className="label">
+        {t('create.deadline')}
+        {ordered && <span className="text-red-600"> *</span>}
+      </label>
+      <input className="input" type="datetime-local" value={deadline} onChange={(e) => setDeadline(e.target.value)} required={ordered || !!template?.params.some(isAutoDeadlineParam)} />
+    </div>
+  );
+
   return (
     <div className="mx-auto max-w-2xl">
       <h1 className="mb-2 font-display text-2xl font-bold">{t('create.title')}</h1>
@@ -134,6 +262,29 @@ export default function TenderCreate() {
 
       {/* Agentic brief → AI draft */}
       <div className="card mb-5 space-y-3 p-6">
+        <div>
+          <label className="label">{t('create.brief')}{ordered && <span className="text-red-600"> *</span>}</label>
+          <textarea
+            className="input min-h-20"
+            maxLength={BRIEF_MAX_LENGTH}
+            placeholder={t('create.briefPlaceholder')}
+            value={brief}
+            onChange={(e) => setBrief(e.target.value)}
+          />
+        </div>
+        <button type="button" className="btn btn-gold" disabled={drafting || brief.trim().length < 3} onClick={runDraft}>
+          {drafting ? t('create.drafting') : `✨ ${t('create.aiDraft')}`}
+        </button>
+        <p className="text-xs text-tx-mute">{t('create.aiDraftHint')}</p>
+        {draftNote && <div className="rounded bg-amber-100 p-2 text-xs text-amber-700">{draftNote}</div>}
+      </div>
+
+      {notConverted && (
+        <div className="card mb-5 border-amber-300 bg-amber-50 p-4 text-sm text-amber-800">
+          {t('conv.createBlocked', { n: templateStatus!.unresolved })}
+        </div>
+      )}
+      <form onSubmit={submit} className="card space-y-5 p-6">
         <div>
           <label className="label">{t('create.type')}</label>
           <select
@@ -154,67 +305,30 @@ export default function TenderCreate() {
           </select>
         </div>
         <div>
-          <label className="label">{t('create.brief')}</label>
-          <textarea
-            className="input min-h-20"
-            placeholder={t('create.briefPlaceholder')}
-            value={brief}
-            onChange={(e) => setBrief(e.target.value)}
+          <label className="label">{t('create.tenderTitle')}</label>
+          <input
+            className="input"
+            value={title}
+            placeholder={ordered ? t('create.titleAuto') : undefined}
+            onChange={(e) => setTitle(e.target.value)}
+            required={!ordered}
           />
         </div>
-        <button type="button" className="btn btn-gold" disabled={drafting || brief.trim().length < 3} onClick={runDraft}>
-          {drafting ? t('create.drafting') : `✨ ${t('create.aiDraft')}`}
-        </button>
-        <p className="text-xs text-tx-mute">{t('create.aiDraftHint')}</p>
-        {draftNote && <div className="rounded bg-amber-100 p-2 text-xs text-amber-700">{draftNote}</div>}
-      </div>
 
-      {notConverted && (
-        <div className="card mb-5 border-amber-300 bg-amber-50 p-4 text-sm text-amber-800">
-          {t('conv.createBlocked', { n: templateStatus!.unresolved })}
-        </div>
-      )}
-      <form onSubmit={submit} className="card space-y-5 p-6">
-        <div>
-          <label className="label">{t('create.tenderTitle')}</label>
-          <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} required />
-        </div>
-
-        {template?.params.filter(isAutoParam).map((p) => (
+        {!ordered && template?.params.filter(isAutoParam).map((p) => (
           <div key={p.key} className="rounded bg-paper-2 p-2 text-sm text-tx-soft">
             {p.labelHe}: {isAutoSerialParam(p) ? t('create.autoSerial') : t('create.autoDeadline')}
           </div>
         ))}
-        {template?.params.filter((p) => !isAutoParam(p)).map((p) => (
-          <div key={p.key}>
-            <label className="label">
-              {p.labelHe}
-              {isConfidentialParam(p) && <span className="mr-2 text-xs text-red-600">{t('create.confidential')}</span>}
-            </label>
-            {p.type === 'textarea' ? (
-              <textarea
-                id={`param-${p.key}`}
-                className={`input min-h-20 ${hasPlaceholder(params[p.key]) ? 'border-red-400 bg-red-50' : ''}`}
-                value={params[p.key] ?? ''}
-                onChange={(e) => setParam(p.key, e.target.value)}
-                required={p.required}
-              />
-            ) : (
-              <input
-                id={`param-${p.key}`}
-                className={`input ${hasPlaceholder(params[p.key]) ? 'border-red-400 bg-red-50' : ''}`}
-                type={p.type === 'number' ? 'number' : p.type === 'date' ? 'date' : 'text'}
-                value={params[p.key] ?? ''}
-                onChange={(e) => setParam(p.key, e.target.value)}
-                required={p.required}
-              />
-            )}
-            {hasPlaceholder(params[p.key]) && <div className="mt-1 text-xs text-red-600">{t('create.placeholderHint')}</div>}
-          </div>
-        ))}
+        {beforeDeadline.map(renderParam)}
+        {ordered && deadlineField}
+        {beforeTeam.map(renderParam)}
 
         <div>
-          <label className="label">{t('team.title')}</label>
+          <label className="label">
+            {t('team.title')}
+            {ordered && <span className="text-red-600"> *</span>}
+          </label>
           <p className="mb-2 text-xs text-tx-mute">{t('team.createHint')}</p>
           <div className="space-y-2">
             {requiredRoles.map((r) => (
@@ -255,9 +369,14 @@ export default function TenderCreate() {
         </div>
 
         <div>
-          <label className="label">{t('create.domainTags')}</label>
+          <label className="label">
+            {t('create.domainTags')}
+            {ordered && <span className="text-red-600"> *</span>}
+          </label>
           <TagsInput value={domainTags} onChange={setDomainTags} placeholder={t('create.domainTagsHint')} />
         </div>
+
+        {afterTags.map(renderParam)}
 
         {criteria.length > 0 && (
           <div>
@@ -279,16 +398,7 @@ export default function TenderCreate() {
           </div>
         )}
 
-        <div>
-          <label className="label">{t('create.deadline')}</label>
-          <input
-            className="input"
-            type="datetime-local"
-            value={deadline}
-            onChange={(e) => setDeadline(e.target.value)}
-            required={!!template?.params.some(isAutoDeadlineParam)}
-          />
-        </div>
+        {!ordered && deadlineField}
 
         {error && <div className="text-sm text-red-600">{error}</div>}
         <button className="btn btn-gold" disabled={busy || notConverted}>

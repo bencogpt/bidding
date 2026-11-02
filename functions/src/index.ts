@@ -31,6 +31,7 @@ import {
   assignTeamMemberInput,
   setRequiredRolesInput,
   requiredRolesFor,
+  TENDER_TYPE_LABELS_HE,
   missingRoles,
   memberUidsOf,
   REQUIRED_ROLES_BY_TYPE,
@@ -46,6 +47,9 @@ import {
   templateFieldsStatus,
   hasPlaceholder,
   isAutoSerialParam,
+  isSystemParam,
+  resolveSystemFills,
+  SERVICE_KEYS,
   isAutoDeadlineParam,
   isAutoParam,
   formatDeadlineFor,
@@ -172,7 +176,7 @@ function validateParams(
 ): Record<string, string | number> {
   const clean: Record<string, string | number> = {};
   const stillPlaceholders = template.params
-    .filter((p) => !isAutoParam(p) && hasPlaceholder(params[p.key]))
+    .filter((p) => !isSystemParam(p) && !p.hidden && hasPlaceholder(params[p.key]))
     .map((p) => p.labelHe);
   if (stillPlaceholders.length) {
     throw new HttpsError(
@@ -181,7 +185,7 @@ function validateParams(
     );
   }
   for (const p of template.params) {
-    if (isAutoParam(p)) continue; // filled by the system (case serial / form deadline)
+    if (isSystemParam(p) || p.hidden) continue; // filled by the system (or not asked at all)
     const v = params[p.key];
     const blank = v === undefined || String(v).trim() === '';
     if (blank) {
@@ -190,6 +194,9 @@ function validateParams(
     }
     if (p.type === 'number' && !Number.isFinite(Number(v))) {
       throw new HttpsError('invalid-argument', `השדה "${p.labelHe}" חייב להיות מספר.`);
+    }
+    if (p.key === SERVICE_KEYS.economicPct && (Number(v) < 0 || Number(v) > 100)) {
+      throw new HttpsError('invalid-argument', `השדה "${p.labelHe}" חייב להיות בין 0 ל-100.`);
     }
     clean[p.key] = p.type === 'number' ? Number(v) : v;
   }
@@ -375,9 +382,7 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
       'התבנית טרם הומרה — יש להשלים את שדות התבנית בעמוד התבניות לפני יצירת מכרז.',
     );
   }
-  const params = validateParams(template, input.params);
-  // Confidential values (the estimate, G6) never go on the supplier-readable tender doc.
-  const { publicParams, internalParams } = splitConfidential(template, params);
+  const asked = validateParams(template, input.params);
 
   const draft = input.draftId ? await bidDraftsRepo.get(input.draftId) : null;
   if (input.draftId && (!draft || draft.createdBy !== caller.uid)) {
@@ -394,22 +399,39 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
   const { team, users: teamUsers } = await resolveTeam(input.team);
   const owner = await usersRepo.get(caller.uid);
 
+  // Calculated and fixed fields (guarantee default and words, total months, manager and requester
+  // details, …) are completed from what was asked, before the confidential split: the guarantee
+  // default reads the estimate.
+  const requester = teamUsers.find((u) => u.role === 'requester');
+  const params = resolveSystemFills(template.params, asked, {
+    submissionDeadline: input.submissionDeadline ?? null,
+    manager: owner ? { displayName: owner.displayName, email: owner.email } : undefined,
+    requester: requester ? { displayName: requester.displayName, phone: requester.phone } : undefined,
+  });
+  // Confidential values (the estimate, G6) never go on the supplier-readable tender doc.
+  const { publicParams, internalParams } = splitConfidential(template, params);
+
   // ---- 2. serial + document ----
   const id = tendersRepo.newId();
   const serial = await countersRepo.nextSerial(new Date(now()).getFullYear());
   // The bid number is the case serial — filled by the system, never typed or guessed.
   for (const p of template.params) if (isAutoSerialParam(p)) publicParams[p.key] = serial;
+  // A blank title is named by the system: the type and the case serial.
   // ...and the submission-date fields are the form's deadline.
   for (const p of template.params) {
-    if (isAutoDeadlineParam(p)) publicParams[p.key] = formatDeadlineFor(p.key, input.submissionDeadline!);
+    if (isAutoDeadlineParam(p) && input.submissionDeadline) {
+      publicParams[p.key] = formatDeadlineFor(p.key, input.submissionDeadline);
+    }
   }
+  const systemKeys = new Set(template.params.filter(isSystemParam).map((p) => p.key));
+  const title = input.title?.trim() || `${TENDER_TYPE_LABELS_HE[input.type]} ${serial}`;
   const tender: TenderDoc = {
     id,
     serial,
     team,
     requiredRoles,
     memberUids: memberUidsOf(caller.uid, team),
-    title: input.title,
+    title,
     type: input.type,
     params: publicParams,
     status: 'draft',
@@ -432,14 +454,14 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
     googleTemplateDocId: template.googleTemplateDocId ?? null,
     draftId: draft?.draftId ?? null,
     draftType: draft?.type ?? null,
-    brief: draft?.brief ?? null,
+    brief: draft?.brief ?? (input.brief?.trim() || null),
     aiModel: draft?.model ?? null,
     aiStatus: draft?.status ?? null,
     skillsUsed: draft?.status === 'FAILED' ? [] : draft?.skillsUsed ?? [],
     paramSources: draft?.sources ?? {},
     editedByManager: draft
       ? Object.keys(publicParams).filter(
-          (k) => !isAutoParam({ key: k }) && String(draft.params[k] ?? '') !== String(publicParams[k] ?? ''),
+          (k) => !systemKeys.has(k) && String(draft.params[k] ?? '') !== String(publicParams[k] ?? ''),
         )
       : [],
     recordedAt: now(),
@@ -488,7 +510,7 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
         action: 'create_failed',
         prevState: serial,
         newState: null,
-        detail: `${input.title} — ${(err as Error).message}`.slice(0, 300),
+        detail: `${title} — ${(err as Error).message}`.slice(0, 300),
       })
       .catch(() => undefined);
     if (err instanceof HttpsError) throw err;
@@ -523,7 +545,7 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
     action: 'create',
     prevState: null,
     newState: 'draft',
-    detail: `${serial} · ${input.type}: ${input.title}`,
+    detail: `${serial} · ${input.type}: ${title}`,
   });
   await auditRepo.append({
     entityType: 'tender',

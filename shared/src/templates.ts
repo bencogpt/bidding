@@ -1,14 +1,45 @@
 // Pure helpers for binding a Google Doc template to a tender type. Shared by functions
 // (the bind callable) and tests — no I/O here.
 
+/**
+ * A value the system fills in itself instead of asking the manager: a fixed text, a copy of another
+ * field, or a named formula (see serviceFields.ts).
+ */
+export type SystemFill =
+  | { kind: 'fixed'; value: string }
+  | { kind: 'copy'; from: string }
+  | { kind: 'formula'; formula: SystemFormula };
+
+export const SYSTEM_FORMULAS = [
+  'guarantee_words', // bid-guarantee amount spelled out in Hebrew
+  'total_months', // first contract period + optional periods
+  'quality_pct', // 100 minus the economic share of the score split
+  'submission_day', // weekday of the submission deadline
+  'manager_name', // the tender manager creating the case
+  'manager_email',
+  'requester_name', // the requester on the case team
+  'requester_phone',
+] as const;
+export type SystemFormula = (typeof SYSTEM_FORMULAS)[number];
+
 export interface TemplateParam {
   key: string;
   labelHe: string;
-  type: 'text' | 'number' | 'date' | 'textarea';
+  type: 'text' | 'number' | 'date' | 'textarea' | 'checkbox'; // checkbox is stored as 'כן' / 'לא'
   required: boolean;
   // Confidential value (e.g. the estimate / אומדן, GLOBAL_RULES G6): kept internal, never filled
   // into the published document.
   internal?: boolean;
+  // Position on the create form, ascending; fields without one come after the ordered ones.
+  order?: number;
+  // Filled by the system: never asked on the form and never drafted by the AI.
+  fill?: SystemFill;
+  // A system-filled fixed value that the form also shows, read-only (at `order`).
+  display?: boolean;
+  // Neither asked nor filled: stays blank until a rule exists for it.
+  hidden?: boolean;
+  // Pre-filled while the manager has not typed a value (still editable).
+  defaultFrom?: 'guarantee_pct';
 }
 
 const CONFIDENTIAL_KEY_RE = /budget|estimate|אומדן|תקציב/i;
@@ -53,10 +84,26 @@ export function mergeSyncedParams(
   // a re-sync must not reset a converted template's fields to raw keys and plain text.
   const merged = detected.map((p) => {
     const old = prev.get(p.key);
-    return old ? { ...p, labelHe: old.labelHe, type: old.type, required: old.required, ...(old.internal ? { internal: true } : {}) } : p;
+    if (!old) return p;
+    return {
+      ...p,
+      labelHe: old.labelHe,
+      type: old.type,
+      required: old.required,
+      ...(old.internal ? { internal: true } : {}),
+      // form layout and system-fill rules survive a re-sync too
+      ...(old.order !== undefined ? { order: old.order } : {}),
+      ...(old.hidden ? { hidden: true } : {}),
+      ...(old.fill ? { fill: old.fill } : {}),
+      ...(old.display ? { display: true } : {}),
+      ...(old.defaultFrom ? { defaultFrom: old.defaultFrom } : {}),
+    };
   });
   const keys = new Set(detected.map((p) => p.key));
-  return [...merged, ...existing.filter((p) => p.internal && !keys.has(p.key))];
+  // Fields that are not typed into the document (the estimate, system-filled and not-yet-set ones)
+  // have no placeholder to be detected from, so they are carried over.
+  const keepWithoutPlaceholder = (p: TemplateParam) => p.internal || p.hidden || !!p.fill;
+  return [...merged, ...existing.filter((p) => keepWithoutPlaceholder(p) && !keys.has(p.key))];
 }
 
 // ---- Word-style fill-in spots (XXXX, ____) in documents that aren't real templates yet ----
@@ -170,4 +217,19 @@ export function parseDocId(urlOrId: string): string | null {
 /** Public export endpoint for a link-viewable Google Doc (plain text). */
 export function docExportTxtUrl(docId: string): string {
   return `https://docs.google.com/document/d/${docId}/export?format=txt`;
+}
+
+/** Whether the system supplies this field, so the form never asks for it and the AI never drafts it. */
+export const isSystemParam = (p: { key: string; fill?: SystemFill }): boolean =>
+  isAutoParam(p) || !!p.fill;
+
+/** The fields the create form asks for, in display order (stable for fields without an order). */
+export function askedParams<T extends { key: string; fill?: SystemFill; hidden?: boolean; order?: number }>(
+  params: readonly T[],
+): T[] {
+  return params
+    .filter((p) => !isSystemParam(p) && !p.hidden)
+    .map((p, i) => ({ p, i }))
+    .sort((a, b) => (a.p.order ?? Infinity) - (b.p.order ?? Infinity) || a.i - b.i)
+    .map(({ p }) => p);
 }
