@@ -1,6 +1,6 @@
 ---
 name: s20-bid-defaults-and-computed-fields
-description: Fills the בל"מ result document's fields that don't need a human decision, unless the brief or requester already specified them: fixed defaults (submission location, lunch cost, address and PO box), computed values (offer validity, guarantee validity) and the contract's own unique fields. Also checks the order of the bid's key dates. Use at the start of building the bid, right after the initial data is entered and before the other drafting skills, and whenever a default value, an offer validity date, a guarantee validity date or the order of the bid's dates comes up.
+description: Fills the בל"מ result document's fields that don't need a human decision, unless the brief or requester already specified them: fixed defaults (submission location, lunch cost), computed values (offer validity, guarantee validity) and the contract's own unique fields. Also checks the order of the bid's key dates. Use at the start of building the bid, right after the initial data is entered and before the other drafting skills, and whenever a default value, an offer validity date, a guarantee validity date or the order of the bid's dates comes up.
 ---
 <!--
 ===========================================
@@ -53,13 +53,13 @@ Run the groups in this order. Computed values read the defaults.
 ### 1. Fixed defaults
 
 Use these values when the matching template field exists and has no explicit
-value.
+value. There is no default for the address or PO box yet: treat them as
+contract-unique fields (step 3) until the organization supplies one.
 
 | Field | Default | Note |
 |---|---|---|
 | Submission location | `מרכז למורשת מודיעין` | Temporary: until submission through ABS exists. Add an `INFO` flag |
 | Lunch cost | `820 ₪ לחודש` or `40 ₪ לתלוש` | Both options appear together, as written. Don't pick one |
-| Address and PO box | `test@gmail.com` | **Temporary placeholder** until the real details arrive. Always add a `WARNING` flag `MISSING_INFO` so it can't pass the final gate unnoticed |
 
 ### 2. Computed values
 
@@ -79,7 +79,8 @@ All dates are calendar days, in Israel time, written `DD/MM/YYYY`.
 ### 3. Unique fields of this contract
 
 These are the fields that differ per contract (names, quantities, periods,
-scope). Fill a field only if the brief or requester input states it clearly.
+scope, and for now the address and PO box). Fill a field only if the brief
+or requester input states it clearly.
 Write what they said and record the sentence as the source.
 
 For every other field, leave `{{FIELD_NAME}}` and raise a `MISSING_INFO`
@@ -132,6 +133,6 @@ source (G11).
 - Never override an explicit value (see the core rule).
 - Never invent a date, amount or name. A missing input gives a placeholder
   and a flag (G1, G2).
-- The address and PO box value is temporary. Don't remove its
-  `WARNING` flag until the bid manager confirms the real details.
+- Don't fill an address or PO box from any source other than the brief,
+  the requester or the bid manager.
 - Confidential values stay out of everything this skill fills (G6).
