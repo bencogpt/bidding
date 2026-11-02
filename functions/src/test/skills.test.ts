@@ -15,7 +15,7 @@ test('skillMeta tolerates a file without frontmatter', () => {
   assert.deepEqual(skillMeta('# just a heading'), { name: '', description: '' });
 });
 
-test('skillsCatalog: all 19 skills, hashes match what the supervisor checks against', () => {
+test('skillsCatalog: all skills, hashes match what the supervisor checks against', () => {
   const c = skillsCatalog();
   assert.equal(c.skills.length, SKILL_IDS.length);
   for (const s of c.skills) {
