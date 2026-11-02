@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/AuthProvider';
 import type { Role } from '@obms/shared';
@@ -17,7 +17,9 @@ function NavItem({ to, label, badge }: { to: string; label: string; badge?: numb
     >
       {label}
       {!!badge && (
-        <span className="mr-2 rounded-full bg-gold px-1.5 text-xs font-bold text-ink-900">{badge}</span>
+        <span className="mr-2 rounded-full bg-gold px-1.5 text-xs font-bold text-ink-900">
+          {badge}
+        </span>
       )}
     </NavLink>
   );
@@ -28,6 +30,8 @@ export default function InternalLayout() {
   const { role, user, logout } = useAuth();
   const isManager = role === 'tender_manager';
   const pendingFeedback = useMyFeedbackRequests(user?.uid);
+  // The dashboard list uses the full width and height of the screen; other pages stay a centred column.
+  const fullScreen = useLocation().pathname === '/';
 
   return (
     <div className="flex h-full">
@@ -48,13 +52,16 @@ export default function InternalLayout() {
         <div className="mt-4 border-t border-white/10 pt-4">
           <div className="px-2 text-sm font-semibold">{user?.displayName ?? user?.email}</div>
           <div className="px-2 text-xs text-gold-soft">{t(`role.${role as Role}`)}</div>
-          <button className="btn mt-3 w-full justify-center bg-transparent text-white" onClick={logout}>
+          <button
+            className="btn mt-3 w-full justify-center bg-transparent text-white"
+            onClick={logout}
+          >
             {t('nav.logout')}
           </button>
         </div>
       </aside>
       <main className="flex-1 overflow-auto p-8">
-        <div className="mx-auto max-w-6xl">
+        <div className={fullScreen ? 'h-full' : 'mx-auto max-w-6xl'}>
           <Outlet />
         </div>
       </main>

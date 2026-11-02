@@ -50,6 +50,9 @@ import {
   isSystemParam,
   resolveSystemFills,
   SERVICE_KEYS,
+  isAutoDeadlineParam,
+  isAutoParam,
+  formatDeadlineFor,
   analyzeTemplateFieldsInput,
   applyTemplateConversionInput,
   docExportTxtUrl,
@@ -386,6 +389,11 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
     throw new HttpsError('invalid-argument', 'טיוטת ה-AI לא נמצאה.');
   }
 
+  // Template fields that are the submission date come from the form's deadline — one source.
+  if (template.params.some(isAutoDeadlineParam) && !input.submissionDeadline) {
+    throw new HttpsError('invalid-argument', 'יש לקבוע מועד הגשה — הוא ממולא אוטומטית במסמך המכרז.');
+  }
+
   // The case team: one user per required role, validated against the users' actual roles.
   const requiredRoles = requiredRolesFor(input.type, input.extraRoles ?? []);
   const { team, users: teamUsers } = await resolveTeam(input.team);
@@ -409,6 +417,12 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
   // The bid number is the case serial — filled by the system, never typed or guessed.
   for (const p of template.params) if (isAutoSerialParam(p)) publicParams[p.key] = serial;
   // A blank title is named by the system: the type and the case serial.
+  // ...and the submission-date fields are the form's deadline.
+  for (const p of template.params) {
+    if (isAutoDeadlineParam(p) && input.submissionDeadline) {
+      publicParams[p.key] = formatDeadlineFor(p.key, input.submissionDeadline);
+    }
+  }
   const systemKeys = new Set(template.params.filter(isSystemParam).map((p) => p.key));
   const title = input.title?.trim() || `${TENDER_TYPE_LABELS_HE[input.type]} ${serial}`;
   const tender: TenderDoc = {

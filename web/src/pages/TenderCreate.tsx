@@ -15,6 +15,8 @@ import {
   shekelsInWords,
   SERVICE_KEYS,
   type TemplateParam,
+  isAutoParam,
+  isAutoDeadlineParam,
   type CaseTeam,
   type TeamRole,
   type TenderType,
@@ -169,7 +171,9 @@ export default function TenderCreate() {
         submissionDeadline: deadline ? new Date(deadline).getTime() : null,
         domainTags,
         evaluationCriteria: criteria,
-        draftId: draftId ?? undefined,
+        // Omit the key when there is no AI draft: the callable client turns undefined into null,
+        // which the optional string field on the server rejects.
+        ...(draftId ? { draftId } : {}),
         requestId: requestId.current,
         team: Object.fromEntries(requiredRoles.filter((r) => team[r]).map((r) => [r, team[r]])),
         extraRoles,
@@ -247,7 +251,7 @@ export default function TenderCreate() {
         {t('create.deadline')}
         {ordered && <span className="text-red-600"> *</span>}
       </label>
-      <input className="input" type="datetime-local" value={deadline} onChange={(e) => setDeadline(e.target.value)} required={ordered} />
+      <input className="input" type="datetime-local" value={deadline} onChange={(e) => setDeadline(e.target.value)} required={ordered || !!template?.params.some(isAutoDeadlineParam)} />
     </div>
   );
 
@@ -311,9 +315,9 @@ export default function TenderCreate() {
           />
         </div>
 
-        {!ordered && template?.params.filter(isAutoSerialParam).map((p) => (
+        {!ordered && template?.params.filter(isAutoParam).map((p) => (
           <div key={p.key} className="rounded bg-paper-2 p-2 text-sm text-tx-soft">
-            {p.labelHe}: {t('create.autoSerial')}
+            {p.labelHe}: {isAutoSerialParam(p) ? t('create.autoSerial') : t('create.autoDeadline')}
           </div>
         ))}
         {beforeDeadline.map(renderParam)}

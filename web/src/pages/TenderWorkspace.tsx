@@ -23,9 +23,11 @@ import AccessPanel from '../components/AccessPanel';
 import QuestionsPanel from '../components/QuestionsPanel';
 import EvaluationPanel from '../components/EvaluationPanel';
 import CasePanel from '../components/CasePanel';
+import QuartetCard from '../components/QuartetCard';
 import SupervisorPanel, { VerdictBadge } from '../components/SupervisorPanel';
 
-type Tab = 'case' | 'overview' | 'document' | 'supervisor' | 'chat' | 'access' | 'questions' | 'evaluation';
+type Tab =
+  'case' | 'overview' | 'document' | 'supervisor' | 'chat' | 'access' | 'questions' | 'evaluation';
 
 export default function TenderWorkspace() {
   const { id } = useParams();
@@ -65,7 +67,10 @@ export default function TenderWorkspace() {
   if (!tender) return <div className="text-tx-soft">{denied ? t('team.notAssigned') : '404'}</div>;
 
   const isManager = role === 'tender_manager';
-  const missing = missingRoles(tender.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[tender.type], tender.team);
+  const missing = missingRoles(
+    tender.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[tender.type],
+    tender.team,
+  );
   const transitionTo = async (
     to: Parameters<typeof api.transitionTender>[0]['to'],
     override?: string,
@@ -124,7 +129,11 @@ export default function TenderWorkspace() {
               <button
                 className="btn"
                 disabled={busy || missing.length > 0}
-                title={missing.length ? t('team.missing', { roles: missing.map((r) => t(`role.${r}`)).join(', ') }) : ''}
+                title={
+                  missing.length
+                    ? t('team.missing', { roles: missing.map((r) => t(`role.${r}`)).join(', ') })
+                    : ''
+                }
                 onClick={() => transitionTo('internal_review')}
               >
                 {t('ws.sendToReview')}
@@ -136,7 +145,11 @@ export default function TenderWorkspace() {
               </button>
             )}
             {tender.status === 'ready' && (
-              <button className="btn btn-gold" disabled={busy} onClick={() => transitionTo('published')}>
+              <button
+                className="btn btn-gold"
+                disabled={busy}
+                onClick={() => transitionTo('published')}
+              >
                 {busy ? t('sup.checking') : t('ws.publish')}
               </button>
             )}
@@ -145,7 +158,9 @@ export default function TenderWorkspace() {
       </div>
 
       {(initialCheck || (!tender.lastSupervision && isManager)) && (
-        <div className="card mb-4 border-teal-200 bg-teal-soft p-3 text-sm text-teal-600">{t('sup.initialRunning')}</div>
+        <div className="card mb-4 border-teal-200 bg-teal-soft p-3 text-sm text-teal-600">
+          {t('sup.initialRunning')}
+        </div>
       )}
       {error && (
         <div className="card mb-4 space-y-2 border-red-200 p-4 text-sm">
@@ -185,13 +200,16 @@ export default function TenderWorkspace() {
       </div>
 
       {tab === 'overview' && (
-        <div className="card space-y-2 p-6 text-sm">
-          {Object.entries(tender.params).map(([k, v]) => (
-            <div key={k} className="flex gap-2">
-              <span className="font-semibold text-tx-soft">{k}:</span>
-              <span>{String(v)}</span>
-            </div>
-          ))}
+        <div className="space-y-4">
+          <QuartetCard tender={tender} />
+          <div className="card space-y-2 p-6 text-sm">
+            {Object.entries(tender.params).map(([k, v]) => (
+              <div key={k} className="flex gap-2">
+                <span className="font-semibold text-tx-soft">{k}:</span>
+                <span>{String(v)}</span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
       {tab === 'document' && (

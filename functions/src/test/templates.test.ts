@@ -64,3 +64,19 @@ test('hasPlaceholder: AI-draft {{PLACEHOLDER}} values are not filled values', as
   assert.equal(hasPlaceholder(12), false);
   assert.equal(hasPlaceholder(undefined), false);
 });
+
+test('auto fields: bid number and submission-date fields are filled by the system', async () => {
+  const { isAutoParam, isAutoDeadlineParam, formatDeadlineFor } = await import('@obms/shared');
+  assert.ok(isAutoParam({ key: 'tender_number' }) && isAutoParam({ key: 'submission_day_date' }));
+  assert.ok(isAutoDeadlineParam({ key: 'submission_date' }) && !isAutoDeadlineParam({ key: 'clarifications_deadline' }));
+  const deadline = Date.parse('2026-12-16T14:52:00Z'); // Wednesday 16/12/2026, 16:52 in Israel
+  assert.equal(formatDeadlineFor('submission_date', deadline), '16/12/2026');
+  assert.equal(formatDeadlineFor('submission_day_date', deadline), 'יום רביעי, 16/12/2026');
+  assert.equal(formatDeadlineFor('submission_day', deadline), 'רביעי');
+});
+
+test('placeholderSpellings covers hand-typed spaces inside the braces', async () => {
+  const { placeholderSpellings } = await import('../services/docsService.js');
+  assert.ok(placeholderSpellings('guarantee_duration').includes('{{guarantee_duration }}'));
+  assert.equal(placeholderSpellings('x').length, 4);
+});

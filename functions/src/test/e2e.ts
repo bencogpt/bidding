@@ -603,8 +603,9 @@ async function main() {
     await call('createTender')({
       title: 'שירות',
       type: 'service',
-      params: { service_subject: '{{SERVICE_SUBJECT}}', submission_date: '2026-12-01' },
+      params: { service_subject: '{{SERVICE_SUBJECT}}' },
       team: svcTeam,
+      submissionDeadline: Date.parse('2026-12-16T14:52:00Z'),
     });
   } catch (e) {
     placeholderRejected = /מציין המקום/.test((e as Error).message);
@@ -615,8 +616,9 @@ async function main() {
   const svcInput = {
     title: 'מכרז שירותי פיתוח',
     type: 'service',
-    params: { service_subject: 'פיתוח ותחזוקה', submission_date: '2026-12-01' },
+    params: { service_subject: 'פיתוח ותחזוקה' },
     team: svcTeam,
+    submissionDeadline: Date.parse('2026-12-16T14:52:00Z'),
     requestId: 'e2e-request-0001',
   };
   const svcCase = (await call('createTender')(svcInput)) as { data: { id: string; serial: string; duplicate: boolean } };
@@ -624,6 +626,7 @@ async function main() {
   assert.equal(svcCase.data.duplicate, false);
   const svcTender = (await getDoc(doc(db, 'tenders', svcCase.data.id))).data()!;
   assert.equal(svcTender.params.tender_number, svcCase.data.serial, 'bid number = case serial, filled by the system');
+  assert.equal(svcTender.params.submission_date, '16/12/2026', 'submission date = the form deadline, filled by the system');
   const retried = (await call('createTender')(svcInput)) as { data: { id: string; duplicate: boolean } };
   assert.equal(retried.data.id, svcCase.data.id, 'retry returns the same case');
   assert.equal(retried.data.duplicate, true);

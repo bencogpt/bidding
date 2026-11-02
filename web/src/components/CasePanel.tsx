@@ -1,12 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import type { TenderDoc } from '@obms/shared';
-import {
-  useAccess,
-  useSubmissions,
-  useQuestions,
-  useAnswers,
-  useTenderAudit,
-} from '../lib/hooks';
+import { useAccess, useSubmissions, useQuestions, useAnswers, useTenderAudit } from '../lib/hooks';
 import StatusBadge from './StatusBadge';
 import ScoreCard from './ScoreCard';
 import FeedbackSummary from './FeedbackSummary';
@@ -60,23 +54,6 @@ export default function CasePanel({ tender }: { tender: TenderDoc }) {
 
       <ScoreCard tender={tender} />
       {isManager && <FeedbackSummary tender={tender} />}
-
-      {/* Parties */}
-      <div className="card p-5">
-        <h4 className="mb-2 font-semibold">{t('case.parties')}</h4>
-        {access.length === 0 ? (
-          <div className="text-sm text-tx-mute">—</div>
-        ) : (
-          <ul className="space-y-1 text-sm">
-            {access.map((a) => (
-              <li key={a.principalId} className="flex items-center gap-2">
-                <span className="chip">{a.kind === 'supplier' ? t('role.supplier') : a.level}</span>
-                <span>{a.displayName}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
 
       {/* Submissions + files */}
       <div className="card p-5">
