@@ -54,7 +54,11 @@ export default function TenderCreate() {
   const [criteria, setCriteria] = useState<Criterion[]>([]);
   // AI draft provenance: linked to the tender so the supervisor can trace every value.
   const [draftId, setDraftId] = useState<string | null>(null);
-  const [draftNote, setDraftNote] = useState('');
+  // The draft outcome is kept as data and turned into text at render time, so labels come from the current template.
+  const [draftFailed, setDraftFailed] = useState(false);
+  const [draftMissing, setDraftMissing] = useState<string[]>([]);
+  // Bumped on every type pick; a draft response whose number is stale belongs to a type no longer selected.
+  const draftSeq = useRef(0);
   const [drafting, setDrafting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -101,34 +105,33 @@ export default function TenderCreate() {
   };
   const runDraft = async (forType: TenderType) => {
     if (brief.trim().length < 3) return;
+    const seq = draftSeq.current;
     setDrafting(true);
     setError('');
     try {
       const d = await api.draftBid({ type: forType, brief });
+      if (seq !== draftSeq.current) return; // a newer pick owns the form and the drafting flag
       setDraftId(d.draftId);
-      // labels come from the template of the type just picked
-      const labelOf = (k: string) => (forType === type ? template : undefined)?.params.find((p) => p.key === k)?.labelHe ?? k;
-      setDraftNote(
-        d.status === 'FAILED'
-          ? t('create.draftFailed')
-          : d.missing.length
-            ? t('create.draftMissing', { fields: d.missing.map(labelOf).join(', ') })
-            : '',
-      );
+      setDraftFailed(d.status === 'FAILED');
+      setDraftMissing(d.status === 'FAILED' ? [] : d.missing);
       if (d.title) setTitle(d.title);
       setParams(Object.fromEntries(Object.entries(d.params ?? {}).map(([k, v]) => [k, String(v)])));
       setDomainTags(d.domainTags ?? []);
       setCriteria(d.evaluationCriteria ?? []);
       if (d.submissionDeadlineDays) setDeadline(toLocalInput(Date.now() + d.submissionDeadlineDays * 86400000));
     } catch (err) {
+      if (seq !== draftSeq.current) return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setDrafting(false);
+      if (seq === draftSeq.current) setDrafting(false);
     }
   };
 
   // Picking (or changing) the type discards the previous draft and drafts again from that template.
   const pickType = (next: TenderType | '') => {
+    draftSeq.current += 1;
+    setDrafting(false);
+    setError('');
     setType(next);
     setParams({});
     setTitle('');
@@ -136,12 +139,20 @@ export default function TenderCreate() {
     setCriteria([]);
     setDeadline('');
     setDraftId(null); // a draft is bound to the template type it was made for
-    setDraftNote('');
+    setDraftFailed(false);
+    setDraftMissing([]);
     if (next) void runDraft(next);
   };
 
   // Fields still holding the AI draft's {{PLACEHOLDER}} — the brief didn't give the value.
   const unfilled = asked.filter((p) => hasPlaceholder(params[p.key]));
+
+  const labelOf = (k: string) => template?.params.find((p) => p.key === k)?.labelHe ?? k;
+  const draftNote = draftFailed
+    ? t('create.draftFailed')
+    : draftMissing.length
+      ? t('create.draftMissing', { fields: draftMissing.map(labelOf).join(', ') })
+      : '';
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -419,7 +430,7 @@ export default function TenderCreate() {
         )}
 
         {error && <div className="text-sm text-red-600">{error}</div>}
-        <button className="btn btn-gold" disabled={busy || drafting || notConverted}>
+        <button className="btn btn-gold" disabled={busy || drafting || !type || notConverted}>
           {busy ? t('create.creating') : t('create.submit')}
         </button>
       </form>
