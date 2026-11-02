@@ -31,9 +31,12 @@ import {
   generateSkillTipsInput,
   assignTeamMemberInput,
   setRequiredRolesInput,
+  approveTenderInput,
+  REQUIRE_APPROVALS,
   requiredRolesFor,
   TENDER_TYPE_LABELS_HE,
   missingRoles,
+  missingApprovals,
   memberUidsOf,
   REQUIRED_ROLES_BY_TYPE,
   TEAM_ROLES,
@@ -649,6 +652,21 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
     }
   }
 
+  // Final approval: every required role has signed off in this review round.
+  if (REQUIRE_APPROVALS && input.to === 'ready' && canTransition(current.status, 'ready')) {
+    const waiting = missingApprovals(
+      current.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[current.type],
+      current.team,
+      current.approvals,
+    );
+    if (waiting.length) {
+      throw new HttpsError(
+        'failed-precondition',
+        `לא ניתן לאשר סופית — ממתין לאישור: ${waiting.map(roleLabel).join(', ')}.`,
+      );
+    }
+  }
+
   // Publish gate: the supervisor inspects the live document before suppliers can see it.
   let gate: SupervisionReport | null = null;
   if (input.to === 'published' && canTransition(current.status, 'published')) {
@@ -811,6 +829,41 @@ export const setRequiredRoles = onCall(async (req) => {
     newState: requiredRoles.join(','),
   });
   return { requiredRoles };
+});
+
+// A case-team member approves (or withdraws approval of) the tender during internal review. The
+// approval belongs to the role slot the caller holds; the manager's own sign-off is the final approval.
+export const approveTender = onCall(async (req) => {
+  const caller = requireInternal(req);
+  const input = parseInput(approveTenderInput, req.data);
+  const tender = await tendersRepo.get(input.tenderId);
+  if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  if (tender.status !== 'internal_review') {
+    throw new HttpsError('failed-precondition', 'ניתן לאשר רק בזמן בדיקה פנימית.');
+  }
+  const required = tender.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[tender.type];
+  const roles = required.filter((r) => tender.team?.[r] === caller.uid);
+  if (!roles.length) {
+    throw new HttpsError('permission-denied', 'אינך משובץ בתפקיד שנדרש לאשר את המכרז.');
+  }
+  for (const role of roles) {
+    await tendersRepo.setApproval(
+      tender.id,
+      role,
+      input.approve ? { uid: caller.uid, name: caller.name, at: now() } : null,
+    );
+    await auditRepo.append({
+      entityType: 'tender',
+      entityId: tender.id,
+      tenderId: tender.id,
+      actorUid: caller.uid,
+      actorName: caller.name,
+      action: input.approve ? 'approve_tender' : 'withdraw_approval',
+      prevState: null,
+      newState: role,
+    });
+  }
+  return { ok: true };
 });
 
 // Returns the rendered tender document for the in-system viewer (authorization checked here).

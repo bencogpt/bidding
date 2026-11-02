@@ -7,6 +7,9 @@ import { STAGE_COLOR } from '../lib/stages';
 import Avatar from './Avatar';
 import { VerdictBadge } from './SupervisorPanel';
 
+// Sign-offs of the case team: one slot per required role, true once that role approved.
+export type HeaderApprovals = { slots: boolean[] };
+
 export type HeaderAction = {
   label: string;
   onClick: () => void;
@@ -21,11 +24,13 @@ export default function TenderHeader({
   tender,
   ownerName,
   action,
+  approvals,
   children,
 }: {
   tender: TenderDoc;
   ownerName?: string;
   action?: HeaderAction;
+  approvals?: HeaderApprovals;
   children?: ReactNode;
 }) {
   const { t } = useTranslation();
@@ -50,8 +55,12 @@ export default function TenderHeader({
               </span>
             )}
             <span className="h-4 w-px bg-paper-2" />
-            <span className="rounded border border-paper-2 bg-paper px-2.5 py-0.5 text-xs text-tx-soft">
+            <span className="flex items-center gap-1.5 text-sm text-tx-soft">
               {t(`type.${tender.type}`)}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <rect x="3" y="7" width="18" height="13" rx="2" />
+                <path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
+              </svg>
             </span>
             {tender.lastSupervision && <VerdictBadge verdict={tender.lastSupervision.verdict} />}
           </div>
@@ -66,6 +75,19 @@ export default function TenderHeader({
           )}
         </div>
         <div className="flex-1" />
+        {approvals && approvals.slots.length > 0 && (
+          <div className="flex shrink-0 items-center gap-2 text-sm text-tx-soft" title={t('header.approvalsHint')}>
+            <span>{t('header.approvals')}</span>
+            <b className="tabular-nums text-tx">
+              {approvals.slots.filter(Boolean).length}/{approvals.slots.length}
+            </b>
+            <span className="flex gap-1">
+              {approvals.slots.map((done, i) => (
+                <i key={i} className={`h-2 w-5 rounded-sm ${done ? 'bg-green-600' : 'bg-paper-2'}`} />
+              ))}
+            </span>
+          </div>
+        )}
         {action && (
           <button
             className="btn shrink-0 border-accent bg-accent px-5 text-white hover:border-accent-hover hover:bg-accent-hover"
@@ -73,7 +95,7 @@ export default function TenderHeader({
             title={action.title}
             onClick={action.onClick}
           >
-            {action.label} ←
+            {action.label}
           </button>
         )}
       </div>

@@ -43,6 +43,37 @@ export function missingRoles(required: readonly TeamRole[], team: CaseTeam | und
   return required.filter((r) => !team?.[r]);
 }
 
+/**
+ * Whether the final approval waits for every role's sign-off. Off while approveTender cannot be
+ * invoked on the live project (its invoker permission needs an admin): the approval buttons and
+ * counter are hidden and "ready" does not need them. Turn on and redeploy transitionTender once
+ * approveTender is callable.
+ */
+export const REQUIRE_APPROVALS = false;
+
+/** One team role's sign-off on the tender during internal review. */
+export interface TeamApproval {
+  uid: string;
+  name: string;
+  at: number; // epoch ms
+}
+export type CaseApprovals = Partial<Record<TeamRole, TeamApproval>>;
+
+/** Required roles that have not approved yet (an approval only counts from the slot's current holder). */
+export function missingApprovals(
+  required: readonly TeamRole[],
+  team: CaseTeam | undefined,
+  approvals: CaseApprovals | undefined,
+): TeamRole[] {
+  return required.filter((r) => !approvals?.[r] || approvals[r]!.uid !== team?.[r]);
+}
+
+export const approveTenderInput = z.object({
+  tenderId: z.string(),
+  approve: z.boolean(), // false withdraws the caller's approval
+});
+export type ApproveTenderInput = z.infer<typeof approveTenderInput>;
+
 /** Who may see the case: the owning manager plus every assigned team member. */
 export function memberUidsOf(ownerUid: string, team: CaseTeam | undefined): string[] {
   return [...new Set([ownerUid, ...Object.values(team ?? {}).filter((u): u is string => !!u)])];

@@ -26,20 +26,22 @@ export default function QuartetCard({ tender }: { tender: TenderDoc }) {
     users.find((u) => u.uid === uid)?.displayName ??
     access.find((a) => a.principalId === uid)?.displayName;
 
-  // There is no per-member sign-off yet, so the chip follows the case's stage: waiting until the
-  // review starts, under review during it, approved once the case is ready.
+  // Team roles show their own sign-off; the manager's is the final approval (the case is ready).
   const stage = TENDER_STATUSES.indexOf(tender.status);
-  const state: 'pending' | 'review' | 'approved' =
-    stage >= TENDER_STATUSES.indexOf('ready')
-      ? 'approved'
-      : stage === TENDER_STATUSES.indexOf('internal_review')
-        ? 'review'
-        : 'pending';
-  const chipClass = {
+  const inReview = tender.status === 'internal_review';
+  const stateOf = (key: string, uid?: string): 'pending' | 'review' | 'approved' => {
+    if (!uid) return 'pending';
+    const approved =
+      key === 'manager'
+        ? stage >= TENDER_STATUSES.indexOf('ready')
+        : tender.approvals?.[key as keyof typeof tender.approvals]?.uid === uid;
+    return approved ? 'approved' : inReview ? 'review' : 'pending';
+  };
+  const chipClasses = {
     approved: 'bg-green-50 text-green-700',
     review: 'bg-amber-50 text-amber-700',
     pending: 'bg-paper-2 text-tx-mute',
-  }[state];
+  };
 
   return (
     <div className="card p-5">
@@ -49,6 +51,7 @@ export default function QuartetCard({ tender }: { tender: TenderDoc }) {
           const member = uid ? users.find((u) => u.uid === uid) : undefined;
           const name = uid ? memberName(uid) : undefined;
           const verified = member ? member.role === expected : undefined; // unknown without the directory
+          const state = stateOf(key, uid);
           return (
             <li key={key} className="flex flex-wrap items-center gap-2 border-b border-paper-2 py-2 last:border-0">
               <span className="font-semibold">{t(`quartet.${key}`)}</span>
@@ -59,10 +62,8 @@ export default function QuartetCard({ tender }: { tender: TenderDoc }) {
                 <span className="text-amber-700">{t('team.unassigned')}</span>
               )}
               <span className="flex-1" />
-              <span
-                className={`rounded-full px-2.5 py-0.5 text-xs ${uid ? chipClass : 'bg-paper-2 text-tx-mute'}`}
-              >
-                {t(`overview.state.${uid ? state : 'pending'}`)}
+              <span className={`rounded-full px-2.5 py-0.5 text-xs ${chipClasses[state]}`}>
+                {t(`overview.state.${state}`)}
               </span>
               {verified === true && (
                 <span className="text-green-700" title={t('case.partyOk')}>
