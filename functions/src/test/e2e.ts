@@ -183,13 +183,15 @@ async function main() {
   assert.ok(earlyShareDenied, 'suppliers cannot be granted access before publication');
 
   await call('transitionTender')({ tenderId, to: 'internal_review' });
-  let notApproved = false;
-  try {
-    await call('transitionTender')({ tenderId, to: 'ready' });
-  } catch (e) {
-    notApproved = /ממתין לאישור/.test((e as Error).message);
+  if (REQUIRE_APPROVALS) {
+    let notApproved = false;
+    try {
+      await call('transitionTender')({ tenderId, to: 'ready' });
+    } catch (e) {
+      notApproved = /ממתין לאישור/.test((e as Error).message);
+    }
+    assert.ok(notApproved, 'final approval is refused until every role has approved');
   }
-  assert.ok(notApproved || !REQUIRE_APPROVALS, 'final approval is refused until every role has approved');
   await approveAs(tenderId, ['requester', 'legal', 'finance']);
   await call('transitionTender')({ tenderId, to: 'ready' });
   const published = (await call('transitionTender')({ tenderId, to: 'published' })) as {
