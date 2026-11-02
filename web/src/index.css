@@ -28,18 +28,19 @@ body {
       border border-paper-2 bg-surface text-tx transition hover:bg-paper-2 cursor-pointer
       disabled:opacity-50 disabled:cursor-not-allowed;
   }
+  /* The main action: violet in the prototype (the class keeps its old name). */
   .btn-gold {
-    @apply bg-gold text-ink-900 border-gold hover:bg-gold-deep hover:text-white;
+    @apply bg-accent text-white border-accent hover:bg-accent-hover hover:border-accent-hover;
   }
   .btn-sm {
     @apply px-3 py-1 text-xs;
   }
   .btn-primary {
-    @apply bg-ink-800 text-white border-ink-800 hover:bg-ink-700;
+    @apply bg-accent text-white border-accent hover:bg-accent-hover hover:border-accent-hover;
   }
   .input {
     @apply w-full rounded border border-paper-2 bg-surface px-3 py-2 text-sm
-      outline-none focus:border-teal focus:ring-2 focus:ring-teal-soft;
+      outline-none focus:border-accent focus:ring-2 focus:ring-accent-soft;
   }
   .label {
     @apply block text-sm font-semibold text-tx-soft mb-1;

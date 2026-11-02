@@ -11,7 +11,7 @@ function NavItem({ to, label, badge }: { to: string; label: string; badge?: numb
       end={to === '/'}
       className={({ isActive }) =>
         `block rounded px-3 py-2 text-sm font-medium transition ${
-          isActive ? 'bg-gold/20 text-gold-soft' : 'text-ink-700/70 text-white/70 hover:bg-white/5'
+          isActive ? 'bg-white/10 text-white' : 'text-white/70 hover:bg-white/5'
         }`
       }
     >
