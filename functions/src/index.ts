@@ -441,7 +441,14 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
 
   // The case team: one user per required role, validated against the users' actual roles.
   const requiredRoles = requiredRolesFor(input.type, input.extraRoles ?? []);
-  const { team, users: teamUsers } = await resolveTeam(input.team);
+  // The person who opened the request is the case requester unless the manager chose someone else;
+  // the default applies only if that user still holds the requester role.
+  let teamInput = input.team;
+  if (!teamInput?.requester) {
+    const opener = await usersRepo.get(bidReq.requesterUid);
+    if (opener?.role === 'requester') teamInput = { ...(teamInput ?? {}), requester: opener.uid };
+  }
+  const { team, users: teamUsers } = await resolveTeam(teamInput);
   const owner = await usersRepo.get(caller.uid);
 
   // Calculated and fixed fields (guarantee default and words, total months, manager and requester

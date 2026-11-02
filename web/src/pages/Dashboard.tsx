@@ -6,6 +6,10 @@ import FeedbackForm from '../components/FeedbackForm';
 import { useAuth } from '../auth/AuthProvider';
 import TenderList, { isActive } from '../components/TenderList';
 
+/** dd/mm/yyyy in Israel time. */
+const fmtDate = (ms: number) =>
+  new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', day: '2-digit', month: '2-digit', year: 'numeric' }).format(ms);
+
 export default function Dashboard() {
   const { t } = useTranslation();
   const { tenders, loading } = useTenders();
@@ -48,6 +52,7 @@ export default function Dashboard() {
               {requests.map((r) => (
                 <li key={r.serial} className="flex items-center justify-between gap-3 text-sm">
                   <span className="font-semibold">{r.serial}</span>
+                  <span className="text-tx-mute">{fmtDate(r.createdAt)}</span>
                   <span className="flex-1 truncate text-tx-soft">{r.brief}</span>
                   <span className="text-tx-mute">{r.requesterName}</span>
                   {role === 'tender_manager' ? (

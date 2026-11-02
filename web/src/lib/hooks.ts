@@ -124,11 +124,21 @@ export function useBidRequests() {
 export function useBidRequest(serial: string | undefined) {
   const [request, setRequest] = useState<BidRequestDoc | null | undefined>(undefined);
   useEffect(() => {
+    setRequest(undefined);
     if (!serial) return;
+    // A malformed id (e.g. an encoded "/") would make doc() throw: treat it as not found.
+    if (!/^\d{4}-\d{1,3}$/.test(serial)) {
+      setRequest(null);
+      return;
+    }
     return onSnapshot(
       doc(db, 'bidRequests', serial),
       (s) => setRequest(s.exists() ? (s.data() as BidRequestDoc) : null),
-      () => setRequest(null),
+      (e) => {
+        console.error('useBidRequest: snapshot error', e);
+        // Only a definitive answer reads as "not found"; a transient error stays loading.
+        if (e.code === 'permission-denied' || e.code === 'not-found') setRequest(null);
+      },
     );
   }, [serial]);
   return { request };
@@ -147,10 +157,15 @@ export function useTemplates() {
 export function useTemplate(type: TenderType | undefined) {
   const [template, setTemplate] = useState<TemplateDoc | null>(null);
   useEffect(() => {
+    setTemplate(null); // never show the previous type's template while the new one loads
     if (!type) return;
-    void getDoc(doc(db, 'templates', type)).then((d) =>
-      setTemplate(d.exists() ? (d.data() as TemplateDoc) : null),
-    );
+    let alive = true;
+    void getDoc(doc(db, 'templates', type)).then((d) => {
+      if (alive) setTemplate(d.exists() ? (d.data() as TemplateDoc) : null);
+    });
+    return () => {
+      alive = false;
+    };
   }, [type]);
   return template;
 }

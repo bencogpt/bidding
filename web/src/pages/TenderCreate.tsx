@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -70,6 +70,13 @@ export default function TenderCreate() {
   // Case team: one user per required role (type defaults + roles the manager adds).
   const [team, setTeam] = useState<CaseTeam>({});
   const [extraRoles, setExtraRoles] = useState<TeamRole[]>([]);
+  // The person who opened the request is the default case requester (never overrides a manager's pick).
+  const openerUid = request?.requesterUid;
+  const openerIsRequester = users.some((u) => u.uid === openerUid && u.role === 'requester');
+  useEffect(() => {
+    if (!openerUid || !openerIsRequester) return;
+    setTeam((tm) => (tm.requester ? tm : { ...tm, requester: openerUid }));
+  }, [openerUid, openerIsRequester]);
   const requiredRoles = requiredRolesFor(type || TENDER_TYPES.service, extraRoles);
   // A template that still has Word-style blanks (XXXX / ____) can't be used until it is converted.
   const templateStatus = template

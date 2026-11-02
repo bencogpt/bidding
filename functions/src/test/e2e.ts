@@ -661,6 +661,37 @@ async function main() {
     unknownFailed = (e as { code?: string }).code === 'functions/not-found';
   }
   assert.ok(unknownFailed, 'an unknown request is rejected');
+  // Two simultaneous conversions of one request: exactly one tender is created.
+  const raceReq = await newRequest('בקשה לתחרות');
+  const raceInput = { title: '', type: 'goods', params: { org: 'א', description: 'ב', quantity: 1, budget: 1 }, team: goodsTeam, bidRequestId: raceReq };
+  const race = await Promise.allSettled([
+    call('createTender')({ ...raceInput, requestId: 'e2e-race-a' }),
+    call('createTender')({ ...raceInput, requestId: 'e2e-race-b' }),
+  ]);
+  assert.equal(race.filter((r) => r.status === 'fulfilled').length, 1, 'exactly one concurrent conversion succeeds');
+  const raceLoser = race.find((r) => r.status === 'rejected') as PromiseRejectedResult | undefined;
+  assert.equal((raceLoser?.reason as { code?: string } | undefined)?.code, 'functions/failed-precondition', 'the other is rejected as already converted');
+  const raceTenders = await getDocs(query(collection(db, 'tenders'), where('serial', '==', raceReq)));
+  assert.equal(raceTenders.size, 1, 'exactly one tender has the request serial');
+
+  // The person who opened the request becomes the case requester when the manager does not pick one.
+  await signOut(auth);
+  await login('requester@obms.test');
+  const openedReq = await newRequest('בקשה של דורש');
+  await signOut(auth);
+  await login('manager@obms.test');
+  const { requester: _omit, ...teamNoRequester } = goodsTeam;
+  void _omit;
+  const defaulted = (await call('createTender')({
+    title: '',
+    type: 'goods',
+    params: { org: 'א', description: 'ב', quantity: 1, budget: 1 },
+    team: teamNoRequester,
+    bidRequestId: openedReq,
+  })) as { data: { id: string } };
+  const defaultedTender = (await getDoc(doc(db, 'tenders', defaulted.data.id))).data()!;
+  assert.equal(defaultedTender.team.requester, uidOf('requester'), 'the request opener is the case requester');
+  assert.ok(defaultedTender.memberUids.includes(uidOf('requester')), 'and is a member of the case');
   console.log(`✓ template conversion: refused → analysed → converted (${report.data.fields} fields) → form enforced`);
 
   // ---- one-time migrations are idempotent ----
