@@ -2,6 +2,7 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { setGlobalOptions } from 'firebase-functions/v2';
 import {
   createTenderInput,
+  createBidRequestInput,
   grantAccessInput,
   askQuestionInput,
   answerQuestionsInput,
@@ -31,6 +32,7 @@ import {
   assignTeamMemberInput,
   setRequiredRolesInput,
   requiredRolesFor,
+  TENDER_TYPE_LABELS_HE,
   missingRoles,
   memberUidsOf,
   REQUIRED_ROLES_BY_TYPE,
@@ -46,6 +48,9 @@ import {
   templateFieldsStatus,
   hasPlaceholder,
   isAutoSerialParam,
+  isSystemParam,
+  resolveSystemFills,
+  SERVICE_KEYS,
   isAutoDeadlineParam,
   isAutoParam,
   formatDeadlineFor,
@@ -68,7 +73,7 @@ import {
 } from '@obms/shared';
 import { randomBytes } from 'node:crypto';
 import { auth, db, now } from './lib/admin.js';
-import { requireAuth, requireManager, requireInternal, requireCaseAccess } from './lib/context.js';
+import { requireAuth, requireRole, requireManager, requireInternal, requireCaseAccess } from './lib/context.js';
 import { parseInput } from './lib/validate.js';
 import {
   tendersRepo,
@@ -84,8 +89,10 @@ import {
   internalRepo,
   settingsRepo,
   countersRepo,
+  bidRequestsRepo,
   caseCreationRepo,
 } from './repositories.js';
+import { allocateBidNumber, israelYear } from './services/bidNumber.js';
 import { transition } from './stateMachines/tenderFsm.js';
 import {
   generateTenderDocument,
@@ -172,7 +179,7 @@ function validateParams(
 ): Record<string, string | number> {
   const clean: Record<string, string | number> = {};
   const stillPlaceholders = template.params
-    .filter((p) => !isAutoParam(p) && hasPlaceholder(params[p.key]))
+    .filter((p) => !isSystemParam(p) && !p.hidden && hasPlaceholder(params[p.key]))
     .map((p) => p.labelHe);
   if (stillPlaceholders.length) {
     throw new HttpsError(
@@ -181,7 +188,7 @@ function validateParams(
     );
   }
   for (const p of template.params) {
-    if (isAutoParam(p)) continue; // filled by the system (case serial / form deadline)
+    if (isSystemParam(p) || p.hidden) continue; // filled by the system (or not asked at all)
     const v = params[p.key];
     const blank = v === undefined || String(v).trim() === '';
     if (blank) {
@@ -190,6 +197,9 @@ function validateParams(
     }
     if (p.type === 'number' && !Number.isFinite(Number(v))) {
       throw new HttpsError('invalid-argument', `השדה "${p.labelHe}" חייב להיות מספר.`);
+    }
+    if (p.key === SERVICE_KEYS.economicPct && (Number(v) < 0 || Number(v) > 100)) {
+      throw new HttpsError('invalid-argument', `השדה "${p.labelHe}" חייב להיות בין 0 ל-100.`);
     }
     clean[p.key] = p.type === 'number' ? Number(v) : v;
   }
@@ -333,6 +343,44 @@ async function grantTeamAccess(
   return skipped;
 }
 
+// Phase 1: the requester's summary becomes a request with its bid number. No AI, no document yet.
+export const createBidRequest = onCall(async (req) => {
+  const caller = requireRole(req, 'requester', 'tender_manager');
+  const input = parseInput(createBidRequestInput, req.data);
+  if (input.requestId) {
+    const prev = await bidRequestsRepo.byClientRequestId(caller.uid, input.requestId);
+    if (prev) return { serial: prev.serial, duplicate: true };
+  }
+  const createdAt = now();
+  const serial = await allocateBidNumber(israelYear(createdAt), {
+    random: Math.random,
+    claim: (serial, n) =>
+      bidRequestsRepo.tryCreate({
+        serial,
+        year: Number(serial.split('-')[0]),
+        n,
+        brief: input.brief,
+        requesterUid: caller.uid,
+        requesterName: caller.name,
+        status: 'open',
+        tenderId: null,
+        clientRequestId: input.requestId,
+        createdAt,
+        convertedAt: null,
+      }),
+  });
+  await auditRepo.append({
+    entityType: 'bidRequest',
+    entityId: serial,
+    actorUid: caller.uid,
+    actorName: caller.name,
+    action: 'create_request',
+    prevState: null,
+    newState: 'open',
+  });
+  return { serial, duplicate: false };
+});
+
 // ---- Tenders ----
 // Creating a case is all-or-nothing and retry-safe:
 //  1. validate everything (template, fields, team, AI draft) — nothing written yet;
@@ -375,9 +423,11 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
       'התבנית טרם הומרה — יש להשלים את שדות התבנית בעמוד התבניות לפני יצירת מכרז.',
     );
   }
-  const params = validateParams(template, input.params);
-  // Confidential values (the estimate, G6) never go on the supplier-readable tender doc.
-  const { publicParams, internalParams } = splitConfidential(template, params);
+  const asked = validateParams(template, input.params);
+
+  const bidReq = await bidRequestsRepo.get(input.bidRequestId);
+  if (!bidReq) throw new HttpsError('not-found', 'הבקשה לא נמצאה.');
+  if (bidReq.status !== 'open') throw new HttpsError('failed-precondition', 'הבקשה כבר הומרה למכרז.');
 
   const draft = input.draftId ? await bidDraftsRepo.get(input.draftId) : null;
   if (input.draftId && (!draft || draft.createdBy !== caller.uid)) {
@@ -391,25 +441,49 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
 
   // The case team: one user per required role, validated against the users' actual roles.
   const requiredRoles = requiredRolesFor(input.type, input.extraRoles ?? []);
-  const { team, users: teamUsers } = await resolveTeam(input.team);
+  // The person who opened the request is the case requester unless the manager chose someone else;
+  // the default applies only if that user still holds the requester role.
+  let teamInput = input.team;
+  if (!teamInput?.requester) {
+    const opener = await usersRepo.get(bidReq.requesterUid);
+    if (opener?.role === 'requester') teamInput = { ...(teamInput ?? {}), requester: opener.uid };
+  }
+  const { team, users: teamUsers } = await resolveTeam(teamInput);
   const owner = await usersRepo.get(caller.uid);
+
+  // Calculated and fixed fields (guarantee default and words, total months, manager and requester
+  // details, …) are completed from what was asked, before the confidential split: the guarantee
+  // default reads the estimate.
+  const requester = teamUsers.find((u) => u.role === 'requester');
+  const params = resolveSystemFills(template.params, asked, {
+    submissionDeadline: input.submissionDeadline ?? null,
+    manager: owner ? { displayName: owner.displayName, email: owner.email } : undefined,
+    requester: requester ? { displayName: requester.displayName, phone: requester.phone } : undefined,
+  });
+  // Confidential values (the estimate, G6) never go on the supplier-readable tender doc.
+  const { publicParams, internalParams } = splitConfidential(template, params);
 
   // ---- 2. serial + document ----
   const id = tendersRepo.newId();
-  const serial = await countersRepo.nextSerial(new Date(now()).getFullYear());
+  const serial = bidReq.serial;
   // The bid number is the case serial — filled by the system, never typed or guessed.
   for (const p of template.params) if (isAutoSerialParam(p)) publicParams[p.key] = serial;
+  // A blank title is named by the system: the type and the case serial.
   // ...and the submission-date fields are the form's deadline.
   for (const p of template.params) {
-    if (isAutoDeadlineParam(p)) publicParams[p.key] = formatDeadlineFor(p.key, input.submissionDeadline!);
+    if (isAutoDeadlineParam(p) && input.submissionDeadline) {
+      publicParams[p.key] = formatDeadlineFor(p.key, input.submissionDeadline);
+    }
   }
+  const systemKeys = new Set(template.params.filter(isSystemParam).map((p) => p.key));
+  const title = input.title?.trim() || `${TENDER_TYPE_LABELS_HE[input.type]} ${serial}`;
   const tender: TenderDoc = {
     id,
     serial,
     team,
     requiredRoles,
     memberUids: memberUidsOf(caller.uid, team),
-    title: input.title,
+    title,
     type: input.type,
     params: publicParams,
     status: 'draft',
@@ -432,14 +506,14 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
     googleTemplateDocId: template.googleTemplateDocId ?? null,
     draftId: draft?.draftId ?? null,
     draftType: draft?.type ?? null,
-    brief: draft?.brief ?? null,
+    brief: draft?.brief ?? bidReq.brief,
     aiModel: draft?.model ?? null,
     aiStatus: draft?.status ?? null,
     skillsUsed: draft?.status === 'FAILED' ? [] : draft?.skillsUsed ?? [],
     paramSources: draft?.sources ?? {},
     editedByManager: draft
       ? Object.keys(publicParams).filter(
-          (k) => !isAutoParam({ key: k }) && String(draft.params[k] ?? '') !== String(publicParams[k] ?? ''),
+          (k) => !systemKeys.has(k) && String(draft.params[k] ?? '') !== String(publicParams[k] ?? ''),
         )
       : [],
     recordedAt: now(),
@@ -472,7 +546,7 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
     gen = await generateTenderDocument(tender, template);
     tender.googleDocId = gen.googleDocId;
     tender.docExportPath = gen.exportPath;
-    await caseCreationRepo.commit({ tender, access, provenance, internalParams, requestId, uid: caller.uid });
+    await caseCreationRepo.commit({ tender, access, provenance, internalParams, requestId, uid: caller.uid, bidRequestSerial: bidReq.serial });
   } catch (err) {
     if (gen) await discardGeneratedDocument(id, gen);
     // A concurrent duplicate of this submission committed first — return that case.
@@ -488,7 +562,7 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
         action: 'create_failed',
         prevState: serial,
         newState: null,
-        detail: `${input.title} — ${(err as Error).message}`.slice(0, 300),
+        detail: `${title} — ${(err as Error).message}`.slice(0, 300),
       })
       .catch(() => undefined);
     if (err instanceof HttpsError) throw err;
@@ -523,7 +597,7 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
     action: 'create',
     prevState: null,
     newState: 'draft',
-    detail: `${serial} · ${input.type}: ${input.title}`,
+    detail: `${serial} · ${input.type}: ${title}`,
   });
   await auditRepo.append({
     entityType: 'tender',

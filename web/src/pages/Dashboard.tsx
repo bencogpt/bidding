@@ -1,16 +1,21 @@
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useState } from 'react';
-import { useTenders, useCaseScores, useMyFeedbackRequests } from '../lib/hooks';
+import { useTenders, useCaseScores, useMyFeedbackRequests, useBidRequests } from '../lib/hooks';
 import FeedbackForm from '../components/FeedbackForm';
 import { useAuth } from '../auth/AuthProvider';
 import TenderList, { isActive } from '../components/TenderList';
+
+/** dd/mm/yyyy in Israel time. */
+const fmtDate = (ms: number) =>
+  new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', day: '2-digit', month: '2-digit', year: 'numeric' }).format(ms);
 
 export default function Dashboard() {
   const { t } = useTranslation();
   const { tenders, loading } = useTenders();
   const { role, user } = useAuth();
   const pending = useMyFeedbackRequests(user?.uid);
+  const { requests } = useBidRequests();
   const [open, setOpen] = useState<string | null>(null);
   const isManager = role === 'tender_manager';
   const scores = useCaseScores();
@@ -30,12 +35,39 @@ export default function Dashboard() {
             })}
           </div>
         </div>
-        {role === 'tender_manager' && (
-          <Link to="/tenders/new" className="btn btn-gold">
-            + {t('nav.newTender')}
+        {(role === 'tender_manager' || role === 'requester') && (
+          <Link to="/requests/new" className="btn btn-gold">
+            + {t('nav.newRequest')}
           </Link>
         )}
       </div>
+
+      {requests.length > 0 || role === 'tender_manager' ? (
+        <div className="card mb-6 p-5">
+          <h2 className="mb-3 font-semibold">{role === 'tender_manager' ? t('req.pendingTitle') : t('req.myRequests')}</h2>
+          {requests.length === 0 ? (
+            <p className="text-sm text-tx-mute">{t('req.pendingEmpty')}</p>
+          ) : (
+            <ul className="space-y-2">
+              {requests.map((r) => (
+                <li key={r.serial} className="flex items-center justify-between gap-3 text-sm">
+                  <span className="font-semibold">{r.serial}</span>
+                  <span className="text-tx-mute">{fmtDate(r.createdAt)}</span>
+                  <span className="flex-1 truncate text-tx-soft">{r.brief}</span>
+                  <span className="text-tx-mute">{r.requesterName}</span>
+                  {role === 'tender_manager' ? (
+                    <Link to={`/requests/${r.serial}`} className="btn btn-gold">
+                      {t('req.handle')}
+                    </Link>
+                  ) : (
+                    <span className="chip">{r.status === 'open' ? t('req.statusOpen') : t('req.statusConverted')}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
 
       {pending.length > 0 && (
         <div className="card mb-6 p-5">

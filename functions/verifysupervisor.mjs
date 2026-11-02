@@ -21,7 +21,9 @@ const brief = 'רכש 12 מצלמות אבטחה IP66 עבור משרד הביט
 const { data: draft } = await call('draftBid')({ type: 'goods', brief });
 console.log('draftBid →', draft.status, '| draftId', draft.draftId, '| missing', draft.missing);
 
+const { data: request } = await call('createBidRequest')({ brief: 'בקשת בדיקה' });
 const { data: created } = await call('createTender')({
+  bidRequestId: request.serial,
   title: draft.title || 'בדיקת סוכן מפקח',
   type: 'goods',
   params: { org: 'משרד הביטחון', description: 'מצלמות אבטחה IP66', quantity: 12, ...draft.params, budget: 750000 },

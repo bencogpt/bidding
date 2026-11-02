@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { TENDER_STATUSES } from './tender.js';
+import { SYSTEM_FORMULAS } from './templates.js';
 import type { SupervisionSummary, ValueSource, BidDraftRecord } from './supervision.js';
 import { createTenderTeamFields, type CaseTeam, type TeamRole } from './team.js';
 
@@ -27,6 +28,7 @@ export const userDocSchema = z.object({
   displayName: z.string().min(1),
   role: roleSchema,
   googleEmail: z.string().email().optional(),
+  phone: z.string().optional(), // the requester's contact number on the tender document
   supplierId: z.string().optional(), // present for supplier accounts
   createdAt: z.number(), // epoch ms
 });
@@ -57,9 +59,20 @@ export const templateDocSchema = z.object({
     z.object({
       key: z.string(),
       labelHe: z.string(),
-      type: z.enum(['text', 'number', 'date', 'textarea']),
+      type: z.enum(['text', 'number', 'date', 'textarea', 'checkbox']),
       required: z.boolean().default(true),
       internal: z.boolean().optional(),
+      order: z.number().optional(),
+      hidden: z.boolean().optional(),
+      display: z.boolean().optional(),
+      defaultFrom: z.enum(['guarantee_pct']).optional(),
+      fill: z
+        .discriminatedUnion('kind', [
+          z.object({ kind: z.literal('fixed'), value: z.string() }),
+          z.object({ kind: z.literal('copy'), from: z.string() }),
+          z.object({ kind: z.literal('formula'), formula: z.enum(SYSTEM_FORMULAS) }),
+        ])
+        .optional(),
     }),
   ),
   // reference "good example" bid documents for this type (manager-curated links)
@@ -199,8 +212,12 @@ export type AuditDoc = z.infer<typeof auditDocSchema>;
 
 // ---- Callable function payloads ----
 
+/** Longest tender brief accepted (it is stored on the case and sent to the AI draft). */
+export const BRIEF_MAX_LENGTH = 5000;
+
 export const createTenderInput = z.object({
-  title: z.string().min(1),
+  title: z.string().optional(), // blank: the system names the case from its type and serial
+  bidRequestId: z.string().regex(/^\d{4}-\d{1,3}$/), // the request being turned into this tender (its bid number)
   type: tenderTypeSchema,
   params: z.record(z.union([z.string(), z.number()])),
   submissionDeadline: z.number().nullable().optional(),
@@ -215,9 +232,31 @@ export const createTenderInput = z.object({
 });
 export type CreateTenderInput = z.infer<typeof createTenderInput>;
 
+// ---- bid requests (phase 1: the requester's summary + bid number) ----
+export const bidRequestDocSchema = z.object({
+  serial: z.string(), // 2026-31 — also the document id
+  year: z.number(),
+  n: z.number(),
+  brief: z.string(),
+  requesterUid: z.string(),
+  requesterName: z.string(),
+  status: z.enum(['open', 'converted']),
+  tenderId: z.string().nullable(),
+  clientRequestId: z.string().optional(),
+  createdAt: z.number(),
+  convertedAt: z.number().nullable(),
+});
+export type BidRequestDoc = z.infer<typeof bidRequestDocSchema>;
+
+export const createBidRequestInput = z.object({
+  brief: z.string().trim().min(3).max(BRIEF_MAX_LENGTH),
+  requestId: z.string().min(8).max(100).optional(), // one per form: a retried submit returns the same request
+});
+export type CreateBidRequestInput = z.infer<typeof createBidRequestInput>;
+
 export const draftBidInput = z.object({
   type: tenderTypeSchema,
-  brief: z.string().min(3),
+  brief: z.string().min(3).max(BRIEF_MAX_LENGTH),
 });
 export type DraftBidInput = z.infer<typeof draftBidInput>;
 

@@ -9,6 +9,7 @@ import InternalLayout from './layouts/InternalLayout';
 import SupplierLayout from './layouts/SupplierLayout';
 import Dashboard from './pages/Dashboard';
 import TenderCreate from './pages/TenderCreate';
+import RequestCreate from './pages/RequestCreate';
 import TenderWorkspace from './pages/TenderWorkspace';
 import Suppliers from './pages/Suppliers';
 import Templates from './pages/Templates';
@@ -46,7 +47,11 @@ export default function App() {
     <Routes>
       <Route element={<InternalLayout />}>
         <Route path="/" element={<Dashboard />} />
-        <Route path="/tenders/new" element={managerOnly(<TenderCreate />)} />
+        <Route
+          path="/requests/new"
+          element={role === 'tender_manager' || role === 'requester' ? <RequestCreate /> : <Navigate to="/" replace />}
+        />
+        <Route path="/requests/:serial" element={managerOnly(<TenderCreate />)} />
         <Route path="/tenders/:id" element={<TenderWorkspace />} />
         <Route path="/templates" element={managerOnly(<Templates />)} />
         <Route path="/users" element={managerOnly(<InternalUsers />)} />
