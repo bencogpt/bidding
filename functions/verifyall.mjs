@@ -72,7 +72,7 @@ console.log('4) case: submissions=', subs.size, ' auditEntries=', audit.size);
 const ok =
   !!cached &&
   mySub?.files?.length === 3 &&
-  view.kind === 'pdf' &&
+  view.kind === 'html' &&
   subs.size >= 1 &&
   audit.size >= 1;
 console.log(ok ? '\n✅ ALL VERIFIED (cache + multi-file + case data)' : '\n⚠ something off');

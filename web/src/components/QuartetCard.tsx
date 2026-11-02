@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
-import { requiredRolesFor } from '@obms/shared';
+import { rolesOf } from '../lib/roles';
+import { TENDER_STATUSES } from '@obms/shared';
 import type { Role, TenderDoc } from '@obms/shared';
 import { useAccess, useUsers } from '../lib/hooks';
 
@@ -11,7 +12,7 @@ export default function QuartetCard({ tender }: { tender: TenderDoc }) {
 
   // The רביעייה: requester, the tender manager (owner), then the case's other roles. A member is
   // verified when the user in the slot really holds the system role that slot requires.
-  const required = tender.requiredRoles ?? requiredRolesFor(tender.type);
+  const required = rolesOf(tender);
   const quartet: { key: string; uid?: string; expected: Role }[] = [
     ...required
       .filter((r) => r === 'requester')
@@ -25,23 +26,44 @@ export default function QuartetCard({ tender }: { tender: TenderDoc }) {
     users.find((u) => u.uid === uid)?.displayName ??
     access.find((a) => a.principalId === uid)?.displayName;
 
+  // There is no per-member sign-off yet, so the chip follows the case's stage: waiting until the
+  // review starts, under review during it, approved once the case is ready.
+  const stage = TENDER_STATUSES.indexOf(tender.status);
+  const state: 'pending' | 'review' | 'approved' =
+    stage >= TENDER_STATUSES.indexOf('ready')
+      ? 'approved'
+      : stage === TENDER_STATUSES.indexOf('internal_review')
+        ? 'review'
+        : 'pending';
+  const chipClass = {
+    approved: 'bg-green-50 text-green-700',
+    review: 'bg-amber-50 text-amber-700',
+    pending: 'bg-paper-2 text-tx-mute',
+  }[state];
+
   return (
     <div className="card p-5">
-      <h4 className="mb-2 font-semibold">{t('case.parties')}</h4>
+      <div className="mb-2 text-xs font-semibold text-tx-mute">{t('case.parties')}</div>
       <ul className="space-y-2 text-sm">
         {quartet.map(({ key, uid, expected }) => {
           const member = uid ? users.find((u) => u.uid === uid) : undefined;
           const name = uid ? memberName(uid) : undefined;
           const verified = member ? member.role === expected : undefined; // unknown without the directory
           return (
-            <li key={key} className="flex flex-wrap items-center gap-2">
-              <span className="w-20 font-semibold">{t(`quartet.${key}`)}</span>
+            <li key={key} className="flex flex-wrap items-center gap-2 border-b border-paper-2 py-2 last:border-0">
+              <span className="font-semibold">{t(`quartet.${key}`)}</span>
+              <span className="text-tx-mute">·</span>
               {uid ? (
                 <span>{name ?? t('case.partyAssigned')}</span>
               ) : (
                 <span className="text-amber-700">{t('team.unassigned')}</span>
               )}
-              {member && <span className="chip">{t(`role.${member.role}`)}</span>}
+              <span className="flex-1" />
+              <span
+                className={`rounded-full px-2.5 py-0.5 text-xs ${uid ? chipClass : 'bg-paper-2 text-tx-mute'}`}
+              >
+                {t(`overview.state.${uid ? state : 'pending'}`)}
+              </span>
               {verified === true && (
                 <span className="text-green-700" title={t('case.partyOk')}>
                   ✓

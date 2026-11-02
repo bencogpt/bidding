@@ -4,7 +4,7 @@
 //   Authenticates as a dedicated Google account via an OAuth refresh token (works on consumer
 //   Gmail — the account owns the docs, unlike a service account which has no Drive quota).
 //   Copies a Google Docs template, fills {{params}}, sets permissions (manager=writer,
-//   reviewers=commenter; suppliers get none), and exports the PDF on-demand for the in-system
+//   reviewers=commenter; suppliers get none), and exports the doc as HTML on-demand for the in-system
 //   viewer. Requires secrets GOOGLE_OAUTH_CLIENT_ID/SECRET/REFRESH_TOKEN bound to the functions.
 // DEV / EMULATOR (default): renders the template's bodyTemplate to HTML in Storage and serves
 //   it through a Cloud Function. Runs without any Google Workspace.
@@ -13,6 +13,7 @@ import { storage } from '../lib/admin.js';
 import type { TenderDoc, TemplateDoc, UserDoc } from '@obms/shared';
 import { TENDER_TYPE_LABELS_HE } from '@obms/shared';
 import { htmlToText } from './supervisorChecks.js';
+import { bodyToHtml, rtlifyExportedHtml } from './docHtml.js';
 import { groupSessions, sampleSessions, type RevisionMeta } from './scoreCalc.js';
 
 // drive.file = access only to files the app creates. Non-sensitive → no OAuth verification
@@ -76,7 +77,7 @@ h1{font-size:24px}h2{font-size:18px;border-bottom:2px solid #d8a23a;padding-bott
 <body>
 <h1>${tender.title}</h1>
 <div class="meta">${TENDER_TYPE_LABELS_HE[tender.type]} · מסמך מכרז · נוצר אוטומטית מתבנית</div>
-${body.split('\n').map((l) => (l.trim() ? `<p>${l}</p>` : '')).join('\n')}
+${bodyToHtml(body)}
 </body></html>`;
 }
 
@@ -393,59 +394,62 @@ export async function removeDocumentPermission(googleDocId: string | null, email
   }
 }
 
-const pdfPath = (id: string) => `tenders/${id}/document.pdf`;
+const exportHtmlPath = (id: string) => `tenders/${id}/document-export.html`;
 
 /**
- * Export the tender's Google Doc to PDF and cache it in Storage. Called at publish (and via a
+ * Export the tender's Google Doc as HTML (the viewer needs real headings for its table of
+ * contents, which a PDF cannot give). See rtlifyExportedHtml for the right-to-left cleanup.
+ */
+async function exportDocHtml(googleDocId: string): Promise<string> {
+  const { drive } = googleClients();
+  const res = await drive.files.export(
+    { fileId: googleDocId, mimeType: 'text/html' },
+    { responseType: 'arraybuffer' },
+  );
+  return rtlifyExportedHtml(Buffer.from(res.data as ArrayBuffer).toString('utf8'));
+}
+
+/**
+ * Export the tender's Google Doc to HTML and cache it in Storage. Called at publish (and via a
  * manual refresh) so the supplier hot path serves a cached file instead of a live Google export.
  * Returns the Storage path, or null when not in real mode / no doc.
  */
-export async function cacheTenderPdf(tender: TenderDoc): Promise<string | null> {
+export async function cacheTenderHtml(tender: TenderDoc): Promise<string | null> {
   if (!realMode() || !tender.googleDocId) return null;
-  const { drive } = googleClients();
-  const pdf = await drive.files.export(
-    { fileId: tender.googleDocId, mimeType: 'application/pdf' },
-    { responseType: 'arraybuffer' },
-  );
-  const path = pdfPath(tender.id);
+  const html = await exportDocHtml(tender.googleDocId);
+  const path = exportHtmlPath(tender.id);
   await storage
     .bucket()
     .file(path)
-    .save(Buffer.from(pdf.data as ArrayBuffer), { contentType: 'application/pdf' });
+    .save(Buffer.from(html, 'utf8'), {
+      contentType: 'text/html; charset=utf-8',
+      metadata: { cacheControl: 'no-store' },
+    });
   return path;
 }
 
-export type Viewable =
-  | { kind: 'html'; content: string; title: string }
-  | { kind: 'pdf'; dataBase64: string; title: string };
+export type Viewable = { kind: 'html'; content: string; title: string };
 
 /**
- * Returns the document for the in-system viewer (caller already authorized upstream).
- * Dev: inline HTML from Storage. Real mode: PDF exported on-demand from Drive as base64 — the
- * supplier never touches the raw Google Doc, and no Storage / signed URL is involved.
+ * Returns the document for the in-system viewer (caller already authorized upstream), always as
+ * HTML. Dev: the rendered HTML in Storage. Real mode: the Google Doc exported as HTML — suppliers
+ * get the copy cached at publish; `live` (internal users) always re-exports so edits show at once.
+ * The supplier never touches the raw Google Doc.
  */
-export async function getViewable(tender: TenderDoc): Promise<Viewable> {
+export async function getViewable(tender: TenderDoc, live = false): Promise<Viewable> {
   if (!realMode()) {
     const path = tender.docExportPath ?? htmlPath(tender.id);
     const [buf] = await storage.bucket().file(path).download();
     return { kind: 'html', content: buf.toString('utf8'), title: tender.title };
   }
-  // Fast path: serve the PDF cached at publish (no Google call). Fall back to a live export.
-  if (tender.docExportPath) {
-    const [buf] = await storage.bucket().file(tender.docExportPath).download();
-    return { kind: 'pdf', dataBase64: buf.toString('base64'), title: tender.title };
+  // Documents cached before the HTML switch point at a PDF — ignore those and re-export.
+  const cached = tender.docExportPath && !tender.docExportPath.endsWith('.pdf') ? tender.docExportPath : null;
+  if (cached && !live) {
+    const [buf] = await storage.bucket().file(cached).download();
+    return { kind: 'html', content: buf.toString('utf8'), title: tender.title };
   }
   if (!tender.googleDocId) {
     throw new Error('Tender has no googleDocId to export.');
   }
-  const { drive } = googleClients();
-  const pdf = await drive.files.export(
-    { fileId: tender.googleDocId, mimeType: 'application/pdf' },
-    { responseType: 'arraybuffer' },
-  );
-  return {
-    kind: 'pdf',
-    dataBase64: Buffer.from(pdf.data as ArrayBuffer).toString('base64'),
-    title: tender.title,
-  };
+  return { kind: 'html', content: await exportDocHtml(tender.googleDocId), title: tender.title };
 }
