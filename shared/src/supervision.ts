@@ -214,6 +214,10 @@ export interface SupervisionReport {
   aiModel: string | null; // null when the AI review layer did not run
   runBy: string;
   at: number;
+  // 'draft': checked a preview rendered from the draft data (no document yet); dataHash then
+  // fingerprints exactly the data that was checked.
+  basis?: 'draft' | 'document';
+  dataHash?: string | null;
 }
 
 /** Small summary kept on the tender doc so lists/headers can show the latest verdict. */
@@ -234,6 +238,8 @@ export interface SupervisionSummary {
   stage: SupervisionStage;
   blockers: number;
   at: number;
+  basis?: 'draft' | 'document';
+  dataHash?: string | null;
 }
 
 export function verdictOf(findings: Pick<SupervisionFinding, 'severity'>[]): SupervisionVerdict {

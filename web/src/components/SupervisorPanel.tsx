@@ -77,6 +77,7 @@ export default function SupervisorPanel({
             {t(`sup.stage.${latest.stage}`)} ·{' '}
             <span dir="ltr">{new Date(latest.at).toLocaleString('he-IL')}</span> ·{' '}
             {latest.aiModel ?? t('sup.rulesOnly')}
+            {latest.basis === 'draft' && <span className="chip ms-2">{t('sup.basisDraft')}</span>}
           </div>
         ) : (
           <div className="mt-2 text-sm text-tx-mute">{t('sup.noRuns')}</div>

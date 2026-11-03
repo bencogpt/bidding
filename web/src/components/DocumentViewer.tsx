@@ -41,7 +41,7 @@ export default function DocumentViewer({
     setLoading(true);
     api
       .getTenderDocument({ tenderId })
-      .then((r) => alive && setHtml(r.content))
+      .then((r) => alive && setHtml(r.kind === 'html' ? r.content : null))
       .catch((e) => alive && setError(e instanceof Error ? e.message : String(e)))
       .finally(() => alive && setLoading(false));
     return () => {

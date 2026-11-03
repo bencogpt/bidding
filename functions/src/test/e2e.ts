@@ -27,6 +27,7 @@ import { getFunctions, connectFunctionsEmulator, httpsCallable } from 'firebase/
 import { SKILL_IDS } from '@obms/shared';
 import { initializeApp as initAdmin } from 'firebase-admin/app';
 import { getFirestore as adminFirestore } from 'firebase-admin/firestore';
+import { getStorage as adminStorage } from 'firebase-admin/storage';
 
 const app = initializeApp({ projectId: 'biding-system', apiKey: 'demo' });
 const auth = getAuth(app);
@@ -36,6 +37,7 @@ connectFirestoreEmulator(db, '127.0.0.1', 8080);
 const fns = getFunctions(app, 'europe-west1');
 connectFunctionsEmulator(fns, '127.0.0.1', 5001);
 
+const adminApp = initAdmin({ projectId: 'biding-system', storageBucket: 'biding-system.firebasestorage.app' }, 'e2e-admin');
 const call = (n: string) => httpsCallable(fns, n);
 const login = (email: string) => signInWithEmailAndPassword(auth, email, 'password');
 const newRequest = async (brief = 'דרישה לבדיקה'): Promise<string> =>
@@ -183,6 +185,28 @@ async function main() {
   }
   assert.ok(earlyShareDenied, 'suppliers cannot be granted access before publication');
 
+  // Draft-first: the case has no document until the manager creates it after a clean check.
+  assert.equal(tdoc.data()!.documentStatus, 'none', 'a new case is a draft without a document');
+  let noDocReview = false;
+  try {
+    await call('transitionTender')({ tenderId, to: 'internal_review' });
+  } catch (e) {
+    noDocReview = /יש ליצור את מסמך המכרז/.test((e as Error).message);
+  }
+  assert.ok(noDocReview, 'review is refused before the document exists');
+  await call('generateDocument')({ tenderId });
+  const generated = (await getDoc(doc(db, 'tenders', tenderId))).data()!;
+  assert.equal(generated.documentStatus, 'generated');
+  assert.ok(generated.docExportPath, 'document created after the inspector passed the draft');
+  let twice = false;
+  try {
+    await call('generateDocument')({ tenderId });
+  } catch {
+    twice = true;
+  }
+  assert.ok(twice, 'the document is created only once');
+  console.log('✓ draft-first: document created only after the inspector checked the draft');
+
   await call('transitionTender')({ tenderId, to: 'internal_review' });
   // With REQUIRE_APPROVALS off, an early "ready" would succeed and end the review round —
   // so only probe the refusal when the gate is on. The approvals themselves are always exercised.
@@ -216,8 +240,33 @@ async function main() {
     team: { requester: goodsTeam.requester, legal: legalUid }, // finance + security slots left empty
   })) as { data: { id: string; serial: string; verdict: string | null; missingRoles: string[] } };
   const badCheck = (await call('runSupervision')({ tenderId: bad.data.id, initial: true })) as { data: { verdict: string } };
-  assert.equal(badCheck.data.verdict, 'BLOCK', 'supervisor flags the leftover placeholder in the new document');
+  assert.equal(badCheck.data.verdict, 'BLOCK', 'supervisor flags the leftover placeholder in the draft');
   assert.deepEqual(bad.data.missingRoles, ['finance', 'security']);
+  const refusedWith = async (re: RegExp) => {
+    try {
+      await call('generateDocument')({ tenderId: bad.data.id });
+    } catch (e) {
+      return re.test((e as Error).message);
+    }
+    return false;
+  };
+  assert.ok(await refusedWith(/חוסמים/), 'no document while the inspector blocks the draft (no override)');
+  const edited = (await call('updateTenderDraft')({
+    tenderId: bad.data.id,
+    params: { milestones: 'אבן דרך 1: תכנון; אבן דרך 2: התקנה' },
+  })) as { data: { changed: string[] } };
+  assert.deepEqual(edited.data.changed, ['milestones'], 'only the edited field changed');
+  assert.ok(await refusedWith(/השתנתה/), 'a check of older draft data does not open the gate');
+  const recheck = (await call('runSupervision')({ tenderId: bad.data.id })) as { data: { verdict: string } };
+  assert.notEqual(recheck.data.verdict, 'BLOCK', 'the fixed draft passes the inspector');
+  await call('generateDocument')({ tenderId: bad.data.id });
+  console.log('✓ draft-first: blocked draft fixed in the app, rechecked, then its document created');
+  // Simulate a later manual edit that leaves a placeholder in the document (dev mode keeps HTML in Storage).
+  const docFile = adminStorage(adminApp).bucket('biding-system.firebasestorage.app').file(`tenders/${bad.data.id}/document.html`);
+  const [html] = await docFile.download();
+  await docFile.save(html.toString('utf8').replace('</body>', '<p>{{milestones_appendix}}</p></body>'), {
+    contentType: 'text/html',
+  });
   let gateRefused = false;
   try {
     await call('transitionTender')({ tenderId: bad.data.id, to: 'internal_review' });
@@ -252,6 +301,21 @@ async function main() {
     'override is audited',
   );
   console.log('✓ supervisor: placeholder blocks publish; manager override is audited');
+
+  // Requirement research runs in the background when a request is opened (no AI key in the
+  // emulator, so it records 'skipped'); its results are readable by managers only via rules.
+  const researched = await newRequest('מצלמות אבטחה לחניון');
+  let research: { status?: string; runId?: string | null } | undefined;
+  for (let i = 0; i < 40 && !(research?.status && research.status !== 'running'); i++) {
+    await new Promise((r) => setTimeout(r, 250));
+    research = (await getDoc(doc(db, 'bidRequests', researched))).data()?.research;
+  }
+  assert.equal(research?.status, 'skipped', 'research trigger ran on the new request');
+  const runs = await getDocs(collection(db, 'bidRequests', researched, 'research'));
+  assert.equal(runs.size, 1, 'the research run is recorded');
+  await call('rerunRequestResearch')({ serial: researched });
+  assert.equal((await getDocs(collection(db, 'bidRequests', researched, 'research'))).size, 2, 'rerun recorded');
+  console.log('✓ request research: background trigger + rerun recorded');
 
   // Internal users can no longer be granted ad hoc — only through the team.
   let adHocRefused = false;
@@ -578,7 +642,7 @@ async function main() {
   // ---- template conversion: a Word-style document (XXXX / ____, no {{fields}}) ----
   // Loaded through the admin SDK (emulator), as a manager would after pasting a .docx into a Doc.
   process.env.FIRESTORE_EMULATOR_HOST ??= '127.0.0.1:8080';
-  const adminDb = adminFirestore(initAdmin({ projectId: 'biding-system' }, 'e2e-admin'));
+  const adminDb = adminFirestore(adminApp);
   await adminDb.collection('templates').doc('service').set(
     {
       bodyTemplate: [
