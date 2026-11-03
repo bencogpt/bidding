@@ -8,7 +8,6 @@ import {
   requiredRolesFor,
   templateFieldsStatus,
   hasPlaceholder,
-  publicDetails,
   isAutoSerialParam,
   askedParams,
   guaranteeDefault,
@@ -124,12 +123,7 @@ export default function TenderCreate() {
       setDraftFailed(d.status === 'FAILED');
       setDraftMissing(d.status === 'FAILED' ? [] : d.missing);
       if (d.title) setTitle(d.title);
-      const fromDraft = Object.fromEntries(Object.entries(d.params ?? {}).map(([k, v]) => [k, String(v)]));
-      // The requester's answers fill what the draft left empty (never the internal budget).
-      for (const [k, v] of Object.entries(publicDetails(request?.details))) {
-        if (!(fromDraft[k] ?? '').trim()) fromDraft[k] = String(v);
-      }
-      setParams(fromDraft);
+      setParams(Object.fromEntries(Object.entries(d.params ?? {}).map(([k, v]) => [k, String(v)])));
       setDomainTags(d.domainTags ?? []);
       setCriteria(d.evaluationCriteria ?? []);
       if (d.submissionDeadlineDays) setDeadline(toLocalInput(Date.now() + d.submissionDeadlineDays * 86400000));

@@ -12,7 +12,7 @@ import type {
   BidDraft,
   ExternalSupplierSuggestion,
 } from '@obms/shared';
-import { TENDER_TYPE_LABELS_HE, isSystemParam, isConfidentialParam, templateIdFor } from '@obms/shared';
+import { TENDER_TYPE_LABELS_HE, isSystemParam, isConfidentialParam, isRequesterAnswered, templateIdFor } from '@obms/shared';
 import type { LoadedSkill } from './skillsRegistry.js';
 
 const CLUSTER_MODEL = process.env.ANTHROPIC_CLUSTER_MODEL ?? 'claude-sonnet-4-6';
@@ -310,7 +310,7 @@ export async function draftBidContent(
   try {
     const paramKeys = template.params
       // the system fills the bid number, calculated and fixed fields itself; hidden ones are never asked
-      .filter((p) => !isConfidentialParam(p) && !isSystemParam(p) && !p.hidden)
+      .filter((p) => !isConfidentialParam(p) && !isSystemParam(p) && !p.hidden && !isRequesterAnswered(p.key))
       .map((p) => ({ key: p.key, labelHe: p.labelHe, type: p.type }));
     const allowed = new Set(paramKeys.map((p) => p.key));
     const resp = await client.messages.create({

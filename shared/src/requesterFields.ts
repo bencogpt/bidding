@@ -101,3 +101,9 @@ export function normalizeDetailsInput(raw: Record<string, string>): { details: R
   }
   return { details, badNumbers };
 }
+
+/** Fields the requester answers in phase 1 (all but the internal budget): procurement's form does not ask them again. */
+export const isRequesterAnswered = (key: string): boolean => {
+  const f = byKey.get(key);
+  return !!f && !f.internal;
+};

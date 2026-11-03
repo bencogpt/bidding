@@ -10,6 +10,8 @@ import {
   briefWithDetails,
   fillFromRequestDetails,
   normalizeDetailsInput,
+  askedParams,
+  isRequesterAnswered,
 } from '@obms/shared';
 
 test('the field list: 11 unique keys, only the budget is internal, two defaults', () => {
@@ -109,4 +111,17 @@ test('normalizeDetailsInput trims, drops blanks, converts numbers and reports ba
   assert.deepEqual(r.badNumbers, ['annual_budget']);
   assert.deepEqual(normalizeDetailsInput({ annual_budget: '-3' }).badNumbers, ['annual_budget']);
   assert.deepEqual(normalizeDetailsInput({ annual_budget: '0' }).badNumbers, ['annual_budget']);
+});
+
+test('askedParams leaves out what the requester answers (procurement form), keeps the rest', () => {
+  const params = [
+    { key: 'service_providers_total' },
+    { key: 'work_days' },
+    { key: 'annual_budget' }, // internal: not shown to procurement as a requester answer, stays as a template field
+    { key: 'option_periods' },
+  ];
+  assert.deepEqual(askedParams(params).map((p) => p.key), ['annual_budget', 'option_periods']);
+  assert.equal(isRequesterAnswered('service_providers_total'), true);
+  assert.equal(isRequesterAnswered('annual_budget'), false);
+  assert.equal(isRequesterAnswered('estimate'), false);
 });
