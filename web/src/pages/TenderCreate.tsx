@@ -129,7 +129,10 @@ export default function TenderCreate() {
       const named = String(answers.service_name ?? '').trim();
       if (named || d.title) setTitle(named || d.title);
       // What the requester answered fills the fields the draft left empty (the same rule the server applies).
-      const filled = fillFromRequestDetails(template?.params ?? [], d.params ?? {}, request?.details);
+      // The template in this closure may still be the previous type's (the pick and the draft run together), so the
+      // keys come from the draft and the answers instead; `initial_period_months` is the one derived from the years.
+      const keys = new Set([...Object.keys(d.params ?? {}), ...Object.keys(answers), 'initial_period_months']);
+      const filled = fillFromRequestDetails([...keys].map((key) => ({ key })), d.params ?? {}, request?.details);
       setParams(Object.fromEntries(Object.entries(filled).map(([k, v]) => [k, String(v)])));
       setDomainTags(d.domainTags ?? []);
       setCriteria(d.evaluationCriteria ?? []);

@@ -226,3 +226,18 @@ export function requestChecklist(
     return { key, label, present };
   });
 }
+
+/**
+ * What the agent may see of the panel's text boxes. The classification counts only once the person set it
+ * (the pre-filled default must not look "typed", or it would block detection). The budget is never included.
+ */
+export function agentDetailsFromFields(fields: Record<string, string>, touched: ReadonlySet<string>): AgentDetails {
+  const out: AgentDetails = {};
+  const name = (fields.service_name ?? '').trim();
+  if (name && !name.includes('{{') && name.length <= 200) out.service_name = name;
+  const cls = (fields.document_classification ?? '').trim();
+  if (cls && touched.has('document_classification') && !cls.includes('{{') && cls.length <= 40) out.document_classification = cls;
+  const y = Number(fields.contract_years);
+  if ((fields.contract_years ?? '').trim() && Number.isInteger(y) && y >= 1 && y <= 30) out.contract_years = y;
+  return out;
+}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AskKey, AssistRequestResult } from '@obms/shared';
+import { BRIEF_MAX_LENGTH, agentDetailsFromFields, type AskKey, type AssistRequestResult } from '@obms/shared';
 import { api } from './api';
 
 export type Mode = 'free' | 'chat';
@@ -23,16 +23,6 @@ const initialFields = (): Fields => ({
   contract_years: '',
 });
 
-// What the agent may see. The budget is deliberately not here (GLOBAL_RULES G6).
-function agentDetails(f: Fields) {
-  const out: { service_name?: string; document_classification?: string; contract_years?: number } = {};
-  if (f.service_name.trim()) out.service_name = f.service_name.trim();
-  if (f.document_classification.trim()) out.document_classification = f.document_classification.trim();
-  const y = Number(f.contract_years);
-  if (f.contract_years.trim() && Number.isInteger(y) && y >= 1 && y <= 30) out.contract_years = y;
-  return out;
-}
-
 export function useRequestAgent() {
   const [brief, setBrief] = useState('');
   const [fields, setFields] = useState<Fields>(initialFields);
@@ -47,7 +37,8 @@ export function useRequestAgent() {
   const touched = useRef(new Set<keyof Fields>()); // fields the person typed: detection never overwrites them
   const fieldsRef = useRef(fields);
   fieldsRef.current = fields;
-  const seq = useRef(0);
+  const extractSeq = useRef(0); // a newer extraction supersedes an older one
+  const chatSeq = useRef(0); // a newer chat turn supersedes an older one; extraction never cancels a chat turn
 
   const applyDetails = useCallback((d: AssistRequestResult['details']) => {
     setFields((f) => ({
@@ -69,17 +60,17 @@ export function useRequestAgent() {
   // Free writing: after a pause, ask the agent to read the details out of the text. A convenience only.
   useEffect(() => {
     if (mode !== 'free' || brief.trim().length < 20) return;
-    const mine = ++seq.current;
+    const mine = ++extractSeq.current;
     const t = setTimeout(async () => {
       try {
         const r = await api.assistRequest({
           mode: 'extract',
           brief,
-          details: agentDetails(fieldsRef.current),
+          details: agentDetailsFromFields({ ...fieldsRef.current }, touched.current),
           history: [],
           qualityAsked: 0,
         });
-        if (mine !== seq.current) return;
+        if (mine !== extractSeq.current) return;
         applyDetails(r.details);
         setLimited(r.source === 'script');
       } catch {
@@ -91,7 +82,7 @@ export function useRequestAgent() {
 
   const turn = useCallback(
     async (history: ChatMsg[], nextBrief: string, nextQuality: number) => {
-      const mine = ++seq.current;
+      const mine = ++chatSeq.current;
       setTyping(true);
       setChips([]);
       setError('');
@@ -99,20 +90,20 @@ export function useRequestAgent() {
         const r = await api.assistRequest({
           mode: 'chat',
           brief: nextBrief,
-          details: agentDetails(fieldsRef.current),
+          details: agentDetailsFromFields({ ...fieldsRef.current }, touched.current),
           history: history.slice(-20),
           qualityAsked: nextQuality,
         });
-        if (mine !== seq.current) return;
+        if (mine !== chatSeq.current) return;
         applyDetails(r.details);
         setLimited(r.source === 'script');
         setAsking(r.asking);
         setChips(r.chips);
         if (r.message) setChat([...history, { role: 'agent', text: r.message }]);
       } catch (e) {
-        if (mine === seq.current) setError(e instanceof Error ? e.message : String(e));
+        if (mine === chatSeq.current) setError(e instanceof Error ? e.message : String(e));
       } finally {
-        if (mine === seq.current) setTyping(false);
+        if (mine === chatSeq.current) setTyping(false);
       }
     },
     [applyDetails],
@@ -125,7 +116,7 @@ export function useRequestAgent() {
 
   // An answer to a "scope" or "quality" question belongs to the brief; the other answers are read by the agent.
   const say = (text: string) => {
-    const t = text.trim();
+    const t = text.trim().slice(0, 1000); // the server caps each chat turn at 1000 characters
     if (!t || typing || asking === 'done') return;
     let nextBrief = brief;
     let nextQuality = qualityAsked;
@@ -134,6 +125,7 @@ export function useRequestAgent() {
       nextQuality += 1;
       if (t !== 'דלג') nextBrief = brief.includes(CLARIFY) ? `${brief}\n- ${t}` : `${brief}\n\n${CLARIFY}\n- ${t}`;
     }
+    nextBrief = nextBrief.slice(0, BRIEF_MAX_LENGTH);
     setBrief(nextBrief);
     setQualityAsked(nextQuality);
     const history = [...chat, { role: 'user' as const, text: t }];
@@ -142,7 +134,8 @@ export function useRequestAgent() {
   };
 
   const reset = () => {
-    seq.current++;
+    extractSeq.current++;
+    chatSeq.current++;
     touched.current.clear();
     setBrief('');
     setFields(initialFields());

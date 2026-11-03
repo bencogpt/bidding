@@ -10,6 +10,7 @@ import {
   scriptTurn,
   scopeOk,
   requestChecklist,
+  agentDetailsFromFields,
   QUALITY_QUESTIONS,
   type AssistRequestInput,
 } from '@obms/shared';
@@ -139,4 +140,16 @@ test('requestChecklist reports the five mandatory details and when sending is po
   assert.ok(full.every((r) => r.present));
   const badNumbers = rows(LONG, { service_name: 'תמיכה', document_classification: 'בלמ"ס', annual_budget: '-5', contract_years: '1.5' });
   assert.deepEqual(badNumbers.filter((r) => !r.present).map((r) => r.key), ['annual_budget', 'contract_years']);
+});
+
+test('agentDetailsFromFields sends only what the person typed or what is valid; the untouched default classification is not "typed"', () => {
+  const f = { service_name: ' תמיכה ', document_classification: 'בלמ"ס', annual_budget: '900000', contract_years: '3' };
+  assert.deepEqual(agentDetailsFromFields(f, new Set(['service_name'])), { service_name: 'תמיכה', contract_years: 3 });
+  assert.deepEqual(agentDetailsFromFields(f, new Set(['document_classification'])), {
+    document_classification: 'בלמ"ס',
+    service_name: 'תמיכה',
+    contract_years: 3,
+  });
+  assert.deepEqual(agentDetailsFromFields({ ...f, contract_years: '1.5', service_name: 'a {{b}}' }, new Set()), {});
+  assert.ok(!('annual_budget' in agentDetailsFromFields(f, new Set(['annual_budget']))), 'the budget is never part of it');
 });

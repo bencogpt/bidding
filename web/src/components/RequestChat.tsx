@@ -65,6 +65,7 @@ export default function RequestChat({
           <input
             className="flex-1 bg-transparent py-1 text-sm outline-none"
             placeholder={t('req.chatPlaceholder')}
+            maxLength={1000}
             value={text}
             disabled={disabled || typing}
             onChange={(e) => setText(e.target.value)}
