@@ -12,6 +12,14 @@ export interface Fields {
   document_classification: string;
   annual_budget: string;
   contract_years: string;
+  // optional answers
+  service_location: string;
+  provider_responsibilities: string;
+  team_lead_role: string;
+  min_pool_candidates: string;
+  service_providers_total: string;
+  supplier_equipment: string;
+  work_hours: string;
 }
 
 export const DEFAULT_CLASSIFICATION = 'בלמ"ס';
@@ -21,6 +29,13 @@ const initialFields = (): Fields => ({
   document_classification: DEFAULT_CLASSIFICATION,
   annual_budget: '',
   contract_years: '',
+  service_location: '',
+  provider_responsibilities: '',
+  team_lead_role: '',
+  min_pool_candidates: '',
+  service_providers_total: '',
+  supplier_equipment: '',
+  work_hours: '',
 });
 
 export function useRequestAgent() {

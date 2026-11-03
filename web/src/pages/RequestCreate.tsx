@@ -6,6 +6,7 @@ import { api } from '../lib/api';
 import { useRequestAgent } from '../lib/useRequestAgent';
 import RequestPanel from '../components/RequestPanel';
 import RequestChat from '../components/RequestChat';
+import RequestExtras from '../components/RequestExtras';
 
 // "בל"מ חדש" (the requester): free writing or an AI agent collects the five mandatory details, then the
 // request goes to procurement and gets its bid number.
@@ -158,6 +159,10 @@ export default function RequestCreate() {
           <button type="button" className="btn btn-gold w-full" disabled={busy || missing > 0} onClick={submit}>
             {busy ? t('req.creating') : t('req.sendToProcurement')}
           </button>
+        </div>
+
+        <div className="border-t border-black/5 pt-4 md:col-span-2">
+          <RequestExtras fields={a.fields} onField={a.setField} />
         </div>
       </div>
     </div>

@@ -20,6 +20,14 @@ export const REQUESTER_TEXTAREA_MAX = 1000;
 export const REQUESTER_FIELDS: readonly RequesterField[] = [
   { key: 'service_name', labelHe: 'שם השירות', type: 'text', required: true },
   { key: 'document_classification', labelHe: 'סיווג המסמך', type: 'text', required: true, default: 'בלמ"ס' },
+  // Optional: the more the requester fills, the fewer questions procurement has to ask.
+  { key: 'service_location', labelHe: 'מקום אספקת השירות', type: 'text' },
+  { key: 'provider_responsibilities', labelHe: 'תחומי אחריות נותני השירות', type: 'textarea' },
+  { key: 'team_lead_role', labelHe: 'תפקיד ראש הצוות', type: 'textarea' },
+  { key: 'min_pool_candidates', labelHe: 'מספר מועמדים מינימלי למאגר', type: 'number', wholeNumber: true, max: 100000 },
+  { key: 'service_providers_total', labelHe: 'כמות נותני השירות', type: 'number', wholeNumber: true, max: 100000 },
+  { key: 'supplier_equipment', labelHe: 'ציוד שהספק מספק לנותני השירות', type: 'textarea' },
+  { key: 'work_hours', labelHe: "מס' שעות עבודה", type: 'text' },
   {
     key: 'annual_budget',
     labelHe: 'מהו אומדן ההתקשרות השנתית או מהו גובה התקציב שהוקצה לשירות?',
@@ -33,6 +41,21 @@ export const REQUESTER_FIELDS: readonly RequesterField[] = [
 export type RequesterDetails = Record<string, string | number>;
 
 const byKey = new Map(REQUESTER_FIELDS.map((f) => [f.key, f]));
+
+// How a template spells a question the requester answers, when its words differ from the request screen's.
+const LABEL_ALIASES: Record<string, string[]> = {
+  service_providers_total: ["פה יבוא מס' נותני השירות", "מס' נותני השירות"],
+};
+const byLabel = new Map<string, RequesterField>();
+for (const f of REQUESTER_FIELDS) {
+  byLabel.set(f.labelHe, f);
+  for (const alias of LABEL_ALIASES[f.key] ?? []) byLabel.set(alias, f);
+}
+
+/** The requester question a template field stands for: matched by its key, else by its Hebrew label. */
+function requesterFieldFor(p: { key: string; labelHe?: string }): RequesterField | undefined {
+  return byKey.get(p.key) ?? (p.labelHe !== undefined ? byLabel.get(p.labelHe.trim()) : undefined);
+}
 
 function valueSchema(f: RequesterField) {
   if (f.type === 'number') {
@@ -82,14 +105,15 @@ export function briefWithDetails(brief: string, details?: Partial<RequesterDetai
 
 /** Fill the template fields the manager left blank from the requester's answers (the manager's value wins). */
 export function fillFromRequestDetails(
-  params: readonly { key: string }[],
+  params: readonly { key: string; labelHe?: string }[],
   values: Record<string, string | number>,
   details?: Partial<RequesterDetails> | null,
 ): Record<string, string | number> {
   const out = { ...values };
   const pub = publicDetails(details);
   for (const p of params) {
-    const v = pub[p.key];
+    const field = requesterFieldFor(p);
+    const v = field ? pub[field.key] : undefined; // the budget is not public, so it is never matched
     if (v !== undefined && isBlank(out[p.key])) out[p.key] = v;
   }
   // The contract length in years is procurement's initial period (in months) unless they typed one.
@@ -145,6 +169,8 @@ const HIDDEN_LABELS_HE = new Set([
   'תחומי אחריות נותני השירות',
   'תפקיד ראש הצוות',
   'כמות נותני השירות',
+  "פה יבוא מס' נותני השירות", // the template's own label for the provider count
+  'מספר מועמדים מינימלי למאגר',
   'ציוד שהספק מספק לנותני השירות',
   "מס' ימי עבודה",
   "מס' שעות עבודה",
@@ -157,5 +183,7 @@ const HIDDEN_KEYS = new Set([
 ]);
 
 /** Not asked on procurement's form: hidden by the template, answered by the requester, or removed by label. */
-export const isFormHidden = (p: { key: string; labelHe?: string; hidden?: boolean }): boolean =>
-  !!p.hidden || isRequesterAnswered(p.key) || HIDDEN_KEYS.has(p.key) || (p.labelHe !== undefined && HIDDEN_LABELS_HE.has(p.labelHe));
+export const isFormHidden = (p: { key: string; labelHe?: string; hidden?: boolean }): boolean => {
+  const asked = requesterFieldFor(p);
+  return !!p.hidden || (!!asked && !asked.internal) || HIDDEN_KEYS.has(p.key) || (p.labelHe !== undefined && HIDDEN_LABELS_HE.has(p.labelHe));
+};
