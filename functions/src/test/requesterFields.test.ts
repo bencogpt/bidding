@@ -198,3 +198,15 @@ test('a template field is matched to a requester answer by its Hebrew label too,
   // the budget is never matched by label either
   assert.ok(!('b' in fillFromRequestDetails([{ key: 'b', labelHe: 'מהו אומדן ההתקשרות השנתית או מהו גובה התקציב שהוקצה לשירות?' }], {}, { annual_budget: 5 })));
 });
+
+test("the bid's title is the requester's service name, and step 2 doesn't ask it", async () => {
+  const { fillFromRequestDetails, isFormHidden } = await import('@obms/shared');
+  const params = [{ key: 'tender_title', labelHe: 'tender_title' }, { key: 'כותרת המכרז', labelHe: 'כותרת המכרז' }];
+  const out = fillFromRequestDetails(params, {}, REQ);
+  assert.equal(out.tender_title, 'שירותי תמיכה');
+  assert.equal(out['כותרת המכרז'], 'שירותי תמיכה');
+  assert.equal(fillFromRequestDetails(params, { tender_title: 'כותרת אחרת' }, REQ).tender_title, 'כותרת אחרת', 'a typed title wins');
+  assert.ok(params.every((p) => isFormHidden(p)));
+  assert.ok(isFormHidden({ key: 'תוקף אחריות', labelHe: 'תוקף אחריות' }));
+  assert.ok(!isFormHidden({ key: 'תקופת האחריות', labelHe: 'תקופת האחריות' }));
+});

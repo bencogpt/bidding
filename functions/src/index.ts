@@ -59,6 +59,7 @@ import {
   isSystemParam,
   resolveSystemFills,
   SERVICE_KEYS,
+  guaranteeDefault,
   isAutoDeadlineParam,
   hasDocument,
   updateTenderDraftInput,
@@ -83,6 +84,7 @@ import {
   type SupervisionReport,
   type CaseTeam,
   type TeamRole,
+  hebrewLabel,
 } from '@obms/shared';
 import { randomBytes } from 'node:crypto';
 import { auth, db, now } from './lib/admin.js';
@@ -201,11 +203,12 @@ const SUPERVISED = {
 function validateParams(
   template: TemplateDoc,
   params: Record<string, string | number>,
+  annualEstimate?: unknown, // a blank guarantee takes its default from it (see resolveSystemFills)
 ): Record<string, string | number> {
   const clean: Record<string, string | number> = {};
   const stillPlaceholders = template.params
     .filter((p) => !isSystemParam(p) && !isFormHidden(p) && hasPlaceholder(params[p.key]))
-    .map((p) => p.labelHe);
+    .map((p) => hebrewLabel(p.key, p.labelHe));
   if (stillPlaceholders.length) {
     throw new HttpsError(
       'invalid-argument',
@@ -217,14 +220,18 @@ function validateParams(
     const v = params[p.key];
     const blank = v === undefined || String(v).trim() === '';
     if (blank) {
-      if (p.required) throw new HttpsError('invalid-argument', `שדה חובה חסר: ${p.labelHe}`);
+      const defaulted =
+        p.defaultFrom === 'guarantee_pct' && guaranteeDefault(annualEstimate ?? params[SERVICE_KEYS.estimate]) !== null;
+      if (p.required && !defaulted) {
+        throw new HttpsError('invalid-argument', `שדה חובה חסר: ${hebrewLabel(p.key, p.labelHe)}`);
+      }
       continue;
     }
     if (p.type === 'number' && !Number.isFinite(Number(v))) {
-      throw new HttpsError('invalid-argument', `השדה "${p.labelHe}" חייב להיות מספר.`);
+      throw new HttpsError('invalid-argument', `השדה "${hebrewLabel(p.key, p.labelHe)}" חייב להיות מספר.`);
     }
     if (p.key === SERVICE_KEYS.economicPct && (Number(v) < 0 || Number(v) > 100)) {
-      throw new HttpsError('invalid-argument', `השדה "${p.labelHe}" חייב להיות בין 0 ל-100.`);
+      throw new HttpsError('invalid-argument', `השדה "${hebrewLabel(p.key, p.labelHe)}" חייב להיות בין 0 ל-100.`);
     }
     clean[p.key] = p.type === 'number' ? Number(v) : v;
   }
@@ -377,10 +384,18 @@ async function grantTeamAccess(
 function buildCaseParams(
   template: TemplateDoc,
   asked: Record<string, string | number>,
-  ctx: { serial: string; submissionDeadline: number | null; owner: UserDoc | null; requester?: UserDoc },
+  ctx: {
+    serial: string;
+    submissionDeadline: number | null;
+    owner: UserDoc | null;
+    requester?: UserDoc;
+    request?: BidRequestDoc | null; // its confidential annual estimate is the guarantee default's base
+  },
 ): { publicParams: Record<string, string | number>; internalParams: Record<string, string | number> } {
+  const annual = Number((ctx.request?.details as Record<string, unknown> | undefined)?.annual_budget);
   const params = resolveSystemFills(template.params, asked, {
     submissionDeadline: ctx.submissionDeadline,
+    annualEstimate: Number.isFinite(annual) && annual > 0 ? annual : undefined,
     manager: ctx.owner ? { displayName: ctx.owner.displayName, email: ctx.owner.email } : undefined,
     requester: ctx.requester ? { displayName: ctx.requester.displayName, phone: ctx.requester.phone } : undefined,
   });
@@ -505,7 +520,7 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
   if (prior) return prior;
 
   // ---- 1. validate (no writes) ----
-  const template = await templatesRepo.get(input.type);
+  const template = await templatesRepo.getForCase(input.type);
   if (!template) {
     throw new HttpsError('failed-precondition', `אין תבנית לסוג המכרז: ${input.type}`);
   }
@@ -517,10 +532,10 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
       'התבנית טרם הומרה — יש להשלים את שדות התבנית בעמוד התבניות לפני יצירת מכרז.',
     );
   }
-  const asked = validateParams(template, input.params);
-
   const bidReq = await bidRequestsRepo.get(input.bidRequestId);
   if (!bidReq) throw new HttpsError('not-found', 'הבקשה לא נמצאה.');
+  const asked = validateParams(template, input.params, (bidReq.details as Record<string, unknown> | undefined)?.annual_budget);
+
   if (bidReq.status !== 'open') throw new HttpsError('failed-precondition', 'הבקשה כבר הומרה למכרז.');
   // What the requester already answered in phase 1 fills the matching fields the manager left blank.
   const askedWithDetails = fillFromRequestDetails(template.params, asked, bidReq.details);
@@ -551,6 +566,7 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
   const serial = bidReq.serial;
   const { publicParams, internalParams } = buildCaseParams(template, askedWithDetails, {
     serial,
+    request: bidReq,
     submissionDeadline: input.submissionDeadline ?? null,
     owner,
     requester,
@@ -708,7 +724,7 @@ export const updateTenderDraft = onCall(async (req) => {
     throw new HttpsError('failed-precondition', 'למכרז כבר נוצר מסמך — יש לערוך את המסמך עצמו.');
   }
   if (tender.status !== 'draft') throw new HttpsError('failed-precondition', 'ניתן לערוך רק מכרז בטיוטה.');
-  const template = await templatesRepo.get(tender.type);
+  const template = await templatesRepo.getForCase(tender.type);
   if (!template) throw new HttpsError('failed-precondition', `אין תבנית לסוג המכרז: ${tender.type}`);
 
   const submissionDeadline =
@@ -721,8 +737,10 @@ export const updateTenderDraft = onCall(async (req) => {
   const asked = validateParams(template, { ...tender.params, ...internalBefore, ...(input.params ?? {}) });
   const owner = await usersRepo.get(tender.ownerUid);
   const requester = tender.team?.requester ? await usersRepo.get(tender.team.requester) : null;
+  const bidReq = tender.serial ? await bidRequestsRepo.get(tender.serial) : null;
   const { publicParams, internalParams } = buildCaseParams(template, asked, {
     serial: tender.serial ?? '',
+    request: bidReq,
     submissionDeadline,
     owner,
     requester: requester ?? undefined,
@@ -784,7 +802,7 @@ export const generateDocument = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 
   const input = parseInput(generateDocumentInput, req.data);
   const tender = await tendersRepo.get(input.tenderId);
   if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
-  const template = await templatesRepo.get(tender.type);
+  const template = await templatesRepo.getForCase(tender.type);
   if (!template) throw new HttpsError('failed-precondition', `אין תבנית לסוג המכרז: ${tender.type}`);
   const internalParams = await internalRepo.getParams(tender.id);
   const reason = documentGate(tender, currentDraftDataHash(tender, template, internalParams));
@@ -1341,7 +1359,7 @@ export const draftBid = onCall(
   async (req) => {
     const caller = requireManager(req);
     const input = parseInput(draftBidInput, req.data);
-    const template = await templatesRepo.get(input.type);
+    const template = await templatesRepo.getForCase(input.type);
     if (!template) throw new HttpsError('failed-precondition', `אין תבנית לסוג: ${input.type}`);
     const skills = requiredSkillsFor(input.type);
     // The requester's phase 1 answers (never the internal budget) ride along with the brief.

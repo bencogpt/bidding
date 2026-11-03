@@ -4,7 +4,7 @@ import { HttpsError } from 'firebase-functions/v2/https';
 import { FieldValue } from 'firebase-admin/firestore';
 import { db, now } from './lib/admin.js';
 import { nextUsage, type UsageWindow } from './lib/rateWindow.js';
-import { isInternalRole, formatSerial } from '@obms/shared';
+import { isInternalRole, formatSerial, withBuiltinFills } from '@obms/shared';
 import type { TeamRole, TeamApproval } from '@obms/shared';
 import type {
   TenderDoc,
@@ -102,6 +102,11 @@ export const templatesRepo = {
   async get(type: string): Promise<TemplateDoc | null> {
     const s = await db.collection('templates').doc(type).get();
     return s.exists ? (s.data() as TemplateDoc) : null;
+  },
+  /** The template as cases use it: with the built-in fill rules (by field name) attached. Not for saving. */
+  async getForCase(type: string): Promise<TemplateDoc | null> {
+    const t = await templatesRepo.get(type);
+    return t ? { ...t, params: withBuiltinFills(t.params ?? []) } : null;
   },
   async patch(type: string, data: Partial<TemplateDoc>): Promise<void> {
     assertTemplateFits(data);

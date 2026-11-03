@@ -30,28 +30,45 @@ export default function MyDesk() {
       </div>
 
       {(requests.length > 0 || isManager) && (
-        <div className="card mb-6 p-5">
+        <div className="mb-6">
           <h2 className="mb-3 font-semibold">{isManager ? t('req.pendingTitle') : t('req.myRequests')}</h2>
           {requests.length === 0 ? (
-            <p className="text-sm text-tx-mute">{t('req.pendingEmpty')}</p>
+            <div className="card p-5 text-sm text-tx-mute">{t('req.pendingEmpty')}</div>
           ) : (
-            <ul className="space-y-2">
-              {requests.map((r) => (
-                <li key={r.serial} className="flex items-center justify-between gap-3 text-sm">
-                  <span className="font-semibold">{r.serial}</span>
-                  <span className="text-tx-mute">{fmtDate(r.createdAt)}</span>
-                  <span className="flex-1 truncate text-tx-soft">{r.brief}</span>
-                  <span className="text-tx-mute">{r.requesterName}</span>
-                  {isManager ? (
-                    <Link to={`/requests/${r.serial}`} className="btn btn-gold">
-                      {t('req.handle')}
-                    </Link>
-                  ) : (
-                    <span className="chip">{r.status === 'open' ? t('req.statusOpen') : t('req.statusConverted')}</span>
-                  )}
-                </li>
-              ))}
-            </ul>
+            <div className="card overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-paper text-xs text-tx-mute">
+                  <tr>
+                  <th className="px-5 py-3 text-start font-medium">{t('dashboard.col.serial')}</th>
+                  <th className="px-5 py-3 text-start font-medium">{t('req.col.opened')}</th>
+                  <th className="px-5 py-3 text-start font-medium">{t('req.col.brief')}</th>
+                  <th className="px-5 py-3 text-start font-medium">{t('req.requestedBy')}</th>
+                    <th className="px-5 py-3" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {requests.map((r) => (
+                    <tr key={r.serial} className="border-t border-paper-2 hover:bg-paper">
+                      <td className="whitespace-nowrap px-5 py-3 font-semibold text-tx-soft">
+                        <span dir="ltr">{r.serial}</span>
+                      </td>
+                      <td className="whitespace-nowrap px-5 py-3 text-xs text-tx-mute">{fmtDate(r.createdAt)}</td>
+                      <td className="max-w-md truncate px-5 py-3">{r.brief}</td>
+                      <td className="whitespace-nowrap px-5 py-3 text-tx-soft">{r.requesterName}</td>
+                      <td className="whitespace-nowrap px-5 py-3 text-end">
+                        {isManager ? (
+                          <Link to={`/requests/${r.serial}`} className="btn btn-gold btn-sm">
+                            {t('req.handle')}
+                          </Link>
+                        ) : (
+                          <span className="chip">{r.status === 'open' ? t('req.statusOpen') : t('req.statusConverted')}</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}

@@ -43,7 +43,9 @@ export type RequesterDetails = Record<string, string | number>;
 const byKey = new Map(REQUESTER_FIELDS.map((f) => [f.key, f]));
 
 // How a template spells a question the requester answers, when its words differ from the request screen's.
+// An alias may be a template field's key or its Hebrew label.
 const LABEL_ALIASES: Record<string, string[]> = {
+  service_name: ['tender_title', 'כותרת המכרז'], // the bid's title is the service's name
   service_providers_total: ["פה יבוא מס' נותני השירות", "מס' נותני השירות"],
   work_hours: ["מס' שעות עבודה"],
 };
@@ -53,9 +55,9 @@ for (const f of REQUESTER_FIELDS) {
   for (const alias of LABEL_ALIASES[f.key] ?? []) byLabel.set(alias, f);
 }
 
-/** The requester question a template field stands for: matched by its key, else by its Hebrew label. */
+/** The requester question a template field stands for: matched by its key, else by its key or Hebrew label as an alias. */
 function requesterFieldFor(p: { key: string; labelHe?: string }): RequesterField | undefined {
-  return byKey.get(p.key) ?? (p.labelHe !== undefined ? byLabel.get(p.labelHe.trim()) : undefined);
+  return byKey.get(p.key) ?? byLabel.get(p.key) ?? (p.labelHe !== undefined ? byLabel.get(p.labelHe.trim()) : undefined);
 }
 
 function valueSchema(f: RequesterField) {
@@ -165,6 +167,7 @@ export const isRequesterAnswered = (key: string): boolean => {
 
 // Fields removed from procurement's form (the spreadsheet's "remove from the procurement form" column): matched by key and by Hebrew label.
 const HIDDEN_LABELS_HE = new Set([
+  'תוקף אחריות',
   'סוג האישור הרפואי הנדרש',
   'מקום אספקת השירות',
   'תחומי אחריות נותני השירות',
@@ -186,5 +189,11 @@ const HIDDEN_KEYS = new Set([
 /** Not asked on procurement's form: hidden by the template, answered by the requester, or removed by label. */
 export const isFormHidden = (p: { key: string; labelHe?: string; hidden?: boolean }): boolean => {
   const asked = requesterFieldFor(p);
-  return !!p.hidden || (!!asked && !asked.internal) || HIDDEN_KEYS.has(p.key) || (p.labelHe !== undefined && HIDDEN_LABELS_HE.has(p.labelHe));
+  return (
+    !!p.hidden ||
+    (!!asked && !asked.internal) ||
+    HIDDEN_KEYS.has(p.key) ||
+    HIDDEN_LABELS_HE.has(p.key) || // fields typed into the doc in Hebrew: the key is the label
+    (p.labelHe !== undefined && HIDDEN_LABELS_HE.has(p.labelHe))
+  );
 };

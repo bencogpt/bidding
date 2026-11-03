@@ -1,5 +1,6 @@
 // Pure helpers for binding a Google Doc template to a tender type. Shared by functions
 // (the bind callable) and tests — no I/O here.
+import { hebrewLabel, fieldType } from './fieldLabels.js';
 
 import { isFormHidden } from './requesterFields.js';
 
@@ -66,7 +67,8 @@ export function detectPlaceholders(text: string): TemplateParam[] {
     const key = m[1].trim();
     if (!key || seen.has(key)) continue;
     seen.add(key);
-    params.push({ key, labelHe: key, type: 'text', required: true });
+    const labelHe = hebrewLabel(key, key);
+    params.push({ key, labelHe, type: fieldType(key, labelHe, 'text'), required: true });
   }
   return params;
 }
@@ -89,8 +91,8 @@ export function mergeSyncedParams(
     if (!old) return p;
     return {
       ...p,
-      labelHe: old.labelHe,
-      type: old.type,
+      labelHe: hebrewLabel(p.key, old.labelHe),
+      type: fieldType(p.key, hebrewLabel(p.key, old.labelHe), old.type),
       required: old.required,
       ...(old.internal ? { internal: true } : {}),
       // form layout and system-fill rules survive a re-sync too

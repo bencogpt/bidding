@@ -12,9 +12,9 @@ import {
   type TemplateParam,
 } from '@obms/shared';
 
-test('guaranteeDefault: 2.5% of the estimate, rounded to the shekel', () => {
-  assert.equal(guaranteeDefault(1_000_000), 25_000);
-  assert.equal(guaranteeDefault('1234567'), 30_864);
+test('guaranteeDefault: 2% of the annual estimate, rounded to the shekel', () => {
+  assert.equal(guaranteeDefault(1_000_000), 20_000);
+  assert.equal(guaranteeDefault('1234567'), 24_691);
   assert.equal(guaranteeDefault(''), null);
   assert.equal(guaranteeDefault(0), null);
   assert.equal(guaranteeDefault('abc'), null);
@@ -91,8 +91,8 @@ test('resolveSystemFills: default guarantee, words, totals, copies, fixed and co
     { estimate: 1_000_000, initial_period_months: 24, option_periods: 2, validity: 90 },
     ctx,
   );
-  assert.equal(out.guarantee_amount, 25_000);
-  assert.equal(out.guarantee_amount_words, 'עשרים וחמישה אלף שקלים');
+  assert.equal(out.guarantee_amount, 20_000);
+  assert.equal(out.guarantee_amount_words, 'עשרים אלף שקלים');
   assert.equal(out.total_months, 26);
   assert.equal(out.offer_validity_days, 90);
   assert.equal(out.envelope_addressee, 'דנה מנהלת');
@@ -178,4 +178,47 @@ test('quality share is 100 minus the economic share, and absent for a bad value'
   assert.equal(resolveSystemFills(params, { economic_pct: 100 }, ctx).quality_pct, 0);
   assert.equal('quality_pct' in resolveSystemFills(params, { economic_pct: 130 }, ctx), false);
   assert.equal('quality_pct' in resolveSystemFills(params, {}, ctx), false);
+});
+
+// The service template as typed into the Google Doc: Hebrew placeholders, no fill metadata.
+const typed: TemplateParam[] = [
+  { key: 'tender_title', labelHe: 'tender_title', type: 'text', required: true },
+  { key: 'כתובת מייל של מנהל המכרז', labelHe: 'כתובת מייל של מנהל המכרז', type: 'text', required: true },
+  { key: 'סכום ערבות להצעה', labelHe: 'סכום ערבות להצעה', type: 'text', required: true },
+  { key: 'סכום ערבות ביצוע', labelHe: 'סכום ערבות ביצוע', type: 'text', required: true },
+  { key: 'תוקף אחריות', labelHe: 'תוקף אחריות', type: 'text', required: true },
+  { key: 'bid_guarantee_amount', labelHe: 'סכום ערבות ההצעה (בש"ח)', type: 'number', required: true },
+  { key: 'bid_guarantee_amount_words', labelHe: 'סכום ערבות ההצעה במילים', type: 'text', required: true },
+  { key: 'bid_guarantee_validity_date', labelHe: 'תוקף ערבות ההצעה', type: 'date', required: true },
+];
+
+test('built-in rules: step 2 no longer asks the title, the manager email or תוקף אחריות', async () => {
+  const { withBuiltinFills, askedParams } = await import('@obms/shared');
+  const asked = askedParams(withBuiltinFills(typed)).map((p) => p.key);
+  assert.deepEqual(asked, ['סכום ערבות להצעה', 'סכום ערבות ביצוע', 'bid_guarantee_validity_date']);
+  const guarantee = withBuiltinFills(typed).find((p) => p.key === 'סכום ערבות להצעה')!;
+  assert.equal(guarantee.defaultFrom, 'guarantee_pct', 'the bid guarantee is pre-filled, still editable');
+  assert.equal(guarantee.type, 'number');
+  assert.equal(withBuiltinFills(typed).find((p) => p.key === 'סכום ערבות ביצוע')!.fill, undefined, 'performance guarantee untouched');
+});
+
+test('built-in rules: 2% of the annual estimate on both guarantee fields, words, manager email', async () => {
+  const { withBuiltinFills } = await import('@obms/shared');
+  const all = withBuiltinFills(typed);
+  const out = resolveSystemFills(all, {}, { ...ctx, annualEstimate: 1_000_000 });
+  assert.equal(out['סכום ערבות להצעה'], 20_000);
+  assert.equal(out.bid_guarantee_amount, 20_000, 'the second guarantee field copies the first');
+  assert.equal(out.bid_guarantee_amount_words, 'עשרים אלף שקלים');
+  assert.equal(out['כתובת מייל של מנהל המכרז'], 'manager@obms.test');
+  const typedByManager = resolveSystemFills(all, { 'סכום ערבות להצעה': 15_000 }, { ...ctx, annualEstimate: 1_000_000 });
+  assert.equal(typedByManager.bid_guarantee_amount, 15_000, "the manager's amount wins");
+  assert.equal(typedByManager.bid_guarantee_amount_words, 'חמישה עשר אלף שקלים');
+});
+
+test('built-in rules: explicit field metadata wins', async () => {
+  const { withBuiltinFills } = await import('@obms/shared');
+  const fixed: TemplateParam = { key: 'manager_email', labelHe: 'מייל', type: 'text', required: false, fill: { kind: 'fixed', value: 'x@y' } };
+  assert.deepEqual(withBuiltinFills([fixed])[0].fill, { kind: 'fixed', value: 'x@y' });
+  const lead: TemplateParam = { key: 'BID_LEAD_EMAIL', labelHe: 'BID_LEAD_EMAIL', type: 'text', required: true };
+  assert.deepEqual(withBuiltinFills([lead])[0].fill, { kind: 'formula', formula: 'manager_email' }, 'matched case-insensitively');
 });

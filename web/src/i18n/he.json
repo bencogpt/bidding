@@ -555,6 +555,8 @@
   "req.notFound": "הבקשה לא נמצאה.",
   "req.alreadyConverted": "הבקשה כבר הומרה למכרז.",
   "req.openCase": "פתח את המכרז",
+  "req.col.opened": "נפתחה",
+  "req.col.brief": "תקציר",
   "req.pendingTitle": "בקשות ממתינות לאיש הרכש",
   "req.pendingEmpty": "אין בקשות ממתינות.",
   "req.myRequests": "הבקשות שלי",
