@@ -8,6 +8,7 @@ import {
   requiredRolesFor,
   templateFieldsStatus,
   hasPlaceholder,
+  publicDetails,
   isAutoSerialParam,
   askedParams,
   guaranteeDefault,
@@ -23,6 +24,7 @@ import {
 import { useBidRequest, useTemplate, useUsers } from '../lib/hooks';
 import { api } from '../lib/api';
 import TagsInput from '../components/TagsInput';
+import RequesterDetails from '../components/RequesterDetails';
 
 type Criterion = { name: string; weight: number };
 
@@ -116,13 +118,18 @@ export default function TenderCreate() {
     setDrafting(true);
     setError('');
     try {
-      const d = await api.draftBid({ type: forType, brief });
+      const d = await api.draftBid({ type: forType, brief, bidRequestId: serial });
       if (seq !== draftSeq.current) return; // a newer pick owns the form and the drafting flag
       setDraftId(d.draftId);
       setDraftFailed(d.status === 'FAILED');
       setDraftMissing(d.status === 'FAILED' ? [] : d.missing);
       if (d.title) setTitle(d.title);
-      setParams(Object.fromEntries(Object.entries(d.params ?? {}).map(([k, v]) => [k, String(v)])));
+      const fromDraft = Object.fromEntries(Object.entries(d.params ?? {}).map(([k, v]) => [k, String(v)]));
+      // The requester's answers fill what the draft left empty (never the internal budget).
+      for (const [k, v] of Object.entries(publicDetails(request?.details))) {
+        if (!(fromDraft[k] ?? '').trim()) fromDraft[k] = String(v);
+      }
+      setParams(fromDraft);
       setDomainTags(d.domainTags ?? []);
       setCriteria(d.evaluationCriteria ?? []);
       if (d.submissionDeadlineDays) setDeadline(toLocalInput(Date.now() + d.submissionDeadlineDays * 86400000));
@@ -311,6 +318,7 @@ export default function TenderCreate() {
         </div>
         <div className="whitespace-pre-wrap rounded bg-paper-2 p-3 text-sm">{request.brief}</div>
       </div>
+      <RequesterDetails details={request.details} />
 
       {notConverted && (
         <div className="card mb-5 border-amber-300 bg-amber-50 p-4 text-sm text-amber-800">

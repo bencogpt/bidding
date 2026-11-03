@@ -16,6 +16,8 @@
   "req.detailsTitle": "פרטים נוספים",
   "req.detailsHint": "לא חובה. ככל שתמלא יותר, איש הרכש יצטרך לשאול פחות.",
   "req.badNumber": "הערך בשדה \"{{field}}\" חייב להיות מספר חיובי.",
+  "create.requesterDetails": "פרטים מהדורש",
+  "create.internalOnly": "פנימי — לא יפורסם",
   "nav.templates": "תבניות",
   "nav.users": "משתמשים פנימיים",
   "nav.suppliers": "ספקים",
