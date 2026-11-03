@@ -14,6 +14,8 @@ import {
   shekelsInWords,
   SERVICE_KEYS,
   type TemplateParam,
+  resolveParam,
+  hebrewLabel,
   isAutoParam,
   isAutoDeadlineParam,
   type CaseTeam,
@@ -87,12 +89,12 @@ export default function TenderCreate() {
   const setParam = (k: string, v: string) => setParams((p) => ({ ...p, [k]: v }));
 
   // The fields the form asks for, in the template's order. System-filled and hidden ones are not here.
-  const asked = askedParams(template?.params ?? []);
+  const asked = askedParams((template?.params ?? []).map(resolveParam)); // Hebrew labels, date fields as dates
   const ordered = asked.some((p) => p.order !== undefined);
   const beforeDeadline = ordered ? asked.filter((p) => (p.order ?? Infinity) < DEADLINE_ORDER) : asked;
   const orderOf = (p: TemplateParam) => p.order ?? Infinity;
   // System-filled fixed values the form shows read-only, in their place among the asked fields.
-  const shown = ordered ? (template?.params ?? []).filter((p) => p.display && p.fill?.kind === 'fixed') : [];
+  const shown = ordered ? (template?.params ?? []).map(resolveParam).filter((p) => p.display && p.fill?.kind === 'fixed') : [];
   const beforeTeam = ordered
     ? [...asked, ...shown]
         .filter((p) => orderOf(p) >= DEADLINE_ORDER && orderOf(p) < TEAM_ORDER)
@@ -154,7 +156,7 @@ export default function TenderCreate() {
   // Fields still holding the AI draft's {{PLACEHOLDER}} — the brief didn't give the value.
   const unfilled = asked.filter((p) => hasPlaceholder(params[p.key]));
 
-  const labelOf = (k: string) => template?.params.find((p) => p.key === k)?.labelHe ?? k;
+  const labelOf = (k: string) => hebrewLabel(k, template?.params.find((p) => p.key === k)?.labelHe ?? k);
   const draftNote = draftFailed
     ? t('create.draftFailed')
     : draftMissing.length
