@@ -22,6 +22,17 @@ export const SYSTEM_FORMULAS = [
   'manager_email',
   'requester_name', // the requester on the case team
   'requester_phone',
+  // the procurement form (procurementForm.ts)
+  'bid_guarantee', // 2% of the annual estimate from ₪1M, floored to thousands
+  'performance_guarantee', // 5% of the annual estimate
+  'guarantee_validity', // submission deadline + 60 days
+  'bid_validity', // submission deadline + 90 days, moved to a working day
+  'annual_estimate', // the requester's annual estimate, published as the framework amount
+  'manager_phone',
+  'option_total_months', // contract months + option periods × months per period
+  'bid_serial', // the case's bid number
+  'submission_date', // the submission deadline's date
+  'request_brief', // the requester's description of the service (פרק ב')
 ] as const;
 export type SystemFormula = (typeof SYSTEM_FORMULAS)[number];
 

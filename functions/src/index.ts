@@ -56,6 +56,8 @@ import {
   isAutoSerialParam,
   briefWithDetails,
   isFormHidden,
+  isConfidentialParam,
+  BLANK_LINE,
   fillFromRequestDetails,
   isSystemParam,
   resolveSystemFills,
@@ -398,11 +400,18 @@ function buildCaseParams(
     request?: BidRequestDoc | null; // its confidential annual estimate is the guarantee default's base
   },
 ): { publicParams: Record<string, string | number>; internalParams: Record<string, string | number> } {
-  const annual = Number((ctx.request?.details as Record<string, unknown> | undefined)?.annual_budget);
+  const details = (ctx.request?.details ?? {}) as Record<string, unknown>;
+  const annual = Number(details.annual_budget);
+  const years = Number(details.contract_years);
   const params = resolveSystemFills(template.params, asked, {
     submissionDeadline: ctx.submissionDeadline,
     annualEstimate: Number.isFinite(annual) && annual > 0 ? annual : undefined,
-    manager: ctx.owner ? { displayName: ctx.owner.displayName, email: ctx.owner.email } : undefined,
+    contractYears: Number.isInteger(years) && years > 0 ? years : undefined,
+    requestBrief: ctx.request?.brief,
+    serial: ctx.serial,
+    manager: ctx.owner
+      ? { displayName: ctx.owner.displayName, email: ctx.owner.email, phone: ctx.owner.phone }
+      : undefined,
     requester: ctx.requester ? { displayName: ctx.requester.displayName, phone: ctx.requester.phone } : undefined,
   });
   // Confidential values (the estimate, G6) never go on the supplier-readable tender doc.
@@ -412,6 +421,13 @@ function buildCaseParams(
     if (isAutoDeadlineParam(p) && ctx.submissionDeadline) {
       publicParams[p.key] = formatDeadlineFor(p.key, ctx.submissionDeadline);
     }
+  }
+  // A field the form doesn't ask and nothing filled is printed as a blank line to complete in the
+  // document (the inspector lists them as a warning) — not left as a {{placeholder}} that blocks.
+  for (const p of template.params) {
+    const notAsked = isSystemParam(p) || isFormHidden(p);
+    const blank = String(publicParams[p.key] ?? '').trim() === '';
+    if (notAsked && blank && !isConfidentialParam(p)) publicParams[p.key] = BLANK_LINE;
   }
   return { publicParams, internalParams };
 }

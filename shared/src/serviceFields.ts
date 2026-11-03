@@ -1,6 +1,8 @@
 // Calculated and system-filled fields of the services tender form. Pure functions, no I/O: used by
 // createTender on the server and by the create form for the guarantee default.
 import type { SystemFill, TemplateParam } from './templates.js';
+import { addDaysToWorkingDay, formatIsraelDate } from './israelCalendar.js';
+import { GUARANTEE_AMOUNT_NAMES, OPTION_KEYS, procurementRuleFor, ruleNamed } from './procurementForm.js';
 
 /** Keys of the services template that the formulas read. */
 export const SERVICE_KEYS = {
@@ -110,12 +112,40 @@ export function totalMonths(initialMonths: unknown, optionPeriods: unknown): num
 
 export interface FillContext {
   submissionDeadline: number | null;
-  annualEstimate?: number; // the requester's annual estimate (confidential): the guarantee default's base
-  manager?: { displayName: string; email: string };
+  annualEstimate?: number; // the requester's annual estimate (confidential except where a rule publishes it)
+  contractYears?: number; // the requester's contract length in years
+  requestBrief?: string; // the requester's description of the service
+  serial?: string; // the case's bid number
+  manager?: { displayName: string; email: string; phone?: string };
   requester?: { displayName: string; phone?: string };
 }
 
 type Values = Record<string, string | number>;
+
+const num = (v: unknown): number => (typeof v === 'string' ? Number(v.replace(/,/g, '')) : Number(v));
+/** 87000 → "87,000" (amounts as the document prints them). */
+const amount = (n: number): string => n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+
+/** The bid guarantee: 2% of the annual estimate, floored to whole thousands; none under ₪1M. */
+export const GUARANTEE_MIN_ESTIMATE = 1_000_000;
+export function bidGuarantee(annualEstimate: unknown): number | null {
+  const n = num(annualEstimate);
+  if (!Number.isFinite(n) || n < GUARANTEE_MIN_ESTIMATE) return null;
+  return Math.floor((n * GUARANTEE_PCT) / 1000) * 1000;
+}
+export const PERFORMANCE_GUARANTEE_PCT = 0.05;
+
+/** Contract months + option periods × months per period (none when an input is missing). */
+export function optionTotalMonths(contractYears: unknown, periods: unknown, monthsPerPeriod: unknown): number | null {
+  const y = num(contractYears);
+  const c = num(periods);
+  const m = num(monthsPerPeriod);
+  if (![y, c, m].every((x) => Number.isFinite(x) && x >= 0) || !(y > 0)) return null;
+  if (periods === '' || periods == null || monthsPerPeriod === '' || monthsPerPeriod == null) return null;
+  return y * 12 + c * m;
+}
+
+const DAY_MS = 86_400_000;
 
 function formulaValue(
   formula: string,
@@ -125,10 +155,9 @@ function formulaValue(
 ): string | number | undefined {
   switch (formula) {
     case 'guarantee_words': {
-      const n = Number(values[guaranteeKey]);
-      return values[guaranteeKey] !== undefined && Number.isFinite(n) && n >= 0 && n <= 999_999_999
-        ? shekelsInWords(n)
-        : undefined;
+      const raw = values[guaranteeKey] ?? bidGuarantee(ctx.annualEstimate) ?? undefined;
+      const n = num(raw);
+      return raw !== undefined && Number.isFinite(n) && n >= 0 && n <= 999_999_999 ? shekelsInWords(n) : undefined;
     }
     case 'total_months':
       return totalMonths(values[SERVICE_KEYS.initialMonths], values[SERVICE_KEYS.optionPeriods]) ?? undefined;
@@ -142,10 +171,38 @@ function formulaValue(
       return ctx.manager?.displayName;
     case 'manager_email':
       return ctx.manager?.email;
+    case 'manager_phone':
+      return ctx.manager?.phone;
     case 'requester_name':
       return ctx.requester?.displayName;
     case 'requester_phone':
       return ctx.requester?.phone;
+    case 'bid_guarantee': {
+      const g = bidGuarantee(ctx.annualEstimate);
+      return g === null ? undefined : amount(g);
+    }
+    case 'performance_guarantee': {
+      const n = num(ctx.annualEstimate);
+      return Number.isFinite(n) && n > 0 ? amount(Math.round(n * PERFORMANCE_GUARANTEE_PCT)) : undefined;
+    }
+    case 'annual_estimate': {
+      const n = num(ctx.annualEstimate);
+      return Number.isFinite(n) && n > 0 ? amount(n) : undefined;
+    }
+    case 'guarantee_validity':
+      return ctx.submissionDeadline ? formatIsraelDate(ctx.submissionDeadline + 60 * DAY_MS) : undefined;
+    case 'bid_validity':
+      return ctx.submissionDeadline ? formatIsraelDate(addDaysToWorkingDay(ctx.submissionDeadline, 90)) : undefined;
+    case 'submission_date':
+      return ctx.submissionDeadline ? formatIsraelDate(ctx.submissionDeadline) : undefined;
+    case 'bid_serial':
+      return ctx.serial || undefined;
+    case 'request_brief':
+      return ctx.requestBrief?.trim() || undefined;
+    case 'option_total_months':
+      return (
+        optionTotalMonths(ctx.contractYears, values[OPTION_KEYS.count], values[OPTION_KEYS.months]) ?? undefined
+      );
     default:
       return undefined;
   }
@@ -157,10 +214,13 @@ function fillValue(fill: SystemFill, values: Values, ctx: FillContext, guarantee
   return formulaValue(fill.formula, values, ctx, guaranteeKey);
 }
 
+const isBlank = (v: unknown) => v === undefined || v === null || String(v).trim() === '';
+
 /**
  * The form values completed by the system: a blank guarantee amount takes its default, then every
  * system-filled field is computed (copies and formulas read the values above, so they run after the
- * defaults). A field whose inputs are missing stays absent — the document then shows the gap.
+ * defaults). A fixed value never replaces an answer already there (e.g. the requester's). A field whose
+ * inputs are missing stays absent.
  */
 export function resolveSystemFills(params: readonly TemplateParam[], input: Values, ctx: FillContext): Values {
   const out: Values = { ...input };
@@ -170,57 +230,39 @@ export function resolveSystemFills(params: readonly TemplateParam[], input: Valu
       if (d !== null) out[p.key] = d;
     }
   }
-  // The amount in words follows the guarantee field the manager is asked for.
-  const guaranteeKey = params.find((p) => isGuaranteeAmountParam(p) && !p.fill)?.key ?? SERVICE_KEYS.guaranteeAmount;
-  for (const p of params) {
-    if (!p.fill) continue;
-    const v = fillValue(p.fill, out, ctx, guaranteeKey);
-    if (v !== undefined && String(v) !== '') out[p.key] = v;
+  // The amount in words follows the (first) bid-guarantee field.
+  const guaranteeKey =
+    params.find((p) => isGuaranteeAmountParam(p) && !p.fill)?.key ??
+    params.find(isGuaranteeAmountParam)?.key ??
+    SERVICE_KEYS.guaranteeAmount;
+  // Two passes: copies may read values another rule computes later in the template's order.
+  for (let pass = 0; pass < 2; pass++) {
+    for (const p of params) {
+      if (!p.fill) continue;
+      if (p.fill.kind === 'fixed' && !isBlank(out[p.key]) && out[p.key] !== p.fill.value) continue;
+      const v = fillValue(p.fill, out, ctx, guaranteeKey);
+      if (v !== undefined && String(v) !== '') out[p.key] = v;
+    }
   }
   return out;
 }
 
 // ---- built-in rules, by field key and Hebrew label ----
 // Fields typed into a Google Doc by hand carry no fill metadata, and a re-sync can't add it. These
-// rules recognise them by name, the way the bid-number and deadline fields are recognised, so they
-// survive any re-sync. Explicit metadata on a field always wins.
-
-const GUARANTEE_AMOUNT_KEYS = new Set(['guarantee_amount', 'bid_guarantee_amount', 'סכום ערבות להצעה']);
-const GUARANTEE_WORDS_KEYS = new Set(['guarantee_amount_words', 'bid_guarantee_amount_words']);
-const MANAGER_EMAIL_KEYS = new Set([
-  'manager_email',
-  'tender_manager_email',
-  'bid_lead_email',
-  'email', // labelled "דוא\"ל מנהל המכרז" (fieldLabels.ts)
-  'כתובת מייל של מנהל המכרז',
-  'דוא"ל מנהל המכרז',
-]);
-
-// Keys case-insensitively ({{BID_LEAD_EMAIL}}), labels exactly.
-const named = (p: { key: string; labelHe?: string }, names: ReadonlySet<string>) =>
-  names.has(p.key.trim().toLowerCase()) || (p.labelHe !== undefined && names.has(p.labelHe.trim()));
+// rules recognise them by name (the procurement spreadsheet, procurementForm.ts), the way the bid-number
+// and deadline fields are recognised, so they survive any re-sync. Explicit metadata always wins.
 
 /** The bid-guarantee amount (not the performance guarantee "סכום ערבות ביצוע", not its validity). */
 export const isGuaranteeAmountParam = (p: { key: string; labelHe?: string }): boolean =>
-  named(p, GUARANTEE_AMOUNT_KEYS);
+  ruleNamed(p, GUARANTEE_AMOUNT_NAMES);
 
-/**
- * The template's fields with the built-in rules attached (for creating and checking cases):
- *  - the tender manager's email ← the internal-user record of the manager creating the bid;
- *  - the first bid-guarantee field is asked, pre-filled with GUARANTEE_PCT of the annual estimate;
- *    any other bid-guarantee field copies it, so they can't disagree;
- *  - the guarantee in words follows the amount.
- */
+/** The template's fields with the procurement form's rules attached (for creating and checking cases). */
 export function withBuiltinFills(params: readonly TemplateParam[]): TemplateParam[] {
-  const primary = params.find((p) => isGuaranteeAmountParam(p) && !p.fill);
   return params.map((p) => {
     if (p.fill) return p;
-    if (named(p, MANAGER_EMAIL_KEYS)) return { ...p, fill: { kind: 'formula', formula: 'manager_email' } };
-    if (GUARANTEE_WORDS_KEYS.has(p.key)) return { ...p, fill: { kind: 'formula', formula: 'guarantee_words' } };
-    if (primary && isGuaranteeAmountParam(p)) {
-      if (p.key !== primary.key) return { ...p, fill: { kind: 'copy', from: primary.key } };
-      return { ...p, type: 'number', defaultFrom: p.defaultFrom ?? 'guarantee_pct' };
-    }
-    return p;
+    const rule = procurementRuleFor(p, params);
+    if (!rule) return p;
+    if (rule.hide) return { ...p, hidden: true };
+    return rule.fill ? { ...p, fill: rule.fill } : p;
   });
 }

@@ -790,10 +790,21 @@ async function main() {
   const autoTender = (await getDoc(doc(db, 'tenders', autoCase.data.id))).data()!;
   assert.equal(autoTender.params.tender_title, 'שירותי ניקיון', "title = the requester's service name");
   assert.equal(autoTender.params['כתובת מייל של מנהל המכרז'], 'manager@obms.test', "the creating manager's email");
-  assert.equal(autoTender.params['סכום ערבות להצעה'], 20_000, 'guarantee = 2% of the annual estimate');
-  assert.equal(autoTender.params.bid_guarantee_amount, 20_000, 'both guarantee fields agree');
+  assert.equal(autoTender.params['סכום ערבות להצעה'], '20,000', 'guarantee = 2% of the annual estimate');
+  assert.equal(autoTender.params.bid_guarantee_amount, '20,000', 'both guarantee fields agree');
   assert.equal(autoTender.params.bid_guarantee_amount_words, 'עשרים אלף שקלים');
-  assert.equal(autoTender.params['תוקף אחריות'], undefined, 'תוקף אחריות is not asked in step 2');
+  assert.equal(autoTender.params['תוקף אחריות'], '__________', 'not asked in step 2: a blank line to complete in the document');
+  const autoCheck = (await call('runSupervision')({ tenderId: autoCase.data.id })) as {
+    data: { findings: { severity: string; message: string }[] };
+  };
+  assert.ok(
+    autoCheck.data.findings.some((f) => f.severity === 'warn' && /יושלמו ידנית/.test(f.message)),
+    'the inspector lists the blank lines as a warning',
+  );
+  assert.ok(
+    !autoCheck.data.findings.some((f) => f.severity === 'block' && /תוקף אחריות/.test(f.message)),
+    'a blank line does not block the document',
+  );
   assert.equal(autoTender.params.annual_budget, undefined, 'the annual estimate itself is never published');
   console.log('✓ step 2 auto-fill: title, manager email, 2% guarantee (+ words); תוקף אחריות not asked');
   // A request converts to exactly one tender.
