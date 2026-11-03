@@ -501,7 +501,19 @@ async function main() {
     (d) => d.data().email === 'legal2@obms.test',
   );
   assert.ok(!gone, 'internal user removed');
-  console.log('✓ internal user created (role claim) + deleted');
+  // A bid manager must be defined with a phone (it fills BID_MANAGER_PHONE in documents).
+  let noPhone = false;
+  try {
+    await call('createInternalUser')({ name: 'מנהל חדש', email: 'mgr2@obms.test', role: 'tender_manager' });
+  } catch (e) {
+    noPhone = /טלפון/.test((e as Error).message);
+  }
+  assert.ok(noPhone, 'a bid manager without a phone is refused');
+  await call('createInternalUser')({ name: 'מנהל חדש', email: 'mgr2@obms.test', role: 'tender_manager', phone: '050-7654321' });
+  const mgr2 = (await getDocs(collection(db, 'users'))).docs.find((d) => d.data().email === 'mgr2@obms.test')!;
+  assert.equal(mgr2.data().phone, '050-7654321', 'the phone is stored on the user');
+  await call('deleteInternalUser')({ uid: mgr2.id });
+  console.log('✓ internal user created (role claim) + deleted; a bid manager needs a phone');
 
   // ---- audit entries reference the related bid (manager-only reads) ----
   await signOut(auth);
@@ -766,7 +778,7 @@ async function main() {
   // Step 2 fills the hand-typed service fields itself: the title from the requester's service name,
   // the manager's email from their user record, the bid guarantee as 2% of the annual estimate (both
   // guarantee fields + words); "תוקף אחריות" is not asked.
-  const typedFields = ['tender_title', 'כתובת מייל של מנהל המכרז', 'סכום ערבות להצעה', 'bid_guarantee_amount', 'bid_guarantee_amount_words', 'תוקף אחריות'];
+  const typedFields = ['tender_title', 'כתובת מייל של מנהל המכרז', 'סכום ערבות להצעה', 'bid_guarantee_amount', 'bid_guarantee_amount_words', 'תוקף אחריות', 'BID_MANAGER_PHONE', 'SECURITY_APPENDIX'];
   await adminDb.collection('templates').doc('service').set(
     {
       bodyTemplate: svc.bodyTemplate + '\n' + typedFields.map((k) => `{{${k}}}`).join('\n'),
@@ -805,7 +817,15 @@ async function main() {
     !autoCheck.data.findings.some((f) => f.severity === 'block' && /תוקף אחריות/.test(f.message)),
     'a blank line does not block the document',
   );
+  assert.ok(
+    !autoCheck.data.findings.some((f) => f.severity === 'block' && /SECURITY_APPENDIX|BID_MANAGER_PHONE/.test(JSON.stringify(f))),
+    'neither tag blocks',
+  );
+  // (the rendering of both tags is unit-tested: the e2e service template has no legal sections, so its
+  // draft can't open the document gate here)
   assert.equal(autoTender.params.annual_budget, undefined, 'the annual estimate itself is never published');
+  assert.equal(autoTender.params.BID_MANAGER_PHONE, '050-0000001', "the bid manager's phone, from the user record");
+  assert.equal(autoTender.params.SECURITY_APPENDIX, '', 'SECURITY_APPENDIX prints nothing');
   console.log('✓ step 2 auto-fill: title, manager email, 2% guarantee (+ words); תוקף אחריות not asked');
   // A request converts to exactly one tender.
   const reqId = await newRequest('בקשה להמרה');

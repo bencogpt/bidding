@@ -387,6 +387,17 @@ export const createInternalUserInput = z.object({
     .email()
     .optional()
     .or(z.literal('').transform(() => undefined)),
+  // The bid manager's phone is printed in documents (BID_MANAGER_PHONE): required for that role.
+  phone: z
+    .string()
+    .trim()
+    .regex(/^[0-9+\-() ]{7,20}$/, 'מספר טלפון לא תקין')
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+}).superRefine((u, ctx) => {
+  if (u.role === 'tender_manager' && !u.phone) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['phone'], message: 'יש להזין מספר טלפון למנהל מכרז.' });
+  }
 });
 export type CreateInternalUserInput = z.infer<typeof createInternalUserInput>;
 

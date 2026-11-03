@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { briefWithDetails, hasDocument, researchDraftInput, type ResearchSource } from '@obms/shared';
 import { documentGate, draftDataHash } from '../services/draftCalc.js';
+import { fillTemplate } from '../services/docsService.js';
 import { collectSources, groundResearch, unsafeQueryReason } from '../services/requestResearch.js';
 
 const base = { previewText: 'מכרז טובין · כמות: 10', submissionDeadline: 1, awardDate: null, evaluationCriteria: [], internalParams: {} };
@@ -116,4 +117,12 @@ test('draft research: no budget reaches the brief, and no bid number yet does no
   assert.doesNotMatch(brief, /אומדן|תקציב/);
   assert.equal(unsafeQueryReason('שירותי ניקיון משרדים מפרט', [], ''), null, 'empty bid number matches nothing');
   assert.ok(unsafeQueryReason('בל"מ 2026-31 ניקיון', [], '2026-31'));
+});
+
+test('rendering: a removed tag prints nothing; a filled field prints its value; an unfilled one stays', () => {
+  const body = 'נספח: {{SECURITY_APPENDIX}}| טלפון: {{BID_MANAGER_PHONE}} | {{other}}';
+  assert.equal(
+    fillTemplate(body, { SECURITY_APPENDIX: '', BID_MANAGER_PHONE: '050-0000001' }),
+    'נספח: | טלפון: 050-0000001 | {{other}}',
+  );
 });

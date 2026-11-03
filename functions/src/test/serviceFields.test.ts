@@ -283,3 +283,21 @@ test('Israeli working days: weekends and holidays move the date forward', async 
   // 90 days after 14/6/2026 is Sat 12/9 (Rosh Hashana), then Sun 13/9 (its second day) → Mon 14/9.
   assert.equal(new Date(addDaysToWorkingDay(at('2026-06-14').getTime(), 90)).toISOString().slice(0, 10), '2026-09-14');
 });
+
+test('bid manager phone and removed tags', async () => {
+  const { withBuiltinFills, askedParams, createInternalUserInput } = await import('@obms/shared');
+  const params: TemplateParam[] = [
+    { key: 'BID_MANAGER_PHONE', labelHe: 'BID_MANAGER_PHONE', type: 'text', required: true },
+    { key: 'SECURITY_APPENDIX', labelHe: 'SECURITY_APPENDIX', type: 'text', required: true },
+  ];
+  const all = withBuiltinFills(params);
+  assert.deepEqual(askedParams(all), [], 'neither is asked in step 2');
+  const out = resolveSystemFills(all, {}, { ...ctx, manager: { ...ctx.manager, phone: '050-0000001' } });
+  assert.equal(out.BID_MANAGER_PHONE, '050-0000001');
+  assert.equal(out.SECURITY_APPENDIX, undefined);
+  const base = { name: 'מנהל', email: 'm@x.test' };
+  assert.equal(createInternalUserInput.safeParse({ ...base, role: 'tender_manager' }).success, false, 'a bid manager needs a phone');
+  assert.equal(createInternalUserInput.safeParse({ ...base, role: 'tender_manager', phone: '050-1234567' }).success, true);
+  assert.equal(createInternalUserInput.safeParse({ ...base, role: 'legal' }).success, true, 'other roles may omit it');
+  assert.equal(createInternalUserInput.safeParse({ ...base, role: 'legal', phone: 'abc' }).success, false);
+});

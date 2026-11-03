@@ -54,11 +54,11 @@ async function ensureUser(
   return uid;
 }
 
-console.log('Seeding internal users…');
-await ensureUser('manager@obms.test', 'password', 'דנה מנהלת', 'tender_manager');
-await ensureUser('legal@obms.test', 'password', 'עו״ד פריה', 'legal');
-await ensureUser('finance@obms.test', 'password', 'סבן כספים', 'finance');
-await ensureUser('security@obms.test', 'password', 'לנה ביטחון', 'security');
+console.log('Seeding internal users…'); // dummy phones (a bid manager must have one)
+await ensureUser('manager@obms.test', 'password', 'דנה מנהלת', 'tender_manager', undefined, '050-0000001');
+await ensureUser('legal@obms.test', 'password', 'עו״ד פריה', 'legal', undefined, '050-0000002');
+await ensureUser('finance@obms.test', 'password', 'סבן כספים', 'finance', undefined, '050-0000003');
+await ensureUser('security@obms.test', 'password', 'לנה ביטחון', 'security', undefined, '050-0000004');
 await ensureUser('requester@obms.test', 'password', 'מרקוס מזמין', 'requester', undefined, '03-5550123');
 
 console.log('Seeding suppliers + supplier accounts…');

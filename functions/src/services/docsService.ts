@@ -11,7 +11,7 @@
 import { google } from 'googleapis';
 import { storage } from '../lib/admin.js';
 import type { TenderDoc, TemplateDoc, UserDoc } from '@obms/shared';
-import { TENDER_TYPE_LABELS_HE } from '@obms/shared';
+import { TENDER_TYPE_LABELS_HE, isOmittedParam } from '@obms/shared';
 import { htmlToText } from './supervisorChecks.js';
 import { docPlainText } from './docText.js';
 import { bodyToHtml, rtlifyExportedHtml } from './docHtml.js';
@@ -62,8 +62,9 @@ export function placeholderSpellings(key: string): string[] {
 
 // Unfilled placeholders stay visible as {{key}} (matching real Docs mode) so the supervisor and
 // the manager see the gap — never silently papered over.
-function fillTemplate(body: string, params: Record<string, string | number>): string {
+export function fillTemplate(body: string, params: Record<string, string | number>): string {
   return body.replace(/\{\{\s*([^}\n]+?)\s*\}\}/g, (m, key: string) => {
+    if (isOmittedParam({ key: key.trim() })) return ''; // tags removed from the system print nothing
     const v = params[key.trim()];
     return v !== undefined && String(v) !== '' ? String(v) : m;
   });
