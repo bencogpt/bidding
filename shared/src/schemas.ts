@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { TENDER_STATUSES } from './tender.js';
 import { SYSTEM_FORMULAS } from './templates.js';
 import type { SupervisionSummary, ValueSource, BidDraftRecord } from './supervision.js';
+import { requesterDetailsSchema } from './requesterFields.js';
 import { createTenderTeamFields, type CaseTeam, type TeamRole } from './team.js';
 
 // Inline string-literal tuples so z.enum infers a literal union (passing values from a
@@ -238,6 +239,7 @@ export const bidRequestDocSchema = z.object({
   year: z.number(),
   n: z.number(),
   brief: z.string(),
+  details: requesterDetailsSchema.optional(), // the requester's phase 1 answers (older requests have none)
   requesterUid: z.string(),
   requesterName: z.string(),
   status: z.enum(['open', 'converted']),
@@ -250,6 +252,7 @@ export type BidRequestDoc = z.infer<typeof bidRequestDocSchema>;
 
 export const createBidRequestInput = z.object({
   brief: z.string().trim().min(3).max(BRIEF_MAX_LENGTH),
+  details: requesterDetailsSchema.optional(), // the requester's answers to the phase 1 questions
   requestId: z.string().min(8).max(100).optional(), // one per form: a retried submit returns the same request
 });
 export type CreateBidRequestInput = z.infer<typeof createBidRequestInput>;
@@ -257,6 +260,7 @@ export type CreateBidRequestInput = z.infer<typeof createBidRequestInput>;
 export const draftBidInput = z.object({
   type: tenderTypeSchema,
   brief: z.string().min(3).max(BRIEF_MAX_LENGTH),
+  bidRequestId: z.string().regex(/^\d{4}-\d{1,3}$/).optional(), // its requester answers are added to the brief
 });
 export type DraftBidInput = z.infer<typeof draftBidInput>;
 
