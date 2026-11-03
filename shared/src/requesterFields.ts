@@ -20,15 +20,6 @@ export const REQUESTER_TEXTAREA_MAX = 1000;
 export const REQUESTER_FIELDS: readonly RequesterField[] = [
   { key: 'service_name', labelHe: 'שם השירות', type: 'text', required: true },
   { key: 'document_classification', labelHe: 'סיווג המסמך', type: 'text', required: true, default: 'בלמ"ס' },
-  { key: 'service_location', labelHe: 'מקום אספקת השירות', type: 'text' },
-  { key: 'provider_responsibilities', labelHe: 'תחומי אחריות נותני השירות', type: 'textarea' },
-  { key: 'team_lead_role', labelHe: 'תפקיד ראש הצוות', type: 'textarea' },
-  { key: 'service_providers_total', labelHe: 'כמות נותני השירות', type: 'number' },
-  { key: 'supplier_equipment', labelHe: 'ציוד שהספק מספק לנותני השירות', type: 'textarea' },
-  { key: 'work_days', labelHe: "מס' ימי עבודה", type: 'text', default: "ימים א' עד ה'" },
-  { key: 'work_hours', labelHe: "מס' שעות עבודה", type: 'text', default: 'משרה מלאה - 170 שעות' },
-  { key: 'excellence_bonus_month', labelHe: 'חודש תשלום מענק מצוינות', type: 'text' },
-  { key: 'excellence_criteria_place', labelHe: 'מקום פרסום אמות מידה למענק מצוינות', type: 'text' },
   {
     key: 'annual_budget',
     labelHe: 'מהו אומדן ההתקשרות השנתית או מהו גובה התקציב שהוקצה לשירות?',
@@ -129,9 +120,24 @@ export const isRequesterAnswered = (key: string): boolean => {
   return !!f && !f.internal && !f.keepOnProcurement;
 };
 
-// Fields procurement's form never asks, whatever the template calls them (matched by their Hebrew label too).
-const HIDDEN_LABELS_HE = new Set(['סוג האישור הרפואי הנדרש']);
+// Fields removed from procurement's form (the spreadsheet's "remove from the procurement form" column): matched by key and by Hebrew label.
+const HIDDEN_LABELS_HE = new Set([
+  'סוג האישור הרפואי הנדרש',
+  'מקום אספקת השירות',
+  'תחומי אחריות נותני השירות',
+  'תפקיד ראש הצוות',
+  'כמות נותני השירות',
+  'ציוד שהספק מספק לנותני השירות',
+  "מס' ימי עבודה",
+  "מס' שעות עבודה",
+  'חודש תשלום מענק מצוינות',
+  'מקום פרסום אמות מידה למענק מצוינות',
+]);
+const HIDDEN_KEYS = new Set([
+  'medical_approval_type',
+  ...['service_location', 'provider_responsibilities', 'team_lead_role', 'service_providers_total', 'supplier_equipment', 'work_days', 'work_hours', 'excellence_bonus_month', 'excellence_criteria_place'],
+]);
 
 /** Not asked on procurement's form: hidden by the template, answered by the requester, or removed by label. */
 export const isFormHidden = (p: { key: string; labelHe?: string; hidden?: boolean }): boolean =>
-  !!p.hidden || isRequesterAnswered(p.key) || (p.labelHe !== undefined && HIDDEN_LABELS_HE.has(p.labelHe));
+  !!p.hidden || isRequesterAnswered(p.key) || HIDDEN_KEYS.has(p.key) || (p.labelHe !== undefined && HIDDEN_LABELS_HE.has(p.labelHe));

@@ -74,3 +74,6 @@ requester (own) and by managers.
 - Required on the request screen: שם השירות, סיווג המסמך (default בלמ"ס), עיקרי השירות הנדרש (פרק ב') — this is the brief —,
   the budget question (סכום המסגרת המקסימלי) and מספר תקופות אופציה (a whole number, 0 allowed). All other answers stay optional.
 - שם השירות becomes the tender title. מספר תקופות אופציה stays on procurement's form, pre-filled; the other answers leave it.
+
+- Later the same day: the request screen keeps ONLY the brief (עיקרי השירות) and these four questions. The other nine questions are
+  removed from it; they stay out of procurement's form too (matched by key and Hebrew label) and are left for the AI follow-up questions.
