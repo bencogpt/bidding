@@ -778,7 +778,7 @@ async function main() {
   // Step 2 fills the hand-typed service fields itself: the title from the requester's service name,
   // the manager's email from their user record, the bid guarantee as 2% of the annual estimate (both
   // guarantee fields + words); "תוקף אחריות" is not asked.
-  const typedFields = ['tender_title', 'כתובת מייל של מנהל המכרז', 'סכום ערבות להצעה', 'bid_guarantee_amount', 'bid_guarantee_amount_words', 'תוקף אחריות', 'BID_MANAGER_PHONE', 'SECURITY_APPENDIX'];
+  const typedFields = ['tender_title', 'כתובת מייל של מנהל המכרז', 'סכום ערבות להצעה', 'bid_guarantee_amount', 'bid_guarantee_amount_words', 'תוקף אחריות', 'BID_MANAGER_PHONE', 'SECURITY_APPENDIX', 'service_field_summary'];
   await adminDb.collection('templates').doc('service').set(
     {
       // …and a supplier's XXXX left in the guarantee form: only {{}} are ours, so it doesn't block.
@@ -789,7 +789,7 @@ async function main() {
     { merge: true },
   );
   const autoReq = ((await call('createBidRequest')({
-    brief: 'שירותי ניקיון למבנה משרדים',
+    brief: 'שירותי ניקיון למבנה משרדים\n\nהבהרות מהדורש:\n- ניקיון יומי\n\nהמלצות שנבחרו:\n- הדרישות סותרות זו את זו ויש לאחדן.',
     details: { ...REQUEST_DETAILS, service_name: 'שירותי ניקיון', annual_budget: 1_000_000 },
   })) as { data: { serial: string } }).data.serial;
   const autoCase = (await call('createTender')({
@@ -822,6 +822,21 @@ async function main() {
     !autoCheck.data.findings.some((f) => f.severity === 'block' && /SECURITY_APPENDIX|BID_MANAGER_PHONE/.test(JSON.stringify(f))),
     'neither tag blocks',
   );
+  // The service description suppliers read is public: never the internal parts of the request.
+  const summaryKey = 'service_field_summary';
+  assert.equal(
+    autoTender.params[summaryKey],
+    'שירותי ניקיון למבנה משרדים\nניקיון יומי',
+    'the description + the clarification; no internal recommendations (emulator: no AI)',
+  );
+  // Only hard facts block now, so this draft (legal sections missing → warnings) can get its document,
+  // and a document not yet sent to review can be regenerated (back to draft-first; old doc kept).
+  await call('generateDocument')({ tenderId: autoCase.data.id });
+  await call('regenerateDocument')({ tenderId: autoCase.data.id });
+  const regen = (await getDoc(doc(db, 'tenders', autoCase.data.id))).data()!;
+  assert.equal(regen.documentStatus, 'none', 'back to a draft without a document');
+  assert.equal(regen.replacedDocuments?.length, 1, 'the old document is kept and listed');
+  console.log('✓ public service description; only hard facts block; document regenerated');
   // (the rendering of both tags is unit-tested: the e2e service template has no legal sections, so its
   // draft can't open the document gate here)
   assert.equal(autoTender.params.annual_budget, undefined, 'the annual estimate itself is never published');

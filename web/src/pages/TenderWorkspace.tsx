@@ -236,7 +236,32 @@ export default function TenderWorkspace() {
       {tab === 'document' && (
         <div>
           {hasDocument(tender) ? (
-            <DocumentViewer tenderId={tender.id} googleDocId={tender.googleDocId} />
+            <div className="space-y-3">
+              {isManager && tender.status === 'draft' && (
+                <div className="card flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
+                  <span className="text-tx-soft">{t('draft.regenerateHint')}</span>
+                  <button
+                    className="btn btn-sm"
+                    disabled={busy}
+                    onClick={async () => {
+                      if (!confirm(t('draft.regenerateConfirm'))) return;
+                      setBusy(true);
+                      setError('');
+                      try {
+                        await api.regenerateDocument({ tenderId: tender.id });
+                      } catch (e) {
+                        setError(e instanceof Error ? e.message : String(e));
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                  >
+                    {t('draft.regenerate')}
+                  </button>
+                </div>
+              )}
+              <DocumentViewer tenderId={tender.id} googleDocId={tender.googleDocId} />
+            </div>
           ) : (
             <DraftPanel
               tender={tender}

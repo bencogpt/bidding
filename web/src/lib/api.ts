@@ -115,6 +115,7 @@ export const api = {
     'updateTenderDraft',
   ),
   generateDocument: call<GenerateDocumentInput, { ok: true }>('generateDocument'),
+  regenerateDocument: call<GenerateDocumentInput, { ok: true; draftDataHash: string }>('regenerateDocument'),
   researchDraftRequest: call<ResearchDraftInput, ResearchDraftResult>('researchDraftRequest'),
   rerunRequestResearch: call<RerunRequestResearchInput, { status: ResearchStatus; runId: string }>(
     'rerunRequestResearch',
