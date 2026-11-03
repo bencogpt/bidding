@@ -1,4 +1,4 @@
-// Unit tests for the phase 1 requester fields (no network):  node --test functions/lib/test/requesterFields.test.js
+// Unit tests for the request screen's answers (no network):  node --test functions/lib/test/requesterFields.test.js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -16,12 +16,12 @@ import {
   isFormHidden,
 } from '@obms/shared';
 
-const REQ = { service_name: 'שירותי תמיכה', document_classification: 'בלמ"ס', annual_budget: 900000, option_periods: 2 };
+const REQ = { service_name: 'שירותי תמיכה', document_classification: 'בלמ"ס', annual_budget: 900000, contract_years: 3 };
 
-test('the request screen asks exactly four questions besides the brief, all required, only the budget internal', () => {
+test('the request screen asks four questions besides the brief, all required, only the budget internal', () => {
   assert.deepEqual(
     REQUESTER_FIELDS.map((f) => f.labelHe),
-    ['שם השירות', 'סיווג המסמך', 'מהו אומדן ההתקשרות השנתית או מהו גובה התקציב שהוקצה לשירות?', 'מספר תקופות אופציה'],
+    ['שם השירות', 'סיווג המסמך', 'מהו אומדן ההתקשרות השנתית או מהו גובה התקציב שהוקצה לשירות?', 'משך תקופת התקשרות בשנים'],
   );
   assert.ok(REQUESTER_FIELDS.every((f) => f.required));
   assert.deepEqual(REQUESTER_FIELDS.filter((f) => f.internal).map((f) => f.key), ['annual_budget']);
@@ -29,10 +29,12 @@ test('the request screen asks exactly four questions besides the brief, all requ
   assert.deepEqual(defaults, { document_classification: 'בלמ"ס' });
 });
 
-test('details schema accepts the answers and an empty stored object', () => {
+test('details schema accepts the answers, an empty stored object and a legacy option_periods; the input schema does not', () => {
   assert.ok(requesterDetailsSchema.safeParse({}).success);
   assert.ok(requesterDetailsSchema.safeParse(REQ).success);
+  assert.ok(requesterDetailsSchema.safeParse({ option_periods: 2 }).success, 'stored earlier requests still parse');
   assert.ok(requesterDetailsInputSchema.safeParse(REQ).success);
+  assert.equal(requesterDetailsInputSchema.safeParse({ ...REQ, option_periods: 2 }).success, false);
 });
 
 test('details schema rejects unknown keys, bad numbers, empty and over-long text, and {{placeholders}}', () => {
@@ -43,22 +45,23 @@ test('details schema rejects unknown keys, bad numbers, empty and over-long text
   bad({ annual_budget: 0 });
   bad({ annual_budget: '5' });
   bad({ annual_budget: Number.NaN });
-  bad({ option_periods: 1.5 });
-  bad({ option_periods: -1 });
+  bad({ contract_years: 0 });
+  bad({ contract_years: 1.5 });
+  bad({ contract_years: 31 });
   bad({ service_name: '' });
   bad({ service_name: 'x'.repeat(201) });
   bad({ service_name: 'שירות {{MAP_TARGET}}' });
 });
 
-test('every required answer must be there to open a request; zero option periods is an answer', () => {
-  assert.ok(requesterDetailsInputSchema.safeParse({ ...REQ, option_periods: 0 }).success);
+test('every required answer must be there to open a request', () => {
+  assert.ok(requesterDetailsInputSchema.safeParse(REQ).success);
   for (const k of Object.keys(REQ)) {
     const { [k]: _omit, ...rest } = REQ as Record<string, string | number>;
     assert.equal(requesterDetailsInputSchema.safeParse(rest).success, false, `${k} is required`);
   }
 });
 
-test('createBidRequestInput and draftBidInput take the answers and the request id', () => {
+test('createBidRequestInput needs the answers; draftBidInput takes the request id', () => {
   assert.ok(createBidRequestInput.safeParse({ brief: 'שירותי תמיכה', details: REQ }).success);
   assert.equal(createBidRequestInput.safeParse({ brief: 'שירותי תמיכה' }).success, false);
   assert.equal(createBidRequestInput.safeParse({ brief: 'שירותי תמיכה', details: { ...REQ, nope: 'x' } }).success, false);
@@ -80,7 +83,7 @@ test('publicDetails drops the budget, unknown keys and blanks; tolerates a reque
 test('briefWithDetails appends labelled answers in table order and never the budget', () => {
   const out = briefWithDetails('שירותי תמיכה', REQ);
   assert.ok(out.startsWith('שירותי תמיכה\n\nפרטים מהדורש:\n'));
-  assert.ok(out.indexOf('שם השירות: שירותי תמיכה') < out.indexOf('מספר תקופות אופציה: 2'));
+  assert.ok(out.indexOf('שם השירות: שירותי תמיכה') < out.indexOf('משך תקופת התקשרות בשנים: 3'));
   assert.ok(!out.includes('900000'));
   assert.ok(!out.includes('אומדן'));
 });
@@ -91,12 +94,21 @@ test('briefWithDetails leaves the brief alone when there is nothing to add', () 
 });
 
 test('fillFromRequestDetails fills blank fields, the manager wins, whitespace counts as blank', () => {
-  const params = [{ key: 'option_periods' }, { key: 'service_name' }, { key: 'document_classification' }, { key: 'annual_budget' }];
-  const out = fillFromRequestDetails(params, { option_periods: 7, service_name: '   ' }, REQ);
-  assert.equal(out.option_periods, 7); // the manager's value wins
+  const params = [{ key: 'service_name' }, { key: 'document_classification' }, { key: 'annual_budget' }];
+  const out = fillFromRequestDetails(params, { service_name: '   ' }, REQ);
   assert.equal(out.service_name, 'שירותי תמיכה'); // blank → filled
   assert.equal(out.document_classification, 'בלמ"ס'); // absent → filled
   assert.ok(!('annual_budget' in out)); // never, even if the template has such a field
+  assert.equal(fillFromRequestDetails(params, { service_name: 'שלי' }, REQ).service_name, 'שלי'); // the manager's value wins
+});
+
+test('fillFromRequestDetails turns the contract years into the initial period, only when the template has it and it is blank', () => {
+  const withPeriod = [{ key: 'initial_period_months' }];
+  assert.equal(fillFromRequestDetails(withPeriod, {}, REQ).initial_period_months, 36);
+  assert.equal(fillFromRequestDetails(withPeriod, { initial_period_months: 24 }, REQ).initial_period_months, 24);
+  assert.equal(fillFromRequestDetails(withPeriod, { initial_period_months: ' ' }, REQ).initial_period_months, 36);
+  assert.ok(!('initial_period_months' in fillFromRequestDetails([{ key: 'other' }], {}, REQ)));
+  assert.ok(!('initial_period_months' in fillFromRequestDetails(withPeriod, {}, { service_name: 'x' })), 'older request: nothing to derive');
 });
 
 test('fillFromRequestDetails ignores answers the template has no field for, and missing details', () => {
@@ -105,19 +117,19 @@ test('fillFromRequestDetails ignores answers the template has no field for, and 
 });
 
 test('normalizeDetailsInput trims, converts numbers, reports bad and missing answers', () => {
-  const r = normalizeDetailsInput({ service_name: '  חיפה ', document_classification: ' ', annual_budget: 'abc', option_periods: '0' });
-  assert.deepEqual(r.details, { service_name: 'חיפה', option_periods: 0 });
+  const r = normalizeDetailsInput({ service_name: '  חיפה ', document_classification: ' ', annual_budget: 'abc', contract_years: '3' });
+  assert.deepEqual(r.details, { service_name: 'חיפה', contract_years: 3 });
   assert.deepEqual(r.badNumbers, ['annual_budget']);
   assert.deepEqual(r.missing, ['document_classification']);
-  assert.deepEqual(normalizeDetailsInput({ annual_budget: '-3' }).badNumbers, ['annual_budget']);
-  assert.deepEqual(normalizeDetailsInput({ annual_budget: '0' }).badNumbers, ['annual_budget']);
-  assert.deepEqual(normalizeDetailsInput({ option_periods: '1.5' }).badNumbers, ['option_periods']);
+  for (const bad of ['-3', '0']) assert.deepEqual(normalizeDetailsInput({ annual_budget: bad }).badNumbers, ['annual_budget']);
+  for (const bad of ['1.5', '0', '31', 'x']) assert.deepEqual(normalizeDetailsInput({ contract_years: bad }).badNumbers, ['contract_years'], bad);
 });
 
-test('procurement form: the requester answers leave it, option periods stays, removed fields never show', () => {
+test('procurement form: the requester answers leave it, removed fields never show, option periods is an ordinary field again', () => {
   assert.equal(isRequesterAnswered('service_name'), true);
-  assert.equal(isRequesterAnswered('option_periods'), false);
+  assert.equal(isRequesterAnswered('contract_years'), true);
   assert.equal(isRequesterAnswered('annual_budget'), false);
+  assert.equal(isRequesterAnswered('option_periods'), false);
   const params = [
     { key: 'service_name' },
     { key: 'option_periods', labelHe: 'מספר תקופות אופציה' },

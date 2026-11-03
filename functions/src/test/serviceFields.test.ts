@@ -162,7 +162,7 @@ test('a brief longer than BRIEF_MAX_LENGTH is rejected by createBidRequest and t
   const { createBidRequestInput, draftBidInput, BRIEF_MAX_LENGTH } = await import('@obms/shared');
   const ok = 'א'.repeat(BRIEF_MAX_LENGTH);
   const tooLong = ok + 'א';
-  const details = { service_name: 'שירות', document_classification: 'בלמ"ס', annual_budget: 1, option_periods: 0 };
+  const details = { service_name: 'שירות', document_classification: 'בלמ"ס', annual_budget: 1, contract_years: 1 };
   assert.equal(createBidRequestInput.safeParse({ brief: ok, details }).success, true);
   assert.equal(createBidRequestInput.safeParse({ brief: tooLong, details }).success, false);
   assert.equal(draftBidInput.safeParse({ type: 'service', brief: ok }).success, true);

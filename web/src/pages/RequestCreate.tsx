@@ -119,7 +119,7 @@ export default function RequestCreate() {
                       className="input"
                       type={f.type === 'number' ? 'number' : 'text'}
                       required={f.required}
-                      {...(f.type === 'number' ? { min: 0, step: f.allowZero ? 1 : 'any' } : { maxLength: REQUESTER_TEXT_MAX })}
+                      {...(f.type === 'number' ? { min: 0, step: f.wholeNumber ? 1 : 'any' } : { maxLength: REQUESTER_TEXT_MAX })}
                       value={details[f.key] ?? ''}
                       onChange={(e) => setDetails((d) => ({ ...d, [f.key]: e.target.value }))}
                     />

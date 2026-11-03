@@ -9,8 +9,8 @@ export interface RequesterField {
   default?: string; // pre-filled on the form, editable
   internal?: boolean; // confidential (G6): stays on the request, never reaches the AI draft or the tender
   required?: boolean; // must be answered to open the request
-  allowZero?: boolean; // a number field where 0 is a real answer (a whole number >= 0)
-  keepOnProcurement?: boolean; // procurement's form still asks it (pre-filled), unlike the other answers
+  wholeNumber?: boolean; // a number field that must be a whole number
+  max?: number; // upper bound of a whole-number field
 }
 
 export const REQUESTER_TEXT_MAX = 200;
@@ -27,7 +27,7 @@ export const REQUESTER_FIELDS: readonly RequesterField[] = [
     internal: true,
     required: true,
   },
-  { key: 'option_periods', labelHe: 'מספר תקופות אופציה', type: 'number', required: true, allowZero: true, keepOnProcurement: true },
+  { key: 'contract_years', labelHe: 'משך תקופת התקשרות בשנים', type: 'number', required: true, wholeNumber: true, max: 30 },
 ];
 
 export type RequesterDetails = Record<string, string | number>;
@@ -35,7 +35,9 @@ export type RequesterDetails = Record<string, string | number>;
 const byKey = new Map(REQUESTER_FIELDS.map((f) => [f.key, f]));
 
 function valueSchema(f: RequesterField) {
-  if (f.type === 'number') return f.allowZero ? z.number().int().min(0) : z.number().finite().positive();
+  if (f.type === 'number') {
+    return f.wholeNumber ? z.number().int().min(1).max(f.max ?? 1_000_000) : z.number().finite().positive();
+  }
   // A {{…}} would be pasted into the document as an unfilled placeholder.
   return z
     .string()
@@ -45,9 +47,12 @@ function valueSchema(f: RequesterField) {
     .refine((s) => !s.includes('{{'), 'placeholder text is not allowed');
 }
 
-/** The answers on a request: known keys only, every one optional. */
+/** The answers as stored on a request: known keys only, every one optional (earlier requests may hold `option_periods`). */
 export const requesterDetailsSchema = z
-  .object(Object.fromEntries(REQUESTER_FIELDS.map((f) => [f.key, valueSchema(f).optional()])))
+  .object({
+    ...Object.fromEntries(REQUESTER_FIELDS.map((f) => [f.key, valueSchema(f).optional()])),
+    option_periods: z.number().optional(), // legacy: an earlier screen asked it; no longer read
+  })
   .strict();
 
 /** The same answers when a request is opened: the required ones must be there (stored older requests may lack them). */
@@ -87,6 +92,16 @@ export function fillFromRequestDetails(
     const v = pub[p.key];
     if (v !== undefined && isBlank(out[p.key])) out[p.key] = v;
   }
+  // The contract length in years is procurement's initial period (in months) unless they typed one.
+  const years = Number(pub.contract_years);
+  if (
+    params.some((p) => p.key === 'initial_period_months') &&
+    isBlank(out.initial_period_months) &&
+    Number.isInteger(years) &&
+    years >= 1
+  ) {
+    out.initial_period_months = years * 12;
+  }
   return out;
 }
 
@@ -105,7 +120,10 @@ export function normalizeDetailsInput(
     }
     if (f.type === 'number') {
       const n = Number(s);
-      if (f.allowZero ? Number.isInteger(n) && n >= 0 : Number.isFinite(n) && n > 0) details[f.key] = n;
+      const ok = f.wholeNumber
+        ? Number.isInteger(n) && n >= 1 && n <= (f.max ?? 1_000_000)
+        : Number.isFinite(n) && n > 0;
+      if (ok) details[f.key] = n;
       else badNumbers.push(f.key);
     } else {
       details[f.key] = s;
@@ -117,7 +135,7 @@ export function normalizeDetailsInput(
 /** Fields the requester answers in phase 1 (all but the internal budget): procurement's form does not ask them again. */
 export const isRequesterAnswered = (key: string): boolean => {
   const f = byKey.get(key);
-  return !!f && !f.internal && !f.keepOnProcurement;
+  return !!f && !f.internal;
 };
 
 // Fields removed from procurement's form (the spreadsheet's "remove from the procurement form" column): matched by key and by Hebrew label.
