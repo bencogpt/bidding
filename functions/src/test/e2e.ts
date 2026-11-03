@@ -733,6 +733,40 @@ async function main() {
   assert.equal(retried.data.duplicate, true);
   const copies = await getDocs(query(collection(db, 'tenders'), where('title', '==', 'מכרז שירותי פיתוח')));
   assert.equal(copies.size, 1, 'no duplicate case was created');
+
+  // Step 2 fills the hand-typed service fields itself: the title from the requester's service name,
+  // the manager's email from their user record, the bid guarantee as 2% of the annual estimate (both
+  // guarantee fields + words); "תוקף אחריות" is not asked.
+  const typedFields = ['tender_title', 'כתובת מייל של מנהל המכרז', 'סכום ערבות להצעה', 'bid_guarantee_amount', 'bid_guarantee_amount_words', 'תוקף אחריות'];
+  await adminDb.collection('templates').doc('service').set(
+    {
+      bodyTemplate: svc.bodyTemplate + '\n' + typedFields.map((k) => `{{${k}}}`).join('\n'),
+      params: [...svc.params, ...typedFields.map((k) => ({ key: k, labelHe: k, type: 'text', required: true }))],
+      fieldsStatus: 'ready',
+    },
+    { merge: true },
+  );
+  const autoReq = ((await call('createBidRequest')({
+    brief: 'שירותי ניקיון למבנה משרדים',
+    details: { ...REQUEST_DETAILS, service_name: 'שירותי ניקיון', annual_budget: 1_000_000 },
+  })) as { data: { serial: string } }).data.serial;
+  const autoCase = (await call('createTender')({
+    title: '',
+    bidRequestId: autoReq,
+    type: 'service',
+    params: { service_subject: 'ניקיון' }, // nothing else typed: the rest is filled by the system
+    team: svcTeam,
+    submissionDeadline: Date.parse('2026-12-16T14:52:00Z'),
+  })) as { data: { id: string } };
+  const autoTender = (await getDoc(doc(db, 'tenders', autoCase.data.id))).data()!;
+  assert.equal(autoTender.params.tender_title, 'שירותי ניקיון', "title = the requester's service name");
+  assert.equal(autoTender.params['כתובת מייל של מנהל המכרז'], 'manager@obms.test', "the creating manager's email");
+  assert.equal(autoTender.params['סכום ערבות להצעה'], 20_000, 'guarantee = 2% of the annual estimate');
+  assert.equal(autoTender.params.bid_guarantee_amount, 20_000, 'both guarantee fields agree');
+  assert.equal(autoTender.params.bid_guarantee_amount_words, 'עשרים אלף שקלים');
+  assert.equal(autoTender.params['תוקף אחריות'], undefined, 'תוקף אחריות is not asked in step 2');
+  assert.equal(autoTender.params.annual_budget, undefined, 'the annual estimate itself is never published');
+  console.log('✓ step 2 auto-fill: title, manager email, 2% guarantee (+ words); תוקף אחריות not asked');
   // A request converts to exactly one tender.
   const reqId = await newRequest('בקשה להמרה');
   const input = { title: '', type: 'goods', params: { org: 'א', description: 'ב', quantity: 1, budget: 1 }, team: goodsTeam, bidRequestId: reqId };
