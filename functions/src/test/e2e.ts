@@ -40,8 +40,10 @@ connectFunctionsEmulator(fns, '127.0.0.1', 5001);
 const adminApp = initAdmin({ projectId: 'biding-system', storageBucket: 'biding-system.firebasestorage.app' }, 'e2e-admin');
 const call = (n: string) => httpsCallable(fns, n);
 const login = (email: string) => signInWithEmailAndPassword(auth, email, 'password');
+// The requester's mandatory phase-1 answers.
+const REQUEST_DETAILS = { service_name: 'שירות לבדיקה', document_classification: 'בלמ"ס', annual_budget: 100000, contract_years: 2 };
 const newRequest = async (brief = 'דרישה לבדיקה'): Promise<string> =>
-  ((await call('createBidRequest')({ brief })) as { data: { serial: string } }).data.serial;
+  ((await call('createBidRequest')({ brief, details: REQUEST_DETAILS })) as { data: { serial: string } }).data.serial;
 
 // Each given role signs off the tender in review, then the manager is signed back in.
 async function approveAs(tenderId: string, roles: string[]) {

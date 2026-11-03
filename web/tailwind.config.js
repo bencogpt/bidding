@@ -4,20 +4,26 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Ported from the prototype design system (assets/styles.css).
+        // Palette of the light theme in the UX prototype (blm-prototype): violet accent, violet-tinted
+        // neutrals, dark indigo chrome, and one green / amber / red for status.
         ink: {
-          900: '#0a0f1c',
-          850: '#0e1424',
-          800: '#121a2e',
-          700: '#1a2640',
+          900: '#1e1b3a',
+          850: '#25224a',
+          800: '#2c2958',
+          700: '#37336b',
         },
-        paper: { DEFAULT: '#f6f7fb', 2: '#eef1f7' },
-        surface: { DEFAULT: '#ffffff', 2: '#fbfcfe' },
-        gold: { DEFAULT: '#d8a23a', soft: '#f4e4c0', deep: '#a9781f' },
-        teal: { DEFAULT: '#0e8c8c', 600: '#0a6f70', soft: '#d4ecec' },
-        // Accent of the new UI (numbers, main action buttons).
+        paper: { DEFAULT: '#f6f6fa', 2: '#ebebf3' },
+        surface: { DEFAULT: '#ffffff', 2: '#fafafd' },
+        // Warm colour kept for warnings and the logo; actions are violet.
+        gold: { DEFAULT: '#d8a23a', soft: '#fdf3e1', deep: '#b9760f' },
+        // Links and focus rings follow the accent (the prototype has no teal).
+        teal: { DEFAULT: '#5b3fd1', 600: '#4a31b5', soft: '#efecfc' },
         accent: { DEFAULT: '#5b3fd1', hover: '#4a31b5', soft: '#efecfc' },
-         tx: { DEFAULT: '#131a2b', soft: '#475069', mute: '#8590a8' },
+        tx: { DEFAULT: '#1c1b33', soft: '#6c6b86', mute: '#8a89a3' },
+        // Status colours: done / waiting / problem (the shades the app uses).
+        green: { 50: '#e6f6ef', 100: '#e6f6ef', 500: '#1d9a6c', 600: '#1d9a6c', 700: '#177a55' },
+        amber: { 50: '#fdf3e1', 100: '#fdf3e1', 300: '#f0d29a', 400: '#d9a443', 500: '#d99a2b', 700: '#b9760f', 800: '#8f5a0a' },
+        red: { 50: '#faeceb', 100: '#fbe9e8', 200: '#f1c6c4', 400: '#e07b7b', 500: '#d64545', 600: '#d64545', 700: '#b83535' },
       },
       fontFamily: {
         sans: ['Heebo', 'Assistant', 'Inter', 'system-ui', 'sans-serif'],

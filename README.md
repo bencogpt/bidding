@@ -128,7 +128,7 @@ tender manager ◄── dashboard "בקשות ממתינות" ◄────�
 2. Log in as `manager@obms.test` / `password`, open the request under **בקשות ממתינות**, pick a
    type, complete the form and create the case. The case carries the request's bid number.
 
-## Notes
+ןמ ## Notes
 
 - Static prototype: all data is mocked in `data.js`; state changes live in-memory
   for the session and reset on reload.

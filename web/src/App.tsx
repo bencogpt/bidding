@@ -4,10 +4,11 @@ import { useAuth } from './auth/AuthProvider';
 import { useTranslation } from 'react-i18next';
 import Login from './pages/Login';
 import Unauthorized from './pages/Unauthorized';
-import InternalUsers from './pages/InternalUsers';
+import Settings from './pages/Settings';
 import InternalLayout from './layouts/InternalLayout';
 import SupplierLayout from './layouts/SupplierLayout';
 import Dashboard from './pages/Dashboard';
+import MyDesk from './pages/MyDesk';
 import TenderCreate from './pages/TenderCreate';
 import RequestCreate from './pages/RequestCreate';
 import TenderWorkspace from './pages/TenderWorkspace';
@@ -46,7 +47,8 @@ export default function App() {
   return (
     <Routes>
       <Route element={<InternalLayout />}>
-        <Route path="/" element={<Dashboard />} />
+        <Route path="/" element={<MyDesk />} />
+        <Route path="/all" element={<Dashboard />} />
         <Route
           path="/requests/new"
           element={role === 'tender_manager' || role === 'requester' ? <RequestCreate /> : <Navigate to="/" replace />}
@@ -54,7 +56,8 @@ export default function App() {
         <Route path="/requests/:serial" element={managerOnly(<TenderCreate />)} />
         <Route path="/tenders/:id" element={<TenderWorkspace />} />
         <Route path="/templates" element={managerOnly(<Templates />)} />
-        <Route path="/users" element={managerOnly(<InternalUsers />)} />
+        <Route path="/settings" element={managerOnly(<Settings />)} />
+        <Route path="/users" element={<Navigate to="/settings" replace />} />
         <Route path="/suppliers" element={<Suppliers />} />
         <Route path="/reports" element={managerOnly(<Reports />)} />
         <Route path="/audit" element={managerOnly(<Audit />)} />

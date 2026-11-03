@@ -3,6 +3,7 @@
 import { HttpsError } from 'firebase-functions/v2/https';
 import { FieldValue } from 'firebase-admin/firestore';
 import { db, now } from './lib/admin.js';
+import { nextUsage, type UsageWindow } from './lib/rateWindow.js';
 import { isInternalRole, formatSerial } from '@obms/shared';
 import type { TeamRole, TeamApproval } from '@obms/shared';
 import type {
@@ -175,6 +176,20 @@ export const researchRepo = {
       .collection('research')
       .doc(r.runId)
       .set(JSON.parse(JSON.stringify(r)));
+  },
+};
+
+// ---- per-user call counter for the request agent (one document per user; the Admin SDK only) ----
+export const agentUsageRepo = {
+  /** Count one call; false (nothing counted) when the user is over the limit for the current window. */
+  async take(uid: string, limit: number, windowMs: number, nowMs: number): Promise<boolean> {
+    const ref = db.collection('agentUsage').doc(uid);
+    return db.runTransaction(async (tx) => {
+      const prev = (await tx.get(ref)).data() as UsageWindow | undefined;
+      const { allowed, next } = nextUsage(prev, nowMs, limit, windowMs);
+      if (allowed) tx.set(ref, next);
+      return allowed;
+    });
   },
 };
 
