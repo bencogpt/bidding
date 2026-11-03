@@ -319,6 +319,35 @@ async function main() {
   assert.equal((await getDocs(collection(db, 'bidRequests', researched, 'research'))).size, 2, 'rerun recorded');
   console.log('✓ request research: background trigger + rerun recorded');
 
+  // Research on the summary step (before sending) is linked to the request — not searched again.
+  const draftRun = (await call('researchDraftRequest')({ brief: 'שירותי ניקיון למשרדים', details: { service_name: 'ניקיון' } })) as {
+    data: { runId: string; status: string };
+  };
+  assert.equal(draftRun.data.status, 'skipped', 'no AI in the emulator');
+  const linked = ((await call('createBidRequest')({
+    brief: 'שירותי ניקיון למשרדים',
+    details: REQUEST_DETAILS,
+    researchRunId: draftRun.data.runId,
+  })) as { data: { serial: string } }).data.serial;
+  const linkedReq = (await getDoc(doc(db, 'bidRequests', linked))).data()!;
+  assert.equal(linkedReq.research?.runId, draftRun.data.runId, 'the summary-step run is on the request');
+  await new Promise((r) => setTimeout(r, 2000)); // give the trigger time to (not) run
+  const linkedRuns = await getDocs(collection(db, 'bidRequests', linked, 'research'));
+  assert.deepEqual(linkedRuns.docs.map((d) => d.id), [draftRun.data.runId], 'searched once, not again after sending');
+  // Someone else's run is not linked: that request is researched after sending as usual.
+  await signOut(auth);
+  await login('requester@obms.test');
+  const other = ((await call('createBidRequest')({
+    brief: 'שירותי ניקיון למשרדים',
+    details: REQUEST_DETAILS,
+    researchRunId: draftRun.data.runId,
+  })) as { data: { serial: string } }).data.serial;
+  await signOut(auth);
+  await login('manager@obms.test');
+  const otherReq = (await getDoc(doc(db, 'bidRequests', other))).data()!;
+  assert.notEqual(otherReq.research?.runId, draftRun.data.runId, "another user's run is not linked");
+  console.log('✓ summary-step web research linked to the request; no second search');
+
   // Internal users can no longer be granted ad hoc — only through the team.
   let adHocRefused = false;
   try {

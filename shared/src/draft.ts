@@ -8,6 +8,8 @@
 // Requirement research: when a request is opened, an agent searches the web — with generic queries
 // only, never the organisation's details — for similar procurements and suggests features.
 import { z } from 'zod';
+import { BRIEF_MAX_LENGTH } from './schemas.js';
+import { agentDetailsSchema } from './requestAgent.js';
 
 // 'generating': claimed by one generateDocument call, so a double click can't create two documents.
 export type DocumentStatus = 'none' | 'generating' | 'generated';
@@ -88,3 +90,25 @@ export interface ResearchSummary {
   at: number;
 }
 
+
+// ---- research before the request is sent (the requester's "סיכום ושליחה" step) ----
+
+/** The request as typed so far (never the budget: agentDetailsSchema has none). */
+export const researchDraftInput = z
+  .object({ brief: z.string().min(3).max(BRIEF_MAX_LENGTH), details: agentDetailsSchema })
+  .strict();
+export type ResearchDraftInput = z.infer<typeof researchDraftInput>;
+
+/** researchDrafts/{runId}: a run made before the request existed (serial ''); linked on send. */
+export interface ResearchDraft extends RequestResearch {
+  createdBy: string;
+}
+
+/** What the requester's screen shows. */
+export type ResearchDraftResult = Pick<
+  RequestResearch,
+  'runId' | 'status' | 'summary' | 'suggestedFeatures' | 'pitfalls' | 'questionsForRequester' | 'sources'
+>;
+
+/** A draft run older than this is not linked to the request (the search runs again after sending). */
+export const RESEARCH_DRAFT_MAX_AGE_MS = 24 * 3_600_000;
