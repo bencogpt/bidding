@@ -8,6 +8,7 @@ import InternalUsers from './pages/InternalUsers';
 import InternalLayout from './layouts/InternalLayout';
 import SupplierLayout from './layouts/SupplierLayout';
 import Dashboard from './pages/Dashboard';
+import MyDesk from './pages/MyDesk';
 import TenderCreate from './pages/TenderCreate';
 import RequestCreate from './pages/RequestCreate';
 import TenderWorkspace from './pages/TenderWorkspace';
@@ -46,7 +47,8 @@ export default function App() {
   return (
     <Routes>
       <Route element={<InternalLayout />}>
-        <Route path="/" element={<Dashboard />} />
+        <Route path="/" element={<MyDesk />} />
+        <Route path="/all" element={<Dashboard />} />
         <Route
           path="/requests/new"
           element={role === 'tender_manager' || role === 'requester' ? <RequestCreate /> : <Navigate to="/" replace />}
