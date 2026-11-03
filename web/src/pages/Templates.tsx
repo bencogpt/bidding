@@ -405,7 +405,6 @@ export default function Templates() {
 
   return (
     <div>
-      <h1 className="mb-2 font-display text-2xl font-bold">{t('templates.title')}</h1>
       <p className="mb-6 text-sm text-tx-soft">{t('templates.intro')}</p>
       <div className="grid gap-4 md:grid-cols-2">
         {Object.values(TENDER_TYPES).map((ty) => (

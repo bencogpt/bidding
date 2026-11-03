@@ -41,7 +41,7 @@ export default function Dashboard() {
         <TenderList
           tenders={tenders}
           scoreOf={scoreOf}
-          showScore={isManager}
+          showScore={false}
           defaultActiveOnly={isManager}
         />
       )}

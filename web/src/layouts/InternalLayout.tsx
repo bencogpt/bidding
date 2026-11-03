@@ -123,7 +123,6 @@ export default function InternalLayout() {
             <NavItem to="/" label={t('nav.myDesk')} badge={pendingFeedback.length} />
             <NavItem to="/all" label={t('nav.dashboard')} />
             {(isManager || role === 'requester') && <NavItem to="/requests/new" label={t('nav.newRequest')} />}
-            {isManager && <NavItem to="/templates" label={t('nav.templates')} />}
             <NavItem to="/suppliers" label={t('nav.suppliers')} />
             {isManager && <NavItem to="/reports" label={t('nav.reports')} />}
             {isManager && <NavItem to="/audit" label={t('nav.audit')} />}

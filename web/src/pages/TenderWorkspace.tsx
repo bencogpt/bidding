@@ -45,6 +45,7 @@ export default function TenderWorkspace() {
   const submissions = useSubmissions(id);
   const template = useTemplate(tender?.type);
   const [tab, setTab] = useState<Tab>('overview');
+  const [chatOpen, setChatOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   // Set when the supervisor blocked publication — offers the audited manager override.
@@ -115,11 +116,7 @@ export default function TenderWorkspace() {
   const showEval = ['responses', 'evaluated', 'awarded'].includes(tender.status);
   const tabs: { key: Tab; label: string }[] = [
     { key: 'overview', label: t('ws.overview') },
-    // The case team chat sits beside the document, so unread messages show on this tab.
-    {
-      key: 'document',
-      label: chat.unread ? `${t('ws.document')} (${chat.unread})` : t('ws.document'),
-    },
+    { key: 'document', label: t('ws.document') },
     { key: 'supervisor', label: t('ws.supervisor') },
     { key: 'access', label: t('ws.access') },
     { key: 'questions', label: t('ws.questions') },
@@ -237,7 +234,7 @@ export default function TenderWorkspace() {
         </div>
       )}
       {tab === 'document' && (
-        <div className="grid items-start gap-4 lg:grid-cols-[1fr_340px]">
+        <div>
           {hasDocument(tender) ? (
             <DocumentViewer tenderId={tender.id} googleDocId={tender.googleDocId} />
           ) : (
@@ -248,7 +245,6 @@ export default function TenderWorkspace() {
               onOpenInspector={() => setTab('supervisor')}
             />
           )}
-          <ChatPanel tenderId={tender.id} title={tender.title} messages={chat.messages} />
         </div>
       )}
       {tab === 'access' && (
@@ -291,6 +287,35 @@ export default function TenderWorkspace() {
         </div>
       )}
       {tab === 'supervisor' && <SupervisorPanel tender={tender} template={template} />}
+
+      {/* Case team chat: floats over every tab; the button shows the unread count while it is closed. */}
+      {chatOpen && (
+        <div className="fixed bottom-24 left-6 z-40 flex h-[min(560px,calc(100vh-8rem))] w-[400px] max-w-[calc(100vw-3rem)] flex-col overflow-hidden rounded-lg border border-paper-2 bg-surface shadow-lg">
+          <ChatPanel
+            tenderId={tender.id}
+            title={tender.title}
+            messages={chat.messages}
+            onClose={() => setChatOpen(false)}
+          />
+        </div>
+      )}
+      <button
+        className="fixed bottom-6 left-6 z-40 grid h-14 w-14 place-items-center rounded-full bg-accent text-white shadow-lg transition hover:bg-accent-hover"
+        onClick={() => setChatOpen((o) => !o)}
+        title={t('chat.open')}
+        aria-label={t('chat.open')}
+        aria-expanded={chatOpen}
+      >
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z" />
+          <path d="M8.5 12h.01M12 12h.01M15.5 12h.01" />
+        </svg>
+        {!chatOpen && chat.unread > 0 && (
+          <span className="absolute -right-1 -top-1 grid min-h-5 min-w-5 place-items-center rounded-full bg-gold px-1 text-xs font-bold text-ink-900">
+            {chat.unread}
+          </span>
+        )}
+      </button>
     </div>
   );
 }
