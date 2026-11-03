@@ -781,7 +781,8 @@ async function main() {
   const typedFields = ['tender_title', 'כתובת מייל של מנהל המכרז', 'סכום ערבות להצעה', 'bid_guarantee_amount', 'bid_guarantee_amount_words', 'תוקף אחריות', 'BID_MANAGER_PHONE', 'SECURITY_APPENDIX'];
   await adminDb.collection('templates').doc('service').set(
     {
-      bodyTemplate: svc.bodyTemplate + '\n' + typedFields.map((k) => `{{${k}}}`).join('\n'),
+      // …and a supplier's XXXX left in the guarantee form: only {{}} are ours, so it doesn't block.
+      bodyTemplate: svc.bodyTemplate + '\n' + typedFields.map((k) => `{{${k}}}`).join('\n') + '\nאשר תדרשו מאת : XXXXX (להלן: "החייב")',
       params: [...svc.params, ...typedFields.map((k) => ({ key: k, labelHe: k, type: 'text', required: true }))],
       fieldsStatus: 'ready',
     },

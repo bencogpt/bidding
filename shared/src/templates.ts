@@ -170,16 +170,19 @@ export function findFillSpots(text: string, supplierFillQuotes: readonly string[
 export type TemplateFieldsStatus = 'ready' | 'needs_conversion';
 
 /**
- * A template is usable for new cases only when it has real {{fields}} and no unresolved Word-style
- * fill-in spots. Recomputed from the text, so it can't drift from the document.
+ * A template is usable for new cases once it has real {{fields}} — the organisation's own bookmarks
+ * are always {{…}}. XXXX and ____ are where the SUPPLIER writes (bank details, signatures, the bidder's
+ * name), so they never block a template. Only a document with no {{field}} at all (a raw Word paste)
+ * needs conversion; its fill spots are then reported to guide it. Recomputed from the text, so it can't
+ * drift from the document.
  */
 export function templateFieldsStatus(
   bodyTemplate: string,
   supplierFillQuotes: readonly string[] = [],
 ): { status: TemplateFieldsStatus; unresolved: number; fields: number } {
   const fields = detectPlaceholders(bodyTemplate).length;
-  const unresolved = findFillSpots(bodyTemplate, supplierFillQuotes).length;
-  return { status: fields > 0 && unresolved === 0 ? 'ready' : 'needs_conversion', unresolved, fields };
+  if (fields > 0) return { status: 'ready', unresolved: 0, fields };
+  return { status: 'needs_conversion', unresolved: findFillSpots(bodyTemplate, supplierFillQuotes).length, fields };
 }
 
 /**
