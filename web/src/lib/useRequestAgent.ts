@@ -35,12 +35,16 @@ export function useRequestAgent() {
   const [limited, setLimited] = useState(false);
   const [error, setError] = useState('');
   const touched = useRef(new Set<keyof Fields>()); // fields the person typed: detection never overwrites them
+  const answered = useRef(new Set<keyof Fields>()); // classification the chat itself established: sent back so it is not asked again
   const fieldsRef = useRef(fields);
   fieldsRef.current = fields;
   const extractSeq = useRef(0); // a newer extraction supersedes an older one
   const chatSeq = useRef(0); // a newer chat turn supersedes an older one; extraction never cancels a chat turn
 
-  const applyDetails = useCallback((d: AssistRequestResult['details']) => {
+  const applyDetails = useCallback((d: AssistRequestResult['details'], fromChat = false) => {
+    if (fromChat && d.document_classification && !touched.current.has('document_classification')) {
+      answered.current.add('document_classification');
+    }
     setFields((f) => ({
       ...f,
       ...(d.service_name && !touched.current.has('service_name') ? { service_name: d.service_name } : {}),
@@ -66,7 +70,7 @@ export function useRequestAgent() {
         const r = await api.assistRequest({
           mode: 'extract',
           brief,
-          details: agentDetailsFromFields({ ...fieldsRef.current }, touched.current),
+          details: agentDetailsFromFields({ ...fieldsRef.current }, new Set([...touched.current, ...answered.current])),
           history: [],
           qualityAsked: 0,
         });
@@ -90,12 +94,12 @@ export function useRequestAgent() {
         const r = await api.assistRequest({
           mode: 'chat',
           brief: nextBrief,
-          details: agentDetailsFromFields({ ...fieldsRef.current }, touched.current),
+          details: agentDetailsFromFields({ ...fieldsRef.current }, new Set([...touched.current, ...answered.current])),
           history: history.slice(-20),
           qualityAsked: nextQuality,
         });
         if (mine !== chatSeq.current) return;
-        applyDetails(r.details);
+        applyDetails(r.details, true);
         setLimited(r.source === 'script');
         setAsking(r.asking);
         setChips(r.chips);
@@ -137,6 +141,7 @@ export function useRequestAgent() {
     extractSeq.current++;
     chatSeq.current++;
     touched.current.clear();
+    answered.current.clear();
     setBrief('');
     setFields(initialFields());
     setModeState('free');

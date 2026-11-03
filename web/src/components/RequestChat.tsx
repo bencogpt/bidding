@@ -19,7 +19,9 @@ export default function RequestChat({
   const { t } = useTranslation();
   const [text, setText] = useState('');
   const end = useRef<HTMLDivElement>(null);
-  useEffect(() => end.current?.scrollIntoView({ block: 'nearest' }), [chat, typing]);
+  useEffect(() => {
+    end.current?.scrollIntoView({ block: 'nearest' });
+  }, [chat, typing]);
   const send = (v: string) => {
     if (!v.trim() || typing || disabled) return;
     onSay(v);
