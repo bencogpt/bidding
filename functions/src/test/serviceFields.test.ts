@@ -211,7 +211,7 @@ const typed: TemplateParam[] = [
 test('procurement form: step 2 asks only what the spreadsheet leaves to procurement', async () => {
   const { withBuiltinFills, askedParams } = await import('@obms/shared');
   const asked = askedParams(withBuiltinFills(typed)).map((p) => p.key);
-  assert.deepEqual(asked, ['option_period_months', 'הוראות ביטחון']);
+  assert.deepEqual(asked, ['option_period_months'], 'הוראות ביטחון is not on the create form');
 });
 
 test('procurement form: calculated, fixed and context values', async () => {
@@ -288,12 +288,14 @@ test('bid manager phone and removed tags', async () => {
   const { withBuiltinFills, askedParams, createInternalUserInput } = await import('@obms/shared');
   const params: TemplateParam[] = [
     { key: 'BID_MANAGER_PHONE', labelHe: 'BID_MANAGER_PHONE', type: 'text', required: true },
+    { key: "מס' הטלפון של המזמין כפי שמוגדר", labelHe: "מס' הטלפון של המזמין כפי שמוגדר", type: 'text', required: true },
     { key: 'SECURITY_APPENDIX', labelHe: 'SECURITY_APPENDIX', type: 'text', required: true },
   ];
   const all = withBuiltinFills(params);
   assert.deepEqual(askedParams(all), [], 'neither is asked in step 2');
   const out = resolveSystemFills(all, {}, { ...ctx, manager: { ...ctx.manager, phone: '050-0000001' } });
   assert.equal(out.BID_MANAGER_PHONE, '050-0000001');
+  assert.equal(out["מס' הטלפון של המזמין כפי שמוגדר"], '050-0000001', "the bid manager's phone as defined in the system");
   assert.equal(out.SECURITY_APPENDIX, undefined);
   const base = { name: 'מנהל', email: 'm@x.test' };
   assert.equal(createInternalUserInput.safeParse({ ...base, role: 'tender_manager' }).success, false, 'a bid manager needs a phone');

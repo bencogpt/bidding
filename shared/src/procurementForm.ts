@@ -45,7 +45,7 @@ export const PROCUREMENT_RULES: readonly ProcurementRule[] = [
   // 1 — the tender manager's email (internal users)
   { match: names('email', 'bid_lead_email', 'manager_email', 'tender_manager_email', 'כתובת מייל של מנהל המכרז', 'דוא"ל מנהל המכרז'), fill: formula('manager_email') },
   // the bid manager's phone, from their user record (required when a bid manager is defined)
-  { match: names('bid_manager_phone', 'tender_manager_phone', 'manager_phone', 'טלפון מנהל המכרז'), fill: formula('manager_phone') },
+  { match: names('bid_manager_phone', 'tender_manager_phone', 'manager_phone', 'טלפון מנהל המכרז', "מס' הטלפון של המזמין כפי שמוגדר"), fill: formula('manager_phone') },
   // 2 — the bid number (generated); also its other spellings and the reference for questions (35)
   { match: names('מספר הבל"ם', 'מספר מכרז', 'clarifications_reference', 'מזהה הבל"ם לפנייה בשאלות'), fill: formula('bid_serial') },
   // 6 — bid guarantee: 2% of the annual estimate from ₪1M, floored to thousands; 42 — in words
@@ -165,6 +165,7 @@ export const PROCUREMENT_RULES: readonly ProcurementRule[] = [
       'service_providers_count_meal',
       'מספר נותני שירות (הצהרת חדר אוכל)',
       'תוקף אחריות',
+      'הוראות ביטחון', // not on the create form (completed in the document)
     ),
   },
 ];
