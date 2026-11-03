@@ -8,6 +8,8 @@ import {
   requiredRolesFor,
   templateFieldsStatus,
   hasPlaceholder,
+  publicDetails,
+  fillFromRequestDetails,
   isAutoSerialParam,
   askedParams,
   guaranteeDefault,
@@ -23,6 +25,7 @@ import {
 import { useBidRequest, useTemplate, useUsers } from '../lib/hooks';
 import { api } from '../lib/api';
 import TagsInput from '../components/TagsInput';
+import RequesterDetails from '../components/RequesterDetails';
 
 type Criterion = { name: string; weight: number };
 
@@ -116,13 +119,21 @@ export default function TenderCreate() {
     setDrafting(true);
     setError('');
     try {
-      const d = await api.draftBid({ type: forType, brief });
+      const d = await api.draftBid({ type: forType, brief, bidRequestId: serial });
       if (seq !== draftSeq.current) return; // a newer pick owns the form and the drafting flag
       setDraftId(d.draftId);
       setDraftFailed(d.status === 'FAILED');
       setDraftMissing(d.status === 'FAILED' ? [] : d.missing);
-      if (d.title) setTitle(d.title);
-      setParams(Object.fromEntries(Object.entries(d.params ?? {}).map(([k, v]) => [k, String(v)])));
+      const answers = publicDetails(request?.details);
+      // The service name the requester gave is the tender title.
+      const named = String(answers.service_name ?? '').trim();
+      if (named || d.title) setTitle(named || d.title);
+      // What the requester answered fills the fields the draft left empty (the same rule the server applies).
+      // The template in this closure may still be the previous type's (the pick and the draft run together), so the
+      // keys come from the draft and the answers instead; `initial_period_months` is the one derived from the years.
+      const keys = new Set([...Object.keys(d.params ?? {}), ...Object.keys(answers), 'initial_period_months']);
+      const filled = fillFromRequestDetails([...keys].map((key) => ({ key })), d.params ?? {}, request?.details);
+      setParams(Object.fromEntries(Object.entries(filled).map(([k, v]) => [k, String(v)])));
       setDomainTags(d.domainTags ?? []);
       setCriteria(d.evaluationCriteria ?? []);
       if (d.submissionDeadlineDays) setDeadline(toLocalInput(Date.now() + d.submissionDeadlineDays * 86400000));
@@ -311,6 +322,7 @@ export default function TenderCreate() {
         </div>
         <div className="whitespace-pre-wrap rounded bg-paper-2 p-3 text-sm">{request.brief}</div>
       </div>
+      <RequesterDetails details={request.details} />
 
       {notConverted && (
         <div className="card mb-5 border-amber-300 bg-amber-50 p-4 text-sm text-amber-800">

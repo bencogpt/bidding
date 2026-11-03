@@ -15,10 +15,11 @@ test('formatBidNumber rejects numbers outside 1..999', () => {
 });
 
 test('createBidRequestInput needs a real brief', () => {
-  assert.ok(createBidRequestInput.safeParse({ brief: 'שירותי אבטחה לאתר' }).success);
-  assert.equal(createBidRequestInput.safeParse({ brief: '   ' }).success, false);
-  assert.equal(createBidRequestInput.safeParse({ brief: 'ab' }).success, false);
-  assert.equal(createBidRequestInput.safeParse({ brief: 'x'.repeat(5001) }).success, false);
+  const details = { service_name: 'שירות', document_classification: 'בלמ"ס', annual_budget: 1, contract_years: 1 };
+  assert.ok(createBidRequestInput.safeParse({ brief: 'שירותי אבטחה לאתר', details }).success);
+  assert.equal(createBidRequestInput.safeParse({ brief: '   ', details }).success, false);
+  assert.equal(createBidRequestInput.safeParse({ brief: 'ab', details }).success, false);
+  assert.equal(createBidRequestInput.safeParse({ brief: 'x'.repeat(5001), details }).success, false);
 });
 
 test('createTenderInput requires a well-formed bidRequestId', () => {
