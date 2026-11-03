@@ -232,7 +232,7 @@ test('procurement form: calculated, fixed and context values', async () => {
   assert.equal(out['סכום ערבות להצעה'], '87,000', '2% floored to thousands (87,344 → 87,000)');
   assert.equal(out.bid_guarantee_amount, '87,000');
   assert.equal(out.bid_guarantee_amount_words, 'שמונים ושבעה אלף שקלים');
-  assert.equal(out['סכום ערבות ביצוע'], '218,360', '5% of the annual estimate');
+  assert.equal(out['סכום ערבות ביצוע'], '5', 'the Doc prints it as a rate: "בגובה 5% מגובה ערך הזכייה השנתי"');
   assert.equal(out.framework_max_amount, '4,367,200', 'the annual estimate, published as the framework amount');
   assert.equal(out['כתובת מייל של מנהל המכרז'], 'manager@obms.test');
   assert.equal(out.clarifications_email, 'manager@obms.test');
@@ -302,4 +302,34 @@ test('bid manager phone and removed tags', async () => {
   assert.equal(createInternalUserInput.safeParse({ ...base, role: 'tender_manager', phone: '050-1234567' }).success, true);
   assert.equal(createInternalUserInput.safeParse({ ...base, role: 'legal' }).success, true, 'other roles may omit it');
   assert.equal(createInternalUserInput.safeParse({ ...base, role: 'legal', phone: 'abc' }).success, false);
+});
+
+test('bid manager details come from the user record under any name; option months; team lead alias', async () => {
+  const { withBuiltinFills, askedParams, fillFromRequestDetails } = await import('@obms/shared');
+  const params: TemplateParam[] = [
+    { key: 'BID_MANAGER_NAME', labelHe: 'BID_MANAGER_NAME', type: 'text', required: true },
+    { key: 'tender_manager_email', labelHe: 'tender_manager_email', type: 'text', required: true },
+    { key: 'שם מנהל המכרז', labelHe: 'שם מנהל המכרז', type: 'text', required: true },
+    { key: 'טלפון נייד של מנהל הבל"מ', labelHe: 'טלפון נייד של מנהל הבל"מ', type: 'text', required: true },
+    { key: 'option_periods_count', labelHe: 'מספר תקופות אופציה', type: 'number', required: true },
+    { key: 'תפקיד ראש צוות', labelHe: 'תפקיד ראש צוות', type: 'text', required: true },
+  ];
+  const all = withBuiltinFills(params);
+  assert.deepEqual(askedParams(all), [], 'none of them is a text box in step 2');
+  const asked = fillFromRequestDetails(all, {}, { option_periods_count: 2, team_lead_role: 'ארכיטקט אבטחה' });
+  const out = resolveSystemFills(all, asked, { ...ctx, manager: { ...ctx.manager, phone: '050-0000002' }, optionPeriods: 2 });
+  assert.equal(out.BID_MANAGER_NAME, 'דנה מנהלת');
+  assert.equal(out.tender_manager_email, 'manager@obms.test');
+  assert.equal(out['שם מנהל המכרז'], 'דנה מנהלת');
+  assert.equal(out['טלפון נייד של מנהל הבל"מ'], '050-0000002');
+  assert.equal(out.option_periods_count, 24, '"ועד לסך מצטבר של 24 חודשים נוספים": 2 periods × 12 months');
+  assert.equal(out['תפקיד ראש צוות'], 'ארכיטקט אבטחה', "the requester's answer reaches the template's wording");
+});
+
+test('only hard facts block; everything else becomes a warning', async () => {
+  const { applySeverityPolicy, verdictOf } = await import('@obms/shared');
+  const f = (severity: 'block' | 'warn', source: 'rules' | 'ai', hard?: boolean) => ({ severity, source, hard });
+  const out = applySeverityPolicy([f('block', 'rules', true), f('block', 'rules'), f('block', 'ai'), f('block', 'ai', true), f('warn', 'rules')]);
+  assert.deepEqual(out.map((x) => x.severity), ['block', 'warn', 'warn', 'warn', 'warn']);
+  assert.equal(verdictOf(applySeverityPolicy([f('block', 'ai'), f('block', 'rules')])), 'WARN');
 });

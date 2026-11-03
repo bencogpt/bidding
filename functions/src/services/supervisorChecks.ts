@@ -111,6 +111,7 @@ export function checkTemplate(i: DeterministicInput): Finding[] {
     if (prov.templateType !== tender.type) {
       out.push({
         code: 'TEMPLATE_MISMATCH',
+        hard: true,
         severity: 'block',
         location: 'provenance.templateType',
         message: `המסמך נוצר מתבנית "${prov.templateType}" אך סוג המכרז הוא "${tender.type}".`,
@@ -119,6 +120,7 @@ export function checkTemplate(i: DeterministicInput): Finding[] {
     if (prov.draftType && prov.draftType !== tender.type) {
       out.push({
         code: 'TEMPLATE_MISMATCH',
+        hard: true,
         severity: 'block',
         location: 'provenance.draftType',
         message: `טיוטת ה-AI נבנתה לסוג "${prov.draftType}" ולא לסוג המכרז "${tender.type}".`,
@@ -168,6 +170,7 @@ export function checkTemplate(i: DeterministicInput): Finding[] {
         if (hits.length / distinctive.length >= 0.5 && hits.length / distinctive.length > ownScore) {
           out.push({
             code: 'TEMPLATE_MISMATCH',
+        hard: true,
             severity: 'block',
             location: 'document',
             message: `המסמך תואם את תבנית "${other.title}" (${other.type}) יותר מאשר את תבנית סוג המכרז.`,
@@ -192,12 +195,17 @@ function headingText(line: string): string {
 }
 
 // A heading is short and isn't a sentence; a body line that merely mentions "סודיות" is not the
-// section.
+// section. A numbered or lettered heading ("ח.", "ד.", "5.") may run longer and end with a period, as
+// the organisation's documents do ("ח. אופן בחירת ההצעה הזוכה ובחירה בכשיר שני.", "ד. מסמכים שיש לצרף
+// להצעה להוכחת עמידתו של המציע בתנאים המוקדמים:") — as long as the section's name opens it.
 function isHeadingFor(line: string, s: LegalSection): boolean {
   const h = headingText(line);
-  return (
-    h.length > 0 && h.length <= 60 && h.split(' ').length <= 5 && !/[.!?]$/.test(h) && s.pattern.test(h)
-  );
+  if (!h) return false;
+  if (h.length <= 60 && h.split(' ').length <= 5 && !/[.!?]$/.test(h) && s.pattern.test(h)) return true;
+  const outlined = /^\s*(?:#+|\d+(?:\.\d+)*\.?|[א-ת][.)])\s/.test(normalize(line));
+  const plain = h.replace(/\.$/, '');
+  const at = plain.search(s.pattern);
+  return outlined && plain.length <= 100 && plain.split(' ').length <= 14 && !/[!?]$/.test(plain) && at >= 0 && at <= 12;
 }
 
 const isAnyHeading = (line: string) =>
@@ -319,6 +327,7 @@ export function checkValues(i: DeterministicInput): Finding[] {
       if (!isBlank(value)) {
         out.push({
           code: 'CONFIDENTIAL_LEAK',
+          hard: true,
           severity: 'block',
           location: `params.${p.key}`,
           message: `"${p.labelHe}" הוא ערך חסוי (G6) אך נשמר בפרמטרים הגלויים לספקים.`,
@@ -343,6 +352,7 @@ export function checkValues(i: DeterministicInput): Finding[] {
         severity: 'block',
         location: `params.${p.key}`,
         message: `בשדה "${p.labelHe}" נותר מציין מקום שלא מולא.`,
+        hard: true,
         evidence: String(value),
       });
       continue;
@@ -414,6 +424,7 @@ export function checkValues(i: DeterministicInput): Finding[] {
       if (leaked) {
         out.push({
           code: 'CONFIDENTIAL_LEAK',
+          hard: true,
           severity: 'block',
           location: `document (${key})`,
           message: 'ערך חסוי (אומדן/תקציב) מופיע במסמך המיועד לספקים (G6).',
@@ -425,6 +436,7 @@ export function checkValues(i: DeterministicInput): Finding[] {
     if (kw) {
       out.push({
         code: 'CONFIDENTIAL_LEAK',
+          hard: true,
         severity: 'warn',
         location: 'document',
         message: 'המסמך מזכיר אומדן/תקציב — ודא שלא נחשף ערך או בסיס לחישובו (G6).',
@@ -440,6 +452,7 @@ export function checkValues(i: DeterministicInput): Finding[] {
         severity: 'block',
         location: 'document',
         message: 'נותר במסמך מציין מקום שלא מולא.',
+        hard: true,
         evidence: ph,
       });
     }
@@ -449,6 +462,7 @@ export function checkValues(i: DeterministicInput): Finding[] {
         severity: 'block',
         location: 'document',
         message: `ועוד ${leftovers.length - MAX_LISTED} מציינים שלא מולאו.`,
+        hard: true,
       });
     }
     if (/\bMISSING_INFO\b|\[FLAG\s*\|/.test(i.docText!)) {
@@ -457,6 +471,7 @@ export function checkValues(i: DeterministicInput): Finding[] {
         severity: 'block',
         location: 'document',
         message: 'במסמך נותרו דגלים פנימיים (MISSING_INFO / FLAG) שאסור לפרסם (G6).',
+        hard: true,
       });
     }
   }
@@ -507,6 +522,7 @@ export function runDeterministicChecks(i: DeterministicInput): SupervisionFindin
   if (i.docText === null) {
     findings.push({
       code: 'DOC_UNREADABLE',
+      hard: true,
       severity: 'block',
       location: 'document',
       message: 'לא ניתן היה לקרוא את מסמך המכרז לבדיקה.',

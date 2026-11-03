@@ -55,6 +55,7 @@ const LABEL_ALIASES: Record<string, string[]> = {
   service_name: ['tender_title', 'כותרת המכרז', 'service_type_summary', 'שם השירות בכותרת הצעת המציע'],
   service_providers_total: ["פה יבוא מס' נותני השירות", "מס' נותני השירות"],
   work_hours: ["מס' שעות עבודה"],
+  team_lead_role: ['תפקיד ראש צוות'],
 };
 const byLabel = new Map<string, RequesterField>();
 for (const f of REQUESTER_FIELDS) {

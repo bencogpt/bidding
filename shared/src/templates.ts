@@ -33,6 +33,7 @@ export const SYSTEM_FORMULAS = [
   'bid_serial', // the case's bid number
   'submission_date', // the submission deadline's date
   'request_brief', // the requester's description of the service (פרק ב')
+  'option_months_total', // the requester's option periods × OPTION_MONTHS_PER_PERIOD
 ] as const;
 export type SystemFormula = (typeof SYSTEM_FORMULAS)[number];
 

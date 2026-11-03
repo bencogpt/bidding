@@ -57,8 +57,9 @@ export const PROCUREMENT_RULES: readonly ProcurementRule[] = [
   { match: names('bid_guarantee_validity_date', 'תוקף ערבות ההצעה'), fill: formula('guarantee_validity') },
   // 20 — bid validity: 90 days after submission, moved past weekends and holidays
   { match: names('bid_validity_date', 'תוקף ההצעה'), fill: formula('bid_validity') },
-  // 21 — performance guarantee: 5% of the annual contract amount
-  { match: names('performance_guarantee_amount', 'סכום ערבות ביצוע', 'פה יבוא סכום ערבות ביצוע'), fill: formula('performance_guarantee') },
+  // 21 — performance guarantee: 5% of the annual contract amount. The Doc prints the rate ("בגובה {{…}}%
+  // מגובה ערך הזכייה השנתי"), so the field holds the percentage itself.
+  { match: names('performance_guarantee_amount', 'סכום ערבות ביצוע', 'פה יבוא סכום ערבות ביצוע'), fill: fixed('5') },
   // 9 — the requester's description of the service (פרק ב'); 57/58 — repeated in the agreement
   { match: names('service_field_summary', "עיקרי השירות הנדרש (פרק ב')"), fill: formula('request_brief') },
   { match: names('agreement_service_field', 'תחום השירות (בהסכם)'), copyOf: names('service_field_summary', "עיקרי השירות הנדרש (פרק ב')") },
@@ -86,6 +87,9 @@ export const PROCUREMENT_RULES: readonly ProcurementRule[] = [
   { match: names('work_hours', "מס' שעות עבודה"), fill: fixed('משרה מלאה - 170 שעות') },
   // 67 — the framework maximum is the requester's annual estimate (published by decision)
   { match: names('framework_max_amount', 'סכום המסגרת המקסימלי (בש"ח)'), fill: formula('annual_estimate') },
+  // 72 — the template prints this field as months ("ועד לסך מצטבר של {{option_periods_count}} חודשים
+  // נוספים"): the requester's number of option periods × OPTION_MONTHS_PER_PERIOD.
+  { match: names('option_periods_count'), fill: formula('option_months_total') },
   // 74 — contract months + option months
   { match: names('option_total_months', 'סך מצטבר של חודשי אופציה'), fill: formula('option_total_months') },
   // Removed from the form, no value (the "remove from procurement's form" column): a blank line to
@@ -170,6 +174,24 @@ export const PROCUREMENT_RULES: readonly ProcurementRule[] = [
   },
 ];
 
+/** Option periods are of this many months each (the user's rule). */
+export const OPTION_MONTHS_PER_PERIOD = 12;
+
+// The bid manager's details always come from the creating user's internal-user record, under any field
+// name: BID_MANAGER_NAME, tender_manager_email, "טלפון מנהל המכרז", "שם מנהל הבל"מ", …
+const MANAGER_KEY_RE = /(?:^|_)(?:bid|tender)_?(?:manager|lead)_?(name|email|mail|phone|tel)(?:$|_)/i;
+const MANAGER_LABEL_RE = /מנהל\s+(?:ה)?(?:מכרז|בל["״]?[מם])/;
+export function managerDetailKind(p: Named): 'manager_name' | 'manager_email' | 'manager_phone' | null {
+  const k = p.key.trim().match(MANAGER_KEY_RE)?.[1]?.toLowerCase();
+  if (k) return k === 'name' ? 'manager_name' : k === 'phone' || k === 'tel' ? 'manager_phone' : 'manager_email';
+  const label = `${p.key} ${p.labelHe ?? ''}`;
+  if (!MANAGER_LABEL_RE.test(label)) return null;
+  if (/טלפון|נייד/.test(label)) return 'manager_phone';
+  if (/מייל|דוא["״]?ל|email/i.test(label)) return 'manager_email';
+  if (/שם/.test(label)) return 'manager_name';
+  return null;
+}
+
 // Tags removed from the system: never asked, and printed as nothing (not a blank line).
 export const OMITTED_NAMES = names('security_appendix');
 export const isOmittedParam = (p: Named): boolean => ruleNamed(p, OMITTED_NAMES);
@@ -179,6 +201,8 @@ export function procurementRuleFor(
   p: Named,
   all: readonly Named[],
 ): { hide?: true; fill?: SystemFill } | null {
+  const manager = managerDetailKind(p);
+  if (manager) return { fill: formula(manager) };
   const rule = PROCUREMENT_RULES.find((r) => ruleNamed(p, r.match));
   if (!rule) return null;
   if (rule.copyOf) {
