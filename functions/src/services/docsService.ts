@@ -8,11 +8,12 @@
 //   viewer. Requires secrets GOOGLE_OAUTH_CLIENT_ID/SECRET/REFRESH_TOKEN bound to the functions.
 // DEV / EMULATOR (default): renders the template's bodyTemplate to HTML in Storage and serves
 //   it through a Cloud Function. Runs without any Google Workspace.
-import { google, type docs_v1 } from 'googleapis';
+import { google } from 'googleapis';
 import { storage } from '../lib/admin.js';
 import type { TenderDoc, TemplateDoc, UserDoc } from '@obms/shared';
 import { TENDER_TYPE_LABELS_HE } from '@obms/shared';
 import { htmlToText } from './supervisorChecks.js';
+import { docPlainText } from './docText.js';
 import { bodyToHtml, rtlifyExportedHtml } from './docHtml.js';
 import { groupSessions, sampleSessions, type RevisionMeta } from './scoreCalc.js';
 
@@ -190,20 +191,15 @@ export async function createTemplateDoc(
   return { docId, url: `https://docs.google.com/document/d/${docId}/edit` };
 }
 
-function docPlainText(doc: docs_v1.Schema$Document): string {
-  const lines: string[] = [];
-  for (const el of doc.body?.content ?? []) {
-    const para = el.paragraph;
-    if (!para) continue;
-    lines.push((para.elements ?? []).map((pe) => pe.textRun?.content ?? '').join(''));
-  }
-  return lines.join('').replace(/\n+$/, '');
-}
-
 /** Read a system-owned template Doc's text via the Docs API (drive.file — no public sharing). */
 export async function readTemplateDocText(googleDocId: string): Promise<string> {
   const { docs } = googleClients();
-  const doc = await docs.documents.get({ documentId: googleDocId });
+  // All tabs, and pending suggestions as if accepted (see docText.ts).
+  const doc = await docs.documents.get({
+    documentId: googleDocId,
+    includeTabsContent: true,
+    suggestionsViewMode: 'PREVIEW_SUGGESTIONS_ACCEPTED',
+  });
   return docPlainText(doc.data);
 }
 
