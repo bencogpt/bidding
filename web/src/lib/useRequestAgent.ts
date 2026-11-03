@@ -135,7 +135,8 @@ export function useRequestAgent() {
           mode: 'chat',
           brief: nextBrief,
           details: detailsForAgent(),
-          history: history.slice(-20),
+          // the server caps each chat turn at 1000 characters; a long principal service travels in the brief
+          history: history.slice(-20).map((m) => ({ ...m, text: m.text.slice(0, 1000) })),
           qualityAsked: nextQuality,
         });
         if (mine !== chatSeq.current) return;
@@ -170,7 +171,8 @@ export function useRequestAgent() {
 
   // An answer to a "scope" or "quality" question belongs to the brief; the other answers are read by the agent.
   const say = (text: string) => {
-    const t = text.trim().slice(0, 1000); // the server caps each chat turn at 1000 characters
+    const full = text.trim().slice(0, BRIEF_MAX_LENGTH);
+    const t = asking === 'scope' ? full : full.slice(0, 1000); // only the principal service may run long
     if (!t || typing || asking === 'done') return;
     let nextBrief = brief;
     let nextQuality = qualityAsked;

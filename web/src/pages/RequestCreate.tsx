@@ -8,12 +8,14 @@ import {
   composeRequestBrief,
   needsAgent,
   normalizeDetailsInput,
+  pageCount,
   requestChecklist,
 } from '@obms/shared';
 import { api } from '../lib/api';
 import { useRequestAgent } from '../lib/useRequestAgent';
 import RequestPanel from '../components/RequestPanel';
 import RequestChat from '../components/RequestChat';
+import BigEditor from '../components/BigEditor';
 import RequestSummary from '../components/RequestSummary';
 import RequestRecommendations from '../components/RequestRecommendations';
 import StageBar from '../components/StageBar';
@@ -32,6 +34,7 @@ export default function RequestCreate() {
   const [error, setError] = useState('');
   const [notes, setNotes] = useState('');
   const [chosen, setChosen] = useState<string[]>([]);
+  const [bigText, setBigText] = useState(false); // the large writing window over the free-writing box
   // One id per form: a retried submit returns the request already opened instead of a second one.
   const requestId = useRef(crypto.randomUUID());
 
@@ -174,6 +177,12 @@ export default function RequestCreate() {
                       value={a.brief}
                       onChange={(e) => a.setBrief(e.target.value)}
                     />
+                    <div className="mt-1 flex items-center justify-between text-xs text-tx-soft">
+                      <span>{a.brief.length > 0 && t('req.pagesOf', { n: pageCount(a.brief), max: 5 })}</span>
+                      <button type="button" className="text-gold-deep underline" onClick={() => setBigText(true)}>
+                        {t('req.expand')}
+                      </button>
+                    </div>
                     {missing > 0 && (
                       <p className="mt-2 text-sm text-tx-soft">
                         {t('req.missingHint', { n: missing })}{' '}
@@ -193,6 +202,7 @@ export default function RequestCreate() {
                     chips={a.chips}
                     typing={a.typing}
                     disabled={a.asking === 'done'}
+                    asking={a.asking}
                     onSay={a.say}
                   />
                 )}
@@ -301,6 +311,22 @@ export default function RequestCreate() {
           )}
         </div>
       </SectionCard>
+      {bigText && (
+        <BigEditor
+          title={t('req.principalService')}
+          initial={a.brief}
+          submitLabel={t('req.bigSave')}
+          hint={t('req.bigHint')}
+          onClose={(draft) => {
+            a.setBrief(draft.slice(0, BRIEF_MAX_LENGTH));
+            setBigText(false);
+          }}
+          onSubmit={(v) => {
+            a.setBrief(v.slice(0, BRIEF_MAX_LENGTH));
+            setBigText(false);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -353,3 +353,12 @@ export function agentDetailsFromFields(fields: Record<string, string>, touched: 
 
 /** In the text mode: while the agent still has data to ask for, the main button continues to the agent instead of sending. */
 export const needsAgent = (asking: AskKey): boolean => asking !== 'quality' && asking !== 'done';
+
+/** About 3,000 characters make a page of the request; BRIEF_MAX_LENGTH is five pages. */
+export const SCOPE_PAGE_CHARS = 3000;
+
+/** The length of a text in pages, to one decimal place (a little text is never shown as 0). */
+export function pageCount(text: string): number {
+  if (!text) return 0;
+  return Math.max(0.1, Math.round((text.length / SCOPE_PAGE_CHARS) * 10) / 10);
+}

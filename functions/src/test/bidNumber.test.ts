@@ -1,7 +1,7 @@
 // Unit tests for the bid number (no network):  node --test functions/lib/test/bidNumber.test.js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatBidNumber, BID_NUMBER_MAX, createBidRequestInput, createTenderInput } from '@obms/shared';
+import { formatBidNumber, BID_NUMBER_MAX, BRIEF_MAX_LENGTH, createBidRequestInput, createTenderInput } from '@obms/shared';
 
 test('formatBidNumber drops leading zeros', () => {
   assert.equal(formatBidNumber(2026, 31), '2026-31');
@@ -19,7 +19,7 @@ test('createBidRequestInput needs a real brief', () => {
   assert.ok(createBidRequestInput.safeParse({ brief: 'שירותי אבטחה לאתר', details }).success);
   assert.equal(createBidRequestInput.safeParse({ brief: '   ', details }).success, false);
   assert.equal(createBidRequestInput.safeParse({ brief: 'ab', details }).success, false);
-  assert.equal(createBidRequestInput.safeParse({ brief: 'x'.repeat(5001), details }).success, false);
+  assert.equal(createBidRequestInput.safeParse({ brief: 'x'.repeat(BRIEF_MAX_LENGTH + 1), details }).success, false);
 });
 
 test('createTenderInput requires a well-formed bidRequestId', () => {

@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type Anthropic from '@anthropic-ai/sdk';
 import {
+  BRIEF_MAX_LENGTH,
   recommendationsInput,
   sanitizeRecommendations,
   scriptRecommendations,
@@ -20,7 +21,7 @@ test('the input never accepts the budget or unknown keys, and needs a real brief
   assert.equal(recommendationsInput.safeParse(input({ details: { annual_budget: 5 } as never })).success, false);
   assert.equal(recommendationsInput.safeParse({ ...input(), annual_budget: 5 }).success, false);
   assert.equal(recommendationsInput.safeParse(input({ brief: 'ab' })).success, false);
-  assert.equal(recommendationsInput.safeParse(input({ brief: 'x'.repeat(5001) })).success, false);
+  assert.equal(recommendationsInput.safeParse(input({ brief: 'x'.repeat(BRIEF_MAX_LENGTH + 1) })).success, false);
 });
 
 test('sanitizeRecommendations keeps at most six clean, bounded, distinct items', () => {
