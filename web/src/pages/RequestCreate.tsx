@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   BRIEF_MAX_LENGTH,
@@ -29,8 +29,8 @@ const goTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behav
 // which gives it a bid number.
 export default function RequestCreate() {
   const { t } = useTranslation();
+  const nav = useNavigate();
   const a = useRequestAgent();
-  const [serial, setSerial] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notes, setNotes] = useState('');
@@ -47,7 +47,6 @@ export default function RequestCreate() {
   const goAgent = textMode && a.needsMore;
   const agentDone = a.asking !== null && !needsAgent(a.asking);
   const ready = missing === 0 && (textMode ? !a.needsMore : agentDone || !!a.error);
-  const sent = serial !== null;
   const agentView = useMemo(
     () => agentDetailsFromFields({ ...a.fields }, new Set(['document_classification'])),
     [a.fields],
@@ -76,22 +75,13 @@ export default function RequestCreate() {
     setError('');
     try {
       const r = await api.createBidRequest({ brief, requestId: requestId.current, details });
-      setSerial(r.serial);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      // Like the prototype: leave for the list, where the new request is shown with a green notice.
+      nav('/', { state: { sentSerial: r.serial } });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
-  };
-
-  const reset = () => {
-    a.reset();
-    setSerial(null);
-    setError('');
-    setNotes('');
-    setChosen([]);
-    requestId.current = crypto.randomUUID();
   };
 
   const modeBtn = (m: 'free' | 'chat', title: string, hint: string) => (
@@ -117,34 +107,16 @@ export default function RequestCreate() {
         steps={[
           {
             label: t('req.stageA'),
-            state: sent || ready ? 'done' : 'cur',
-            onClick: sent ? undefined : () => goTo('step-a'),
+            state: ready ? 'done' : 'cur',
+            onClick: () => goTo('step-a'),
           },
           {
             label: t('req.stageB'),
-            state: sent ? 'done' : ready ? 'cur' : 'todo',
-            onClick: ready && !sent ? () => goTo('step-b') : undefined,
+            state: ready ? 'cur' : 'todo',
+            onClick: ready ? () => goTo('step-b') : undefined,
           },
         ]}
       />
-
-      {sent && (
-        <div className="mb-5 flex items-start gap-3 rounded-lg border border-emerald-300 bg-emerald-50 px-5 py-4 text-emerald-900">
-          <span className="grid h-7 w-7 flex-none place-items-center rounded-full bg-emerald-600 text-white">✓</span>
-          <div className="flex-1">
-            <div className="font-semibold">{t('req.created', { serial })}</div>
-            <p className="mt-1 text-sm">{t('req.sentSub')}</p>
-            <div className="mt-3 flex gap-2">
-              <button type="button" className="btn btn-sm" onClick={reset}>
-                {t('req.another')}
-              </button>
-              <Link to="/" className="btn btn-gold btn-sm">
-                {t('nav.dashboard')}
-              </Link>
-            </div>
-          </div>
-        </div>
-      )}
 
       <SectionCard
         n={1}
@@ -152,12 +124,11 @@ export default function RequestCreate() {
         owner={
           <>
             <span>{t('req.owner')}</span>
-            <StatusChip tone={sent ? 'ok' : 'idle'}>{sent ? t('req.statusSent') : t('req.statusDraft')}</StatusChip>
+            <StatusChip tone="idle">{t('req.statusDraft')}</StatusChip>
           </>
         }
       >
-        {!sent && (
-          <div id="step-a">
+        <div id="step-a">
             <SubHead letter="א" title={t('req.subA')} hint={t('req.pageHint')} />
             <div className="grid gap-6 md:grid-cols-[1fr_280px]">
               <div className="space-y-4">
@@ -268,18 +239,17 @@ export default function RequestCreate() {
               </div>
             </div>
           </div>
-        )}
 
-        <div id="step-b" className={(sent ? '' : 'mt-8 border-t border-dashed border-black/10 pt-6 ') + (ready || sent ? '' : 'opacity-60')}>
-          <SubHead letter="ב" title={t('req.subB')} hint={sent ? undefined : t('req.subBHint')} />
-          {ready || sent ? (
+        <div id="step-b" className={'mt-8 border-t border-dashed border-black/10 pt-6 ' + (ready ? '' : 'opacity-60')}>
+          <SubHead letter="ב" title={t('req.subB')} hint={t('req.subBHint')} />
+          {ready ? (
             <div className="space-y-6">
               <RequestSummary brief={a.brief} fields={a.fields} />
               <RequestRecommendations
                 brief={a.brief}
                 details={agentView}
-                active={ready && !sent}
-                locked={sent}
+                active={ready}
+                locked={false}
                 chosen={chosen}
                 onChosen={setChosen}
               />
@@ -287,27 +257,21 @@ export default function RequestCreate() {
                 <label className="label" htmlFor="rq-notes">
                   {t('req.notesLabel')}
                 </label>
-                {sent ? (
-                  <p className="whitespace-pre-wrap text-sm">{notes.trim() || '—'}</p>
-                ) : (
-                  <textarea
-                    id="rq-notes"
-                    className="input min-h-20"
-                    value={notes}
-                    maxLength={2000}
-                    placeholder={t('req.notesPlaceholder')}
-                    onChange={(e) => setNotes(e.target.value)}
-                  />
-                )}
+                <textarea
+                  id="rq-notes"
+                  className="input min-h-20"
+                  value={notes}
+                  maxLength={2000}
+                  placeholder={t('req.notesPlaceholder')}
+                  onChange={(e) => setNotes(e.target.value)}
+                />
               </div>
-              {!sent && (
-                <div className="flex flex-wrap items-center gap-3">
-                  <button type="button" className="btn btn-gold" disabled={busy} onClick={submit}>
-                    {busy ? t('req.creating') : t('req.sendToProcurement')}
-                  </button>
-                  {error && <span className="text-sm text-red-600">{error}</span>}
-                </div>
-              )}
+              <div className="flex flex-wrap items-center gap-3">
+                <button type="button" className="btn btn-gold" disabled={busy} onClick={submit}>
+                  {busy ? t('req.creating') : t('req.sendToProcurement')}
+                </button>
+                {error && <span className="text-sm text-red-600">{error}</span>}
+              </div>
             </div>
           ) : (
             <p className="text-sm text-tx-soft">{t('req.summaryLocked')}</p>
