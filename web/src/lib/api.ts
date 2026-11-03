@@ -53,6 +53,8 @@ import type {
   UpdateTenderDraftInput,
   GenerateDocumentInput,
   RerunRequestResearchInput,
+  ResearchDraftInput,
+  ResearchDraftResult,
   ResearchStatus,
 } from '@obms/shared';
 
@@ -113,6 +115,7 @@ export const api = {
     'updateTenderDraft',
   ),
   generateDocument: call<GenerateDocumentInput, { ok: true }>('generateDocument'),
+  researchDraftRequest: call<ResearchDraftInput, ResearchDraftResult>('researchDraftRequest'),
   rerunRequestResearch: call<RerunRequestResearchInput, { status: ResearchStatus; runId: string }>(
     'rerunRequestResearch',
   ),

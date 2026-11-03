@@ -32,6 +32,8 @@ export default function RequestCreate() {
   const [error, setError] = useState('');
   const [notes, setNotes] = useState('');
   const [chosen, setChosen] = useState<string[]>([]);
+  // The web research run on the summary step, linked to the request so it isn't searched again.
+  const [researchRunId, setResearchRunId] = useState<string | null>(null);
   // One id per form: a retried submit returns the request already opened instead of a second one.
   const requestId = useRef(crypto.randomUUID());
 
@@ -69,7 +71,12 @@ export default function RequestCreate() {
     setBusy(true);
     setError('');
     try {
-      const r = await api.createBidRequest({ brief, requestId: requestId.current, details });
+      const r = await api.createBidRequest({
+        brief,
+        requestId: requestId.current,
+        details,
+        ...(researchRunId ? { researchRunId } : {}),
+      });
       setSerial(r.serial);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err) {
@@ -85,6 +92,7 @@ export default function RequestCreate() {
     setError('');
     setNotes('');
     setChosen([]);
+    setResearchRunId(null);
     requestId.current = crypto.randomUUID();
   };
 
@@ -263,6 +271,7 @@ export default function RequestCreate() {
             <div className="space-y-6">
               <RequestSummary brief={a.brief} fields={a.fields} />
               <RequestRecommendations
+                onResearch={setResearchRunId}
                 brief={a.brief}
                 details={agentView}
                 active={ready && !sent}

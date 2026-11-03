@@ -209,6 +209,11 @@ service cloud.firestore {
       }
     }
 
+    // web research run on a request before it was sent: returned by the function, linked on send
+    match /researchDrafts/{runId} {
+      allow read, write: if false;
+    }
+
     // ---- audit log (immutable, append-only via functions) ----
     // managers read everything; team members only the trail of their own cases (queried by tenderId)
     match /auditLog/{entryId} {

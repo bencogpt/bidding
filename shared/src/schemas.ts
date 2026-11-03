@@ -263,6 +263,7 @@ export const createBidRequestInput = z.object({
   brief: z.string().trim().min(3).max(BRIEF_MAX_LENGTH),
   details: requesterDetailsInputSchema, // the requester's answers to the phase 1 questions
   requestId: z.string().min(8).max(100).optional(), // one per form: a retried submit returns the same request
+  researchRunId: z.string().min(8).max(100).optional(), // the web research already run on the summary step
 });
 export type CreateBidRequestInput = z.infer<typeof createBidRequestInput>;
 
