@@ -142,3 +142,15 @@ test('procurement form: the requester answers leave it, removed fields never sho
   assert.equal(isFormHidden(params[2]), true);
   assert.equal(isFormHidden(params[3]), true);
 });
+
+test("the bid's title is the requester's service name, and step 2 doesn't ask it", async () => {
+  const { fillFromRequestDetails, isFormHidden } = await import('@obms/shared');
+  const params = [{ key: 'tender_title', labelHe: 'tender_title' }, { key: 'כותרת המכרז', labelHe: 'כותרת המכרז' }];
+  const out = fillFromRequestDetails(params, {}, REQ);
+  assert.equal(out.tender_title, 'שירותי תמיכה');
+  assert.equal(out['כותרת המכרז'], 'שירותי תמיכה');
+  assert.equal(fillFromRequestDetails(params, { tender_title: 'כותרת אחרת' }, REQ).tender_title, 'כותרת אחרת', 'a typed title wins');
+  assert.ok(params.every((p) => isFormHidden(p)));
+  assert.ok(isFormHidden({ key: 'תוקף אחריות', labelHe: 'תוקף אחריות' }));
+  assert.ok(!isFormHidden({ key: 'תקופת האחריות', labelHe: 'תקופת האחריות' }));
+});

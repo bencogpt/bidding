@@ -39,7 +39,7 @@ import type {
   ChatMessage,
   ConversionRun,
 } from '@obms/shared';
-import { DEFAULT_SCORE_TARGETS, DEFAULT_DCI_PARAMS } from '@obms/shared';
+import { DEFAULT_SCORE_TARGETS, DEFAULT_DCI_PARAMS, withBuiltinFills } from '@obms/shared';
 
 // Managers see every case; other internal roles only the cases whose team they belong to
 // (Firestore rules enforce the same — an unscoped query by a non-manager is denied).
@@ -161,7 +161,10 @@ export function useTemplate(type: TenderType | undefined) {
     if (!type) return;
     let alive = true;
     void getDoc(doc(db, 'templates', type)).then((d) => {
-      if (alive) setTemplate(d.exists() ? (d.data() as TemplateDoc) : null);
+      if (!alive) return;
+      // As cases use it: with the built-in fill rules (manager email, guarantee, …) attached.
+      const t = d.exists() ? (d.data() as TemplateDoc) : null;
+      setTemplate(t ? { ...t, params: withBuiltinFills(t.params ?? []) } : null);
     });
     return () => {
       alive = false;

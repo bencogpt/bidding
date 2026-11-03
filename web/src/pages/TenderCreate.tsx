@@ -110,7 +110,9 @@ export default function TenderCreate() {
     if (p.key === SERVICE_KEYS.economicPct && !qualitative) return '100';
     return (
       params[p.key] ??
-      (p.defaultFrom === 'guarantee_pct' ? String(guaranteeDefault(params[SERVICE_KEYS.estimate]) ?? '') : '')
+      (p.defaultFrom === 'guarantee_pct'
+        ? String(guaranteeDefault((request?.details as Record<string, unknown> | undefined)?.annual_budget ?? params[SERVICE_KEYS.estimate]) ?? '')
+        : '')
     );
   };
   const runDraft = async (forType: TenderType) => {

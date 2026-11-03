@@ -330,7 +330,7 @@ export async function superviseTender(
   const tender = await tendersRepo.get(tenderId);
   if (!tender) throw new Error(`tender ${tenderId} not found`);
   const [allTemplates, provenance, internalParams] = await Promise.all([
-    Promise.all(TENDER_TYPES.map((t) => templatesRepo.get(t))),
+    Promise.all(TENDER_TYPES.map((t) => templatesRepo.getForCase(t))),
     internalRepo.getProvenance(tenderId),
     internalRepo.getParams(tenderId),
   ]);

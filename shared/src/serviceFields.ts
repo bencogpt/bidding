@@ -11,8 +11,8 @@ export const SERVICE_KEYS = {
   economicPct: 'economic_pct',
 } as const;
 
-/** The bid guarantee defaults to this share of the estimate (editable by the manager). */
-export const GUARANTEE_PCT = 0.025;
+/** The bid guarantee defaults to this share of the annual estimate (editable by the manager). */
+export const GUARANTEE_PCT = 0.02;
 
 export function guaranteeDefault(estimate: unknown): number | null {
   const n = Number(estimate);
@@ -110,17 +110,23 @@ export function totalMonths(initialMonths: unknown, optionPeriods: unknown): num
 
 export interface FillContext {
   submissionDeadline: number | null;
+  annualEstimate?: number; // the requester's annual estimate (confidential): the guarantee default's base
   manager?: { displayName: string; email: string };
   requester?: { displayName: string; phone?: string };
 }
 
 type Values = Record<string, string | number>;
 
-function formulaValue(formula: string, values: Values, ctx: FillContext): string | number | undefined {
+function formulaValue(
+  formula: string,
+  values: Values,
+  ctx: FillContext,
+  guaranteeKey: string,
+): string | number | undefined {
   switch (formula) {
     case 'guarantee_words': {
-      const n = Number(values[SERVICE_KEYS.guaranteeAmount]);
-      return values[SERVICE_KEYS.guaranteeAmount] !== undefined && Number.isFinite(n) && n >= 0 && n <= 999_999_999
+      const n = Number(values[guaranteeKey]);
+      return values[guaranteeKey] !== undefined && Number.isFinite(n) && n >= 0 && n <= 999_999_999
         ? shekelsInWords(n)
         : undefined;
     }
@@ -145,10 +151,10 @@ function formulaValue(formula: string, values: Values, ctx: FillContext): string
   }
 }
 
-function fillValue(fill: SystemFill, values: Values, ctx: FillContext): string | number | undefined {
+function fillValue(fill: SystemFill, values: Values, ctx: FillContext, guaranteeKey: string): string | number | undefined {
   if (fill.kind === 'fixed') return fill.value;
   if (fill.kind === 'copy') return values[fill.from];
-  return formulaValue(fill.formula, values, ctx);
+  return formulaValue(fill.formula, values, ctx, guaranteeKey);
 }
 
 /**
@@ -160,14 +166,53 @@ export function resolveSystemFills(params: readonly TemplateParam[], input: Valu
   const out: Values = { ...input };
   for (const p of params) {
     if (p.defaultFrom === 'guarantee_pct' && String(out[p.key] ?? '').trim() === '') {
-      const d = guaranteeDefault(out[SERVICE_KEYS.estimate]);
+      const d = guaranteeDefault(ctx.annualEstimate ?? out[SERVICE_KEYS.estimate]);
       if (d !== null) out[p.key] = d;
     }
   }
+  // The amount in words follows the guarantee field the manager is asked for.
+  const guaranteeKey = params.find((p) => isGuaranteeAmountParam(p) && !p.fill)?.key ?? SERVICE_KEYS.guaranteeAmount;
   for (const p of params) {
     if (!p.fill) continue;
-    const v = fillValue(p.fill, out, ctx);
+    const v = fillValue(p.fill, out, ctx, guaranteeKey);
     if (v !== undefined && String(v) !== '') out[p.key] = v;
   }
   return out;
+}
+
+// ---- built-in rules, by field key and Hebrew label ----
+// Fields typed into a Google Doc by hand carry no fill metadata, and a re-sync can't add it. These
+// rules recognise them by name, the way the bid-number and deadline fields are recognised, so they
+// survive any re-sync. Explicit metadata on a field always wins.
+
+const GUARANTEE_AMOUNT_KEYS = new Set(['guarantee_amount', 'bid_guarantee_amount', 'סכום ערבות להצעה']);
+const GUARANTEE_WORDS_KEYS = new Set(['guarantee_amount_words', 'bid_guarantee_amount_words']);
+const MANAGER_EMAIL_KEYS = new Set(['manager_email', 'tender_manager_email', 'כתובת מייל של מנהל המכרז']);
+
+const named = (p: { key: string; labelHe?: string }, names: ReadonlySet<string>) =>
+  names.has(p.key) || (p.labelHe !== undefined && names.has(p.labelHe));
+
+/** The bid-guarantee amount (not the performance guarantee "סכום ערבות ביצוע", not its validity). */
+export const isGuaranteeAmountParam = (p: { key: string; labelHe?: string }): boolean =>
+  named(p, GUARANTEE_AMOUNT_KEYS);
+
+/**
+ * The template's fields with the built-in rules attached (for creating and checking cases):
+ *  - the tender manager's email ← the internal-user record of the manager creating the bid;
+ *  - the first bid-guarantee field is asked, pre-filled with GUARANTEE_PCT of the annual estimate;
+ *    any other bid-guarantee field copies it, so they can't disagree;
+ *  - the guarantee in words follows the amount.
+ */
+export function withBuiltinFills(params: readonly TemplateParam[]): TemplateParam[] {
+  const primary = params.find((p) => isGuaranteeAmountParam(p) && !p.fill);
+  return params.map((p) => {
+    if (p.fill) return p;
+    if (named(p, MANAGER_EMAIL_KEYS)) return { ...p, fill: { kind: 'formula', formula: 'manager_email' } };
+    if (GUARANTEE_WORDS_KEYS.has(p.key)) return { ...p, fill: { kind: 'formula', formula: 'guarantee_words' } };
+    if (primary && isGuaranteeAmountParam(p)) {
+      if (p.key !== primary.key) return { ...p, fill: { kind: 'copy', from: primary.key } };
+      return { ...p, type: 'number', defaultFrom: p.defaultFrom ?? 'guarantee_pct' };
+    }
+    return p;
+  });
 }

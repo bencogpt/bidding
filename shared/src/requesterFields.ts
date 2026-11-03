@@ -82,14 +82,14 @@ export function briefWithDetails(brief: string, details?: Partial<RequesterDetai
 
 /** Fill the template fields the manager left blank from the requester's answers (the manager's value wins). */
 export function fillFromRequestDetails(
-  params: readonly { key: string }[],
+  params: readonly { key: string; labelHe?: string }[],
   values: Record<string, string | number>,
   details?: Partial<RequesterDetails> | null,
 ): Record<string, string | number> {
   const out = { ...values };
   const pub = publicDetails(details);
   for (const p of params) {
-    const v = pub[p.key];
+    const v = pub[p.key] ?? pub[aliasOf(p) ?? ''];
     if (v !== undefined && isBlank(out[p.key])) out[p.key] = v;
   }
   // The contract length in years is procurement's initial period (in months) unless they typed one.
@@ -132,6 +132,15 @@ export function normalizeDetailsInput(
   return { details, badNumbers, missing };
 }
 
+// Template fields that take a requester answer under another name (matched by key or Hebrew label).
+const REQUEST_ALIASES: Record<string, ReadonlySet<string>> = {
+  service_name: new Set(['tender_title', 'כותרת המכרז']), // the bid's title is the service's name
+};
+const aliasOf = (p: { key: string; labelHe?: string }): string | undefined =>
+  Object.keys(REQUEST_ALIASES).find(
+    (k) => REQUEST_ALIASES[k].has(p.key) || (p.labelHe !== undefined && REQUEST_ALIASES[k].has(p.labelHe)),
+  );
+
 /** Fields the requester answers in phase 1 (all but the internal budget): procurement's form does not ask them again. */
 export const isRequesterAnswered = (key: string): boolean => {
   const f = byKey.get(key);
@@ -140,6 +149,7 @@ export const isRequesterAnswered = (key: string): boolean => {
 
 // Fields removed from procurement's form (the spreadsheet's "remove from the procurement form" column): matched by key and by Hebrew label.
 const HIDDEN_LABELS_HE = new Set([
+  'תוקף אחריות',
   'סוג האישור הרפואי הנדרש',
   'מקום אספקת השירות',
   'תחומי אחריות נותני השירות',
@@ -158,4 +168,9 @@ const HIDDEN_KEYS = new Set([
 
 /** Not asked on procurement's form: hidden by the template, answered by the requester, or removed by label. */
 export const isFormHidden = (p: { key: string; labelHe?: string; hidden?: boolean }): boolean =>
-  !!p.hidden || isRequesterAnswered(p.key) || HIDDEN_KEYS.has(p.key) || (p.labelHe !== undefined && HIDDEN_LABELS_HE.has(p.labelHe));
+  !!p.hidden ||
+  isRequesterAnswered(p.key) ||
+  !!aliasOf(p) ||
+  HIDDEN_KEYS.has(p.key) ||
+  HIDDEN_LABELS_HE.has(p.key) || // fields typed into the doc in Hebrew: the key is the label
+  (p.labelHe !== undefined && HIDDEN_LABELS_HE.has(p.labelHe));
