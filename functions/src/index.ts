@@ -86,6 +86,7 @@ import {
   type SubmissionDoc,
   type UserDoc,
   type TemplateDoc,
+  type UpdateTenderDraftInput,
   type TenderProvenance,
   type SupervisionReport,
   type CaseTeam,
@@ -94,7 +95,7 @@ import {
 } from '@obms/shared';
 import { randomBytes } from 'node:crypto';
 import { auth, db, now } from './lib/admin.js';
-import { requireAuth, requireRole, requireManager, requireInternal, requireCaseAccess } from './lib/context.js';
+import { requireAuth, requireRole, requireManager, requireInternal, requireCaseAccess, type Caller } from './lib/context.js';
 import { parseInput } from './lib/validate.js';
 import {
   tendersRepo,
@@ -150,6 +151,7 @@ import {
 } from './services/supervisorService.js';
 import { documentGate, DOCUMENT_GATE_MESSAGE_HE } from './services/draftCalc.js';
 import { runDraftResearch, runRequestResearch } from './services/requestResearch.js';
+import { publicServiceSummary } from './services/publicSummary.js';
 import { docHash } from './services/supervisorChecks.js';
 import { templateHash } from './services/supervisorChecks.js';
 import { computeCaseScore, refreshCaseScore } from './services/scoreService.js';
@@ -399,6 +401,7 @@ function buildCaseParams(
     owner: UserDoc | null;
     requester?: UserDoc;
     request?: BidRequestDoc | null; // its confidential annual estimate is the guarantee default's base
+    publicBrief?: string; // the supplier-facing service description (publicSummary.ts), never the raw request
   },
 ): { publicParams: Record<string, string | number>; internalParams: Record<string, string | number> } {
   const details = (ctx.request?.details ?? {}) as Record<string, unknown>;
@@ -409,7 +412,7 @@ function buildCaseParams(
     annualEstimate: Number.isFinite(annual) && annual > 0 ? annual : undefined,
     contractYears: Number.isInteger(years) && years > 0 ? years : undefined,
     optionPeriods: Number.isInteger(Number(details.option_periods_count)) ? Number(details.option_periods_count) : undefined,
-    requestBrief: ctx.request?.brief,
+    requestBrief: ctx.publicBrief,
     serial: ctx.serial,
     manager: ctx.owner
       ? { displayName: ctx.owner.displayName, email: ctx.owner.email, phone: ctx.owner.phone }
@@ -626,9 +629,12 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
 
   const requester = teamUsers.find((u) => u.role === 'requester');
   const serial = bidReq.serial;
+  // The service description in the document is public: rewritten for suppliers, never the raw request.
+  const publicBrief = needsPublicBrief(template) ? (await publicServiceSummary(bidReq.brief)).summary : undefined;
   const { publicParams, internalParams } = buildCaseParams(template, askedWithDetails, {
     serial,
     request: bidReq,
+    publicBrief,
     submissionDeadline: input.submissionDeadline ?? null,
     owner,
     requester,
@@ -775,6 +781,17 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
   return { id, serial, docsSkipped: skipped, verdict: null, missingRoles: missing, duplicate: false };
 });
 
+/** Whether the template prints the requester's service description (the request_brief rule). */
+const needsPublicBrief = (template: TemplateDoc) =>
+  template.params.some((p) => p.fill?.kind === 'formula' && p.fill.formula === 'request_brief');
+
+/** The public service description already on a draft (from its request_brief field). */
+function currentPublicBrief(template: TemplateDoc, params: Record<string, string | number>): string | undefined {
+  const p = template.params.find((x) => x.fill?.kind === 'formula' && x.fill.formula === 'request_brief');
+  const v = p ? params[p.key] : undefined;
+  return v !== undefined && v !== BLANK_LINE && String(v).trim() ? String(v) : undefined;
+}
+
 // Draft-first: edit a case's data in the app while it has no document (manager). Same checks as
 // creation; any change makes earlier inspector checks stale (a new fingerprint).
 export const updateTenderDraft = onCall(async (req) => {
@@ -788,6 +805,22 @@ export const updateTenderDraft = onCall(async (req) => {
   if (tender.status !== 'draft') throw new HttpsError('failed-precondition', 'ניתן לערוך רק מכרז בטיוטה.');
   const template = await templatesRepo.getForCase(tender.type);
   if (!template) throw new HttpsError('failed-precondition', `אין תבנית לסוג המכרז: ${tender.type}`);
+  // The public service description already on the draft is kept (it is regenerated only on request).
+  const { draftDataHash, changed } = await applyDraftData(caller, tender, template, input, currentPublicBrief(template, tender.params));
+  return { ok: true, draftDataHash, changed };
+});
+
+/**
+ * Rebuild a draft's data from the asked values + edits (same checks as creation) and save it. Any change
+ * gives a new fingerprint, so earlier inspector checks become stale.
+ */
+async function applyDraftData(
+  caller: Caller,
+  tender: TenderDoc,
+  template: TemplateDoc,
+  input: UpdateTenderDraftInput,
+  publicBrief: string | undefined,
+): Promise<{ draftDataHash: string; changed: string[] }> {
 
   const submissionDeadline =
     input.submissionDeadline !== undefined ? input.submissionDeadline : tender.submissionDeadline;
@@ -803,6 +836,7 @@ export const updateTenderDraft = onCall(async (req) => {
   const { publicParams, internalParams } = buildCaseParams(template, asked, {
     serial: tender.serial ?? '',
     request: bidReq,
+    publicBrief,
     submissionDeadline,
     owner,
     requester: requester ?? undefined,
@@ -854,8 +888,8 @@ export const updateTenderDraft = onCall(async (req) => {
     newState: `${changed.length} fields`,
     detail: changed.slice(0, 20).join(', ') || undefined,
   });
-  return { ok: true, draftDataHash, changed };
-});
+  return { draftDataHash, changed };
+}
 
 // Draft-first: create the case's document — manager only, and only when the latest inspector check
 // covered exactly the current draft data with no blocking finding (no override).
@@ -932,6 +966,49 @@ export const generateDocument = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 
   await refreshCaseScore(SYSTEM, tender.id);
   return { ok: true, googleDocId: gen.googleDocId, docsSkipped: skipped };
 });
+
+// A draft whose document was created but not yet sent to review can be regenerated (e.g. after a fix to
+// how values are filled): the data is rebuilt — the public service description rewritten afresh — and the
+// case goes back to draft-first: the inspector checks it again before a new document is created. The old
+// document is kept and listed, never deleted (edits made in it are not carried over).
+export const regenerateDocument = onCall(
+  { secrets: ['ANTHROPIC_API_KEY'], timeoutSeconds: 120 },
+  async (req) => {
+    const caller = requireManager(req);
+    const input = parseInput(generateDocumentInput, req.data);
+    const tender = await tendersRepo.get(input.tenderId);
+    if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+    if (!hasDocument(tender)) throw new HttpsError('failed-precondition', 'למכרז עדיין אין מסמך.');
+    if (tender.status !== 'draft') {
+      throw new HttpsError('failed-precondition', 'ניתן ליצור מסמך מחדש רק לפני שליחה לבדיקה פנימית.');
+    }
+    const template = await templatesRepo.getForCase(tender.type);
+    if (!template) throw new HttpsError('failed-precondition', `אין תבנית לסוג המכרז: ${tender.type}`);
+    const bidReq = tender.serial ? await bidRequestsRepo.get(tender.serial) : null;
+    const publicBrief =
+      needsPublicBrief(template) && bidReq ? (await publicServiceSummary(bidReq.brief)).summary : currentPublicBrief(template, tender.params);
+    const { draftDataHash } = await applyDraftData(caller, tender, template, { tenderId: tender.id }, publicBrief);
+    const old = tender.googleDocId ?? tender.docExportPath;
+    await tendersRepo.update(tender.id, {
+      documentStatus: 'none',
+      googleDocId: null,
+      docExportPath: null,
+      replacedDocuments: [...(tender.replacedDocuments ?? []), ...(old ? [old] : [])],
+    });
+    await auditRepo.append({
+      entityType: 'tender',
+      entityId: tender.id,
+      tenderId: tender.id,
+      actorUid: caller.uid,
+      actorName: caller.name,
+      action: 'document_reset',
+      prevState: old,
+      newState: 'draft',
+      detail: 'המסמך יווצר מחדש לאחר בדיקת הסוכן המפקח',
+    });
+    return { ok: true, draftDataHash };
+  },
+);
 
 export const transitionTender = onCall(SUPERVISED, async (req) => {
   const caller = requireManager(req);

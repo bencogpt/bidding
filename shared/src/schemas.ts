@@ -141,6 +141,7 @@ export type TenderDoc = z.infer<typeof tenderDocSchema> & {
   documentStatus?: DocumentStatus;
   documentGeneratedAt?: number;
   documentGeneratedBy?: string;
+  replacedDocuments?: string[]; // earlier documents of a draft, kept (not deleted) when it was regenerated
   draftDataHash?: string; // fingerprint of the current draft data (compared with the last check)
 };
 

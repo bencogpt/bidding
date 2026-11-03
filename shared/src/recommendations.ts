@@ -100,3 +100,37 @@ export function replaceChosen(chosen: readonly string[], from: string, to: strin
   out[i] = to;
   return out;
 }
+
+// Headings composeRequestBrief and the request agent add after the requester's own description. What
+// follows them is internal working text (clarifications, chosen recommendations, notes).
+export const BRIEF_INTERNAL_HEADINGS = ['הבהרות מהדורש:', 'המלצות שנבחרו:', 'הערות נוספות:'] as const;
+
+/** The request split into the requester's own description and its internal sections. */
+export function splitRequestBrief(brief: string): { description: string; sections: Record<string, string[]> } {
+  const sections: Record<string, string[]> = {};
+  let current: string | null = null;
+  const desc: string[] = [];
+  for (const raw of brief.split('\n')) {
+    const line = raw.trim();
+    const heading = BRIEF_INTERNAL_HEADINGS.find((h) => line === h);
+    if (heading) {
+      current = heading;
+      sections[current] ??= [];
+    } else if (current) {
+      if (line) sections[current].push(line.replace(/^[-•]\s*/, ''));
+    } else {
+      desc.push(raw);
+    }
+  }
+  return { description: desc.join('\n').trim(), sections };
+}
+
+/**
+ * Without AI: the text suppliers may see — the requester's own description plus the clarifications they
+ * stated as requirements. Chosen recommendations and notes are internal advice and stay out.
+ */
+export function fallbackPublicSummary(brief: string): string {
+  const { description, sections } = splitRequestBrief(brief);
+  const reqs = sections['הבהרות מהדורש:'] ?? [];
+  return [description, ...reqs].filter(Boolean).join('\n');
+}
