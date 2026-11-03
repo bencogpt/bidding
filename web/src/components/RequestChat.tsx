@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { BRIEF_MAX_LENGTH, SCOPE_PAGE_CHARS, pageCount, type AskKey } from '@obms/shared';
+import { BRIEF_MAX_LENGTH, SCOPE_PAGE_CHARS, pageCount } from '@obms/shared';
 import type { ChatMsg } from '../lib/useRequestAgent';
 import BigEditor from './BigEditor';
 
@@ -21,7 +21,7 @@ export default function RequestChat({
   chips: string[];
   typing: boolean;
   disabled: boolean;
-  asking: AskKey | null;
+  asking: string | null;
   onSay: (text: string) => void;
 }) {
   const { t } = useTranslation();

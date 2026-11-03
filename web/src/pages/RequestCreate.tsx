@@ -44,7 +44,9 @@ export default function RequestCreate() {
   // The extra questions are asked only by the agent. In text mode the main button continues to the agent while it
   // still has something to ask; phase ב opens when the five details are there and the agent is done.
   const textMode = a.mode === 'free';
-  const goAgent = textMode && a.needsMore;
+  // The frame amount is asked by the agent too, so a missing amount also sends text mode on to the chat.
+  const budgetMissing = rows.some((r) => r.key === 'annual_budget' && !r.present);
+  const goAgent = textMode && (a.needsMore || budgetMissing);
   const agentDone = a.asking !== null && !needsAgent(a.asking);
   const ready = missing === 0 && (textMode ? !a.needsMore : agentDone || !!a.error);
   const agentView = useMemo(
