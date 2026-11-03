@@ -5,6 +5,8 @@ import type {
   CreateBidRequestInput,
   AssistRequestInput,
   AssistRequestResult,
+  RecommendationsInput,
+  RecommendationsResult,
   GrantAccessInput,
   AskQuestionInput,
   AnswerQuestionsInput,
@@ -67,6 +69,7 @@ const call = <I, O>(name: string) => {
 export const api = {
   createBidRequest: call<CreateBidRequestInput, { serial: string; duplicate: boolean }>('createBidRequest'),
   assistRequest: call<AssistRequestInput, AssistRequestResult>('assistRequest'),
+  requestRecommendations: call<RecommendationsInput, RecommendationsResult>('requestRecommendations'),
   createTender: call<
     CreateTenderInput,
     {

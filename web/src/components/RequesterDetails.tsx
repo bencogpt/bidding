@@ -8,7 +8,7 @@ export default function RequesterDetails({ details }: { details?: Partial<Detail
   const rows = REQUESTER_FIELDS.filter((f) => String(details?.[f.key] ?? '').trim() !== '');
   if (!rows.length) return null;
   return (
-    <div className="card mb-5 space-y-2 p-4">
+    <div className="space-y-2 rounded-lg border border-black/5 p-4">
       <h2 className="font-semibold">{t('create.requesterDetails')}</h2>
       <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[auto_1fr]">
         {rows.map((f) => (

@@ -12,3 +12,4 @@ export * from './draft.js';
 export * from './fieldLabels.js';
 export * from './requesterFields.js';
 export * from './requestAgent.js';
+export * from './recommendations.js';

@@ -11,6 +11,7 @@ import {
   scopeOk,
   requestChecklist,
   agentDetailsFromFields,
+  needsAgent,
   QUALITY_QUESTIONS,
   type AssistRequestInput,
 } from '@obms/shared';
@@ -98,10 +99,13 @@ test('scriptTurn asks the missing details in order, one per turn, then the quali
   const t3 = scriptTurn(base({ details: all }));
   assert.equal(t3.asking, 'scope');
   const t4 = scriptTurn(base({ details: all, brief: LONG }));
-  assert.equal(t4.asking, 'quality');
+  assert.equal(t4.asking, 'service_location', 'after the mandatory details come the optional questions');
   assert.equal(t4.ready, true);
-  assert.ok(t4.message.includes(QUALITY_QUESTIONS[0].q));
-  const t5 = scriptTurn(base({ details: all, brief: LONG, qualityAsked: 3 }));
+  const allOptional = { ...all, service_location: 'חיפה', provider_responsibilities: 'פיתוח', team_lead_role: 'מנהל', min_pool_candidates: 5, service_providers_total: 12, supplier_equipment: 'מחשב', work_hours: 'משרה מלאה' };
+  const t4b = scriptTurn(base({ details: allOptional, brief: LONG }));
+  assert.equal(t4b.asking, 'quality');
+  assert.ok(t4b.message.includes(QUALITY_QUESTIONS[0].q));
+  const t5 = scriptTurn(base({ details: allOptional, brief: LONG, qualityAsked: 3 }));
   assert.equal(t5.asking, 'done');
   assert.deepEqual(t5.chips, []);
 });
@@ -152,4 +156,62 @@ test('agentDetailsFromFields sends only what the person typed or what is valid; 
   });
   assert.deepEqual(agentDetailsFromFields({ ...f, contract_years: '1.5', service_name: 'a {{b}}' }, new Set()), {});
   assert.ok(!('annual_budget' in agentDetailsFromFields(f, new Set(['annual_budget']))), 'the budget is never part of it');
+});
+
+test('the agent knows the seven optional answers: schema, extraction, sanitiser and panel text', () => {
+  const ok = { service_location: 'חיפה', provider_responsibilities: 'פיתוח', team_lead_role: 'מנהל צוות', min_pool_candidates: 5, service_providers_total: 12, supplier_equipment: 'מחשב', work_hours: 'משרה מלאה' };
+  assert.ok(assistRequestInput.safeParse(base({ details: ok })).success);
+  for (const bad of [{ min_pool_candidates: 0 }, { service_providers_total: 1.5 }, { service_location: 'a {{b}}' }, { work_hours: 'x'.repeat(201) }, { annual_budget: 1 }]) {
+    assert.equal(assistRequestInput.safeParse(base({ details: bad as never })).success, false, JSON.stringify(bad));
+  }
+  assert.deepEqual(
+    scriptExtract('צוות של 12 נותני שירות. מקום אספקת השירות: חיפה, היקף משרה: משרה מלאה, לפחות 5 מועמדים'),
+    { service_providers_total: 12, service_location: 'חיפה', work_hours: 'משרה מלאה', min_pool_candidates: 5 },
+  );
+  const clean = sanitizeModelOutput({ details: { service_location: ' חיפה ', service_providers_total: 12.5, min_pool_candidates: 7, team_lead_role: 'x {{y}}', work_hours: 'ש'.repeat(500), annual_budget: 9 } });
+  assert.deepEqual(clean.details, { service_location: 'חיפה', min_pool_candidates: 7, work_hours: 'ש'.repeat(200) });
+  assert.deepEqual(
+    agentDetailsFromFields({ service_name: '', document_classification: 'בלמ"ס', annual_budget: '5', contract_years: '', service_location: ' חיפה ', service_providers_total: '12', min_pool_candidates: 'x', work_hours: '', supplier_equipment: 'מחשב', team_lead_role: '', provider_responsibilities: '' }, new Set()),
+    { service_location: 'חיפה', service_providers_total: 12, supplier_equipment: 'מחשב' },
+  );
+});
+
+test('the chat asks all seven optional questions once each, skippable, never repeats one, and then moves on', () => {
+  const all = { service_name: 'תמיכה', document_classification: 'בלמ"ס', contract_years: 3 };
+  const history: AssistRequestInput['history'] = [];
+  const asked: string[] = [];
+  let r = scriptTurn(base({ details: all, brief: LONG, history }));
+  assert.ok(r.message.includes('קיבלתי את כל מה שצריך'), 'the intro is said once, at the first extra question');
+  for (let i = 0; i < 12 && r.asking !== 'quality' && r.asking !== 'done'; i++) {
+    asked.push(r.asking);
+    assert.ok(r.chips.includes('דלג'), `${r.asking} can be skipped`);
+    history.push({ role: 'agent', text: r.message }, { role: 'user', text: 'דלג' });
+    r = scriptTurn(base({ details: all, brief: LONG, history: [...history] }));
+    if (i > 0) assert.ok(!r.message.includes('קיבלתי את כל מה שצריך'), 'the intro is not repeated');
+  }
+  // the provider count was found in the text, so it is not asked; all the others are, in the form's order
+  assert.deepEqual(asked, ['service_location', 'provider_responsibilities', 'team_lead_role', 'min_pool_candidates', 'supplier_equipment', 'work_hours']);
+  assert.equal(r.asking, 'quality');
+  assert.equal(r.ready, true);
+});
+
+test('answers to the optional questions fill their fields', () => {
+  const all = { service_name: 'תמיכה', document_classification: 'בלמ"ס', contract_years: 3 };
+  const ask = (question: string, reply: string) =>
+    scriptTurn(base({ details: all, brief: LONG, history: [{ role: 'agent', text: question }, { role: 'user', text: reply }] })).details;
+  assert.equal(ask('מה מקום אספקת השירות?', 'תל אביב').service_location, 'תל אביב');
+  assert.equal(ask('מה תחומי האחריות של נותני השירות?', 'פיתוח ובדיקות').provider_responsibilities, 'פיתוח ובדיקות');
+  assert.equal(ask('מה תפקיד ראש הצוות?', 'מנהל פרויקט').team_lead_role, 'מנהל פרויקט');
+  assert.equal(ask('מה מספר המועמדים המינימלי למאגר?', 'לפחות 5').min_pool_candidates, 5);
+  assert.equal(ask('איזה ציוד הספק מספק לנותני השירות?', 'מחשב נייד').supplier_equipment, 'מחשב נייד');
+  assert.equal(ask('כמה נותני שירות נדרשים?', '8').service_providers_total, 8);
+  assert.equal(ask('מה היקף המשרה, והאם נדרשות גם שעות כוננות?', 'משרה מלאה + כוננות').work_hours, 'משרה מלאה + כוננות');
+});
+
+test('needsAgent: the text is not enough while the agent still has data to ask for', () => {
+  for (const k of ['service_name', 'document_classification', 'scope', 'contract_years', 'service_location', 'provider_responsibilities', 'team_lead_role', 'min_pool_candidates', 'service_providers_total', 'supplier_equipment', 'work_hours'] as const) {
+    assert.equal(needsAgent(k), true, k);
+  }
+  assert.equal(needsAgent('quality'), false);
+  assert.equal(needsAgent('done'), false);
 });

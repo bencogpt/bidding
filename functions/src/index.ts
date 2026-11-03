@@ -5,6 +5,7 @@ import {
   createTenderInput,
   createBidRequestInput,
   assistRequestInput,
+  recommendationsInput,
   grantAccessInput,
   askQuestionInput,
   answerQuestionsInput,
@@ -131,6 +132,7 @@ import {
   getClient,
 } from './services/aiService.js';
 import { requestAgentTurn } from './services/requestAgent.js';
+import { recommendationsFor } from './services/requestRecommendations.js';
 import { findCandidates } from './services/supplierSearch.js';
 import { requiredSkillsFor, skillsCatalog } from './services/skillsRegistry.js';
 import {
@@ -488,6 +490,15 @@ export const assistRequest = onCall({ secrets: ['ANTHROPIC_API_KEY'], timeoutSec
   const input = parseInput(assistRequestInput, req.data);
   const allowed = await agentUsageRepo.take(caller.uid, AGENT_CALLS_PER_HOUR, 3_600_000, Date.now());
   return requestAgentTurn(input, allowed ? getClient() : null);
+});
+
+// Notes and ideas that sharpen a request before it is sent to procurement ("המלצות לשיפור ודיוק"). Counts against
+// the same hourly limit as the request agent; over it, the fixed suggestions are returned instead of an error.
+export const requestRecommendations = onCall({ secrets: ['ANTHROPIC_API_KEY'], timeoutSeconds: 90 }, async (req) => {
+  const caller = requireRole(req, 'requester', 'tender_manager');
+  const input = parseInput(recommendationsInput, req.data);
+  const allowed = await agentUsageRepo.take(caller.uid, AGENT_CALLS_PER_HOUR, 3_600_000, Date.now());
+  return recommendationsFor(input, allowed ? getClient() : null);
 });
 
 // ---- Tenders ----
