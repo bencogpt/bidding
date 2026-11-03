@@ -121,7 +121,9 @@ export default function RequestCreate() {
             <RequestChat chat={a.chat} chips={a.chips} typing={a.typing} disabled={a.asking === 'done'} onSay={a.say} />
           )}
 
-          {a.mode === 'chat' && (a.asking === 'quality' || a.asking === 'done') && (
+          {a.mode === 'chat' &&
+            a.asking !== null &&
+            !['service_name', 'document_classification', 'scope', 'contract_years'].includes(a.asking) && (
             <div
               className={
                 'flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3 text-sm ' +

@@ -60,14 +60,16 @@ export function useRequestAgent() {
     if (fromChat && d.document_classification && !touched.current.has('document_classification')) {
       answered.current.add('document_classification');
     }
-    setFields((f) => ({
-      ...f,
-      ...(d.service_name && !touched.current.has('service_name') ? { service_name: d.service_name } : {}),
-      ...(d.document_classification && !touched.current.has('document_classification')
-        ? { document_classification: d.document_classification }
-        : {}),
-      ...(d.contract_years && !touched.current.has('contract_years') ? { contract_years: String(d.contract_years) } : {}),
-    }));
+    // Every detected value fills its box unless the person typed in it.
+    setFields((f) => {
+      const next = { ...f };
+      for (const [k, v] of Object.entries(d)) {
+        if (v !== undefined && k in f && !touched.current.has(k as keyof Fields)) {
+          next[k as keyof Fields] = String(v);
+        }
+      }
+      return next;
+    });
   }, []);
 
   const setField = (k: keyof Fields, v: string) => {

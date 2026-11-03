@@ -98,10 +98,13 @@ test('scriptTurn asks the missing details in order, one per turn, then the quali
   const t3 = scriptTurn(base({ details: all }));
   assert.equal(t3.asking, 'scope');
   const t4 = scriptTurn(base({ details: all, brief: LONG }));
-  assert.equal(t4.asking, 'quality');
+  assert.equal(t4.asking, 'service_location', 'after the mandatory details come the optional questions');
   assert.equal(t4.ready, true);
-  assert.ok(t4.message.includes(QUALITY_QUESTIONS[0].q));
-  const t5 = scriptTurn(base({ details: all, brief: LONG, qualityAsked: 3 }));
+  const allOptional = { ...all, service_location: 'חיפה', service_providers_total: 12, work_hours: 'משרה מלאה' };
+  const t4b = scriptTurn(base({ details: allOptional, brief: LONG }));
+  assert.equal(t4b.asking, 'quality');
+  assert.ok(t4b.message.includes(QUALITY_QUESTIONS[0].q));
+  const t5 = scriptTurn(base({ details: allOptional, brief: LONG, qualityAsked: 3 }));
   assert.equal(t5.asking, 'done');
   assert.deepEqual(t5.chips, []);
 });
@@ -152,4 +155,44 @@ test('agentDetailsFromFields sends only what the person typed or what is valid; 
   });
   assert.deepEqual(agentDetailsFromFields({ ...f, contract_years: '1.5', service_name: 'a {{b}}' }, new Set()), {});
   assert.ok(!('annual_budget' in agentDetailsFromFields(f, new Set(['annual_budget']))), 'the budget is never part of it');
+});
+
+test('the agent knows the seven optional answers: schema, extraction, sanitiser and panel text', () => {
+  const ok = { service_location: 'חיפה', provider_responsibilities: 'פיתוח', team_lead_role: 'מנהל צוות', min_pool_candidates: 5, service_providers_total: 12, supplier_equipment: 'מחשב', work_hours: 'משרה מלאה' };
+  assert.ok(assistRequestInput.safeParse(base({ details: ok })).success);
+  for (const bad of [{ min_pool_candidates: 0 }, { service_providers_total: 1.5 }, { service_location: 'a {{b}}' }, { work_hours: 'x'.repeat(201) }, { annual_budget: 1 }]) {
+    assert.equal(assistRequestInput.safeParse(base({ details: bad as never })).success, false, JSON.stringify(bad));
+  }
+  assert.deepEqual(
+    scriptExtract('צוות של 12 נותני שירות. מקום אספקת השירות: חיפה, היקף משרה: משרה מלאה, לפחות 5 מועמדים'),
+    { service_providers_total: 12, service_location: 'חיפה', work_hours: 'משרה מלאה', min_pool_candidates: 5 },
+  );
+  const clean = sanitizeModelOutput({ details: { service_location: ' חיפה ', service_providers_total: 12.5, min_pool_candidates: 7, team_lead_role: 'x {{y}}', work_hours: 'ש'.repeat(500), annual_budget: 9 } });
+  assert.deepEqual(clean.details, { service_location: 'חיפה', min_pool_candidates: 7, work_hours: 'ש'.repeat(200) });
+  assert.deepEqual(
+    agentDetailsFromFields({ service_name: '', document_classification: 'בלמ"ס', annual_budget: '5', contract_years: '', service_location: ' חיפה ', service_providers_total: '12', min_pool_candidates: 'x', work_hours: '', supplier_equipment: 'מחשב', team_lead_role: '', provider_responsibilities: '' }, new Set()),
+    { service_location: 'חיפה', service_providers_total: 12, supplier_equipment: 'מחשב' },
+  );
+});
+
+test('the chat asks the three optional questions once each, skippable, and does not repeat a skipped one', () => {
+  const all = { service_name: 'תמיכה', document_classification: 'בלמ"ס', contract_years: 3 };
+  const a1 = scriptTurn(base({ details: all, brief: LONG }));
+  assert.equal(a1.asking, 'service_location');
+  assert.ok(a1.message.includes('קיבלתי את כל מה שצריך'), 'the intro is said once, at the first extra question');
+  assert.ok(a1.chips.includes('דלג'));
+  // skipping the location moves on to the provider count (it was found in the text, so this goes on to hours)
+  const h1 = [{ role: 'agent' as const, text: a1.message }, { role: 'user' as const, text: 'דלג' }];
+  const a2 = scriptTurn(base({ details: all, brief: LONG, history: h1 }));
+  assert.equal(a2.asking, 'work_hours', 'the provider count came from the text; the location was skipped');
+  assert.ok(!a2.message.includes('קיבלתי את כל מה שצריך'), 'the intro is not repeated');
+  // answering the hours question fills it
+  const h2 = [...h1, { role: 'agent' as const, text: a2.message }, { role: 'user' as const, text: 'משרה מלאה + כוננות' }];
+  const a3 = scriptTurn(base({ details: all, brief: LONG, history: h2 }));
+  assert.equal(a3.details.work_hours, 'משרה מלאה + כוננות');
+  assert.equal(a3.asking, 'quality');
+  assert.equal(a3.ready, true);
+  // an answer to the location question fills it
+  const withAnswer = scriptTurn(base({ details: all, brief: LONG, history: [{ role: 'agent', text: a1.message }, { role: 'user', text: 'תל אביב' }] }));
+  assert.equal(withAnswer.details.service_location, 'תל אביב');
 });
