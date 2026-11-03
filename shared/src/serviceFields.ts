@@ -2,7 +2,7 @@
 // createTender on the server and by the create form for the guarantee default.
 import type { SystemFill, TemplateParam } from './templates.js';
 import { addDaysToWorkingDay, formatIsraelDate } from './israelCalendar.js';
-import { GUARANTEE_AMOUNT_NAMES, OPTION_KEYS, isOmittedParam, procurementRuleFor, ruleNamed } from './procurementForm.js';
+import { GUARANTEE_AMOUNT_NAMES, OPTION_KEYS, OPTION_MONTHS_PER_PERIOD, isOmittedParam, procurementRuleFor, ruleNamed } from './procurementForm.js';
 
 /** Keys of the services template that the formulas read. */
 export const SERVICE_KEYS = {
@@ -114,6 +114,7 @@ export interface FillContext {
   submissionDeadline: number | null;
   annualEstimate?: number; // the requester's annual estimate (confidential except where a rule publishes it)
   contractYears?: number; // the requester's contract length in years
+  optionPeriods?: number; // the requester's number of option periods
   requestBrief?: string; // the requester's description of the service
   serial?: string; // the case's bid number
   manager?: { displayName: string; email: string; phone?: string };
@@ -199,6 +200,10 @@ function formulaValue(
       return ctx.serial || undefined;
     case 'request_brief':
       return ctx.requestBrief?.trim() || undefined;
+    case 'option_months_total': {
+      const n = num(ctx.optionPeriods);
+      return Number.isInteger(n) && n > 0 ? n * OPTION_MONTHS_PER_PERIOD : undefined;
+    }
     case 'option_total_months':
       return (
         optionTotalMonths(ctx.contractYears, values[OPTION_KEYS.count], values[OPTION_KEYS.months]) ?? undefined

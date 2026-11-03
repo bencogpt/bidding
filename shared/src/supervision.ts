@@ -69,7 +69,8 @@ export const MANDATORY_LEGAL_SECTIONS = [
   { id: 'confidentiality', nameHe: 'סודיות', pattern: /סודיות/ },
   { id: 'ip', nameHe: 'קניין רוחני', pattern: /קני[י]?ן\s*ה?רוחני/ },
   { id: 'liability', nameHe: 'אחריות ושיפוי', pattern: /שיפוי/ },
-  { id: 'thresholds', nameHe: 'תנאי סף', pattern: /^ה?תנאי\s*ה?סף/ },
+  // The organisation's documents call it "תנאים מוקדמים להגשת הצעה".
+  { id: 'thresholds', nameHe: 'תנאי סף', pattern: /^ה?תנאי\s*ה?סף|תנאים\s+מוקדמים/ },
   { id: 'termination', nameHe: 'ביטול/סיום התקשרות', pattern: /ביטול|סיום\s*ה?התקשרות/ },
   { id: 'agreedDamages', nameHe: 'פיצויים מוסכמים', pattern: /פיצויים\s+מוסכמים/ },
   { id: 'submission', nameHe: 'אופן הגשת ההצעה', pattern: /אופן\s+ה?הגשה|הגשת\s+ה?הצע/ },
@@ -199,6 +200,7 @@ export interface SupervisionFinding {
   message: string; // Hebrew
   evidence?: string; // verbatim quote from the document / record
   source: 'rules' | 'ai';
+  hard?: boolean; // a hard fact that keeps blocking (see applySeverityPolicy)
 }
 
 export interface SupervisionReport {
@@ -240,6 +242,17 @@ export interface SupervisionSummary {
   at: number;
   basis?: 'draft' | 'document';
   dataHash?: string | null;
+}
+
+/**
+ * Only hard facts block: a leftover {{placeholder}} or internal flag, a confidential-value leak, the wrong
+ * template, an unreadable document — each marked `hard` by the rule that found it. Every other blocking
+ * finding (AI review, legal sections, unsourced values, …) becomes a warning: the manager decides.
+ */
+export function applySeverityPolicy<F extends Pick<SupervisionFinding, 'severity' | 'hard' | 'source'>>(findings: F[]): F[] {
+  return findings.map((f) =>
+    f.severity === 'block' && !(f.hard && f.source === 'rules') ? { ...f, severity: 'warn' as const } : f,
+  );
 }
 
 export function verdictOf(findings: Pick<SupervisionFinding, 'severity'>[]): SupervisionVerdict {

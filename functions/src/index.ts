@@ -408,6 +408,7 @@ function buildCaseParams(
     submissionDeadline: ctx.submissionDeadline,
     annualEstimate: Number.isFinite(annual) && annual > 0 ? annual : undefined,
     contractYears: Number.isInteger(years) && years > 0 ? years : undefined,
+    optionPeriods: Number.isInteger(Number(details.option_periods_count)) ? Number(details.option_periods_count) : undefined,
     requestBrief: ctx.request?.brief,
     serial: ctx.serial,
     manager: ctx.owner
