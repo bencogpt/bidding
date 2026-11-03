@@ -1,13 +1,18 @@
-import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import InternalUsers from './InternalUsers';
+import Templates from './Templates';
 
-// Tabs of the settings screen; more (permissions per role, templates) follow the prototype.
-const TABS = [{ key: 'users', label: 'users.title', Panel: InternalUsers }];
+// Tabs of the settings screen; the permissions-per-role tab of the prototype is not built yet.
+const TABS = [
+  { key: 'users', label: 'users.title', Panel: InternalUsers },
+  { key: 'templates', label: 'nav.templates', Panel: Templates },
+];
 
 export default function Settings() {
   const { t } = useTranslation();
-  const [tab, setTab] = useState(TABS[0].key);
+  const [params, setParams] = useSearchParams();
+  const tab = params.get('tab') ?? TABS[0].key;
   const { Panel } = TABS.find((x) => x.key === tab) ?? TABS[0];
 
   return (
@@ -18,7 +23,7 @@ export default function Settings() {
         {TABS.map((x) => (
           <button
             key={x.key}
-            onClick={() => setTab(x.key)}
+            onClick={() => setParams({ tab: x.key }, { replace: true })}
             className={`-mb-px border-b-2 px-4 py-2 text-sm transition ${
               tab === x.key
                 ? 'border-accent font-semibold text-accent'

@@ -22,9 +22,11 @@ export default function ChatPanel({
   tenderId,
   title,
   messages,
+  onClose,
 }: {
   tenderId: string;
   title: string;
+  onClose: () => void;
   messages: (ChatMessage & { at: number })[];
 }) {
   const { t } = useTranslation();
@@ -67,11 +69,27 @@ export default function ChatPanel({
   };
 
   return (
-    <div className="card flex h-[60vh] flex-col p-5">
-      <h3 className="border-b border-paper-2 pb-3 font-display text-xl font-semibold" title={t('chat.hint')}>
-        {title}
-      </h3>
-      <div className="flex-1 space-y-4 overflow-y-auto py-4 pe-1">
+    <div className="flex h-full flex-col">
+      <div
+        className="flex items-start justify-between gap-3 rounded-t-lg border-b border-paper-2 bg-accent-soft px-5 py-3"
+        title={t('chat.hint')}
+      >
+        <div className="min-w-0">
+          <h3 className="font-display text-lg font-semibold">{t('chat.title')}</h3>
+          <div className="truncate text-xs text-tx-soft">{title}</div>
+        </div>
+        <button
+          className="grid h-7 w-7 shrink-0 place-items-center rounded text-tx-soft hover:bg-white/60"
+          onClick={onClose}
+          title={t('chat.close')}
+          aria-label={t('chat.close')}
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+            <path d="M2 7h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
+        </button>
+      </div>
+      <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
         {messages.length === 0 && <div className="text-sm text-tx-mute">{t('chat.empty')}</div>}
         {messages.map((m) => {
           const mine = m.uid === user?.uid;
@@ -101,8 +119,8 @@ export default function ChatPanel({
         })}
         <div ref={bottom} />
       </div>
-      {error && <div className="mb-2 text-sm text-red-600">{error}</div>}
-      <div className="flex items-center gap-2">
+      {error && <div className="px-5 pb-2 text-sm text-red-600">{error}</div>}
+      <div className="flex items-center gap-2 border-t border-paper-2 px-4 py-3">
         <button
           className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-accent text-white hover:bg-accent-hover disabled:opacity-50"
           disabled={sending || !text.trim()}

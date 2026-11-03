@@ -13,7 +13,6 @@ import TenderCreate from './pages/TenderCreate';
 import RequestCreate from './pages/RequestCreate';
 import TenderWorkspace from './pages/TenderWorkspace';
 import Suppliers from './pages/Suppliers';
-import Templates from './pages/Templates';
 import Reports from './pages/Reports';
 import Audit from './pages/Audit';
 import SupplierPortal from './pages/SupplierPortal';
@@ -55,7 +54,7 @@ export default function App() {
         />
         <Route path="/requests/:serial" element={managerOnly(<TenderCreate />)} />
         <Route path="/tenders/:id" element={<TenderWorkspace />} />
-        <Route path="/templates" element={managerOnly(<Templates />)} />
+        <Route path="/templates" element={<Navigate to="/settings?tab=templates" replace />} />
         <Route path="/settings" element={managerOnly(<Settings />)} />
         <Route path="/users" element={<Navigate to="/settings" replace />} />
         <Route path="/suppliers" element={<Suppliers />} />
