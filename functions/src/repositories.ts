@@ -30,6 +30,7 @@ import type {
   ConversionRun,
   BidRequestDoc,
   RequestResearch,
+  ResearchDraft,
   ResearchSummary,
 } from '@obms/shared';
 
@@ -184,11 +185,26 @@ export const researchRepo = {
   },
 };
 
+// ---- research run before its request existed (Admin SDK only; clients never read it) ----
+export const researchDraftsRepo = {
+  newId(): string {
+    return db.collection('researchDrafts').doc().id;
+  },
+  async save(r: ResearchDraft): Promise<void> {
+    await db.collection('researchDrafts').doc(r.runId).set(JSON.parse(JSON.stringify(r)));
+  },
+  async get(runId: string): Promise<ResearchDraft | null> {
+    const s = await db.collection('researchDrafts').doc(runId).get();
+    return s.exists ? (s.data() as ResearchDraft) : null;
+  },
+};
+
 // ---- per-user call counter for the request agent (one document per user; the Admin SDK only) ----
 export const agentUsageRepo = {
   /** Count one call; false (nothing counted) when the user is over the limit for the current window. */
-  async take(uid: string, limit: number, windowMs: number, nowMs: number): Promise<boolean> {
-    const ref = db.collection('agentUsage').doc(uid);
+  async take(uid: string, limit: number, windowMs: number, nowMs: number, bucket?: string): Promise<boolean> {
+    // A separate bucket (e.g. the costlier web research) has its own window.
+    const ref = db.collection('agentUsage').doc(bucket ? `${uid}__${bucket}` : uid);
     return db.runTransaction(async (tx) => {
       const prev = (await tx.get(ref)).data() as UsageWindow | undefined;
       const { allowed, next } = nextUsage(prev, nowMs, limit, windowMs);

@@ -23,6 +23,7 @@ export const agentDetailsSchema = z
     service_providers_total: z.number().int().min(1).max(100000).optional(),
     supplier_equipment: z.string().trim().min(1).max(1000).refine(noPlaceholder).optional(),
     work_hours: z.string().trim().min(1).max(200).refine(noPlaceholder).optional(),
+    option_periods_count: z.number().int().min(1).max(10).optional(),
   })
   .strict();
 export type AgentDetails = z.infer<typeof agentDetailsSchema>;
@@ -47,7 +48,8 @@ export type OptionalAskKey =
   | 'min_pool_candidates'
   | 'service_providers_total'
   | 'supplier_equipment'
-  | 'work_hours';
+  | 'work_hours'
+  | 'option_periods_count';
 export type AskKey =
   | 'service_name'
   | 'document_classification'
@@ -68,6 +70,7 @@ const ASK_KEYS: readonly AskKey[] = [
   'service_providers_total',
   'supplier_equipment',
   'work_hours',
+  'option_periods_count',
   'quality',
   'done',
 ];
@@ -101,6 +104,7 @@ const OPTIONAL_ORDER: readonly OptionalAskKey[] = [
   'service_providers_total',
   'supplier_equipment',
   'work_hours',
+  'option_periods_count',
 ];
 export const OPTIONAL_QUESTIONS: Record<OptionalAskKey, { q: string; chips: string[] }> = {
   service_location: { q: 'מה מקום אספקת השירות?', chips: ['דלג'] },
@@ -110,6 +114,7 @@ export const OPTIONAL_QUESTIONS: Record<OptionalAskKey, { q: string; chips: stri
   service_providers_total: { q: 'כמה נותני שירות נדרשים?', chips: ['דלג'] },
   supplier_equipment: { q: 'איזה ציוד הספק מספק לנותני השירות?', chips: ['דלג'] },
   work_hours: { q: 'מה היקף המשרה, והאם נדרשות גם שעות כוננות?', chips: ['משרה מלאה', 'משרה מלאה + כוננות', 'דלג'] },
+  option_periods_count: { q: 'כמה תקופות אופציה (הארכה) נדרשות?', chips: ['1', '2', '3', '4', 'דלג'] },
 };
 
 export const QUALITY_QUESTIONS: readonly { q: string; chips: string[] }[] = [
@@ -155,7 +160,8 @@ const OPTIONAL_TEXT = {
   supplier_equipment: 1000,
   work_hours: 200,
 } as const;
-const OPTIONAL_INT = ['min_pool_candidates', 'service_providers_total'] as const;
+const OPTIONAL_INT = ['min_pool_candidates', 'service_providers_total', 'option_periods_count'] as const;
+const INT_MAX: Partial<Record<string, number>> = { option_periods_count: 10 };
 const intIn = (v: unknown): number | undefined => {
   const n = typeof v === 'string' && v.trim() === '' ? NaN : Number(v);
   return Number.isInteger(n) && n >= 1 && n <= 100000 ? n : undefined;
@@ -170,7 +176,7 @@ function optionalFrom(src: Record<string, unknown>): AgentDetails {
   }
   for (const k of OPTIONAL_INT) {
     const n = intIn(src[k]);
-    if (n !== undefined) out[k] = n;
+    if (n !== undefined && n <= (INT_MAX[k] ?? 100000)) out[k] = n;
   }
   return out as AgentDetails;
 }
@@ -279,7 +285,7 @@ function applyAnswer(
   const t = text.trim();
   if (!t || t === 'דלג') return {};
   if (key in OPTIONAL_TEXT) return optionalFrom({ [key]: t });
-  if (key === 'min_pool_candidates' || key === 'service_providers_total') {
+  if (key === 'min_pool_candidates' || key === 'service_providers_total' || key === 'option_periods_count') {
     return optionalFrom({ [key]: t.match(/[0-9]{1,6}/)?.[0] });
   }
   if (key === 'service_name') {

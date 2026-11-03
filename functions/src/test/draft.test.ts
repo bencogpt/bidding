@@ -2,7 +2,7 @@
 //   node --test functions/lib/test/draft.test.js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { hasDocument, type ResearchSource } from '@obms/shared';
+import { briefWithDetails, hasDocument, researchDraftInput, type ResearchSource } from '@obms/shared';
 import { documentGate, draftDataHash } from '../services/draftCalc.js';
 import { collectSources, groundResearch, unsafeQueryReason } from '../services/requestResearch.js';
 
@@ -105,4 +105,15 @@ test('collectSources reads search results and text citations, deduplicated', () 
   ];
   const s = collectSources(content as never);
   assert.deepEqual(s.map((x) => x.url).sort(), ['https://a.example/tender', 'https://b.example/spec', 'https://c.example']);
+});
+
+test('draft research: no budget reaches the brief, and no bid number yet does not refuse every query', () => {
+  // The request screen's details have no budget field at all; one sent anyway is rejected.
+  assert.equal(researchDraftInput.safeParse({ brief: 'שירותי ניקיון', details: { annual_budget: 1 } }).success, false);
+  const ok = researchDraftInput.parse({ brief: 'שירותי ניקיון', details: { service_name: 'ניקיון משרדים' } });
+  const brief = briefWithDetails(ok.brief, ok.details);
+  assert.match(brief, /ניקיון משרדים/);
+  assert.doesNotMatch(brief, /אומדן|תקציב/);
+  assert.equal(unsafeQueryReason('שירותי ניקיון משרדים מפרט', [], ''), null, 'empty bid number matches nothing');
+  assert.ok(unsafeQueryReason('בל"מ 2026-31 ניקיון', [], '2026-31'));
 });

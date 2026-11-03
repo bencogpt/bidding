@@ -319,6 +319,35 @@ async function main() {
   assert.equal((await getDocs(collection(db, 'bidRequests', researched, 'research'))).size, 2, 'rerun recorded');
   console.log('✓ request research: background trigger + rerun recorded');
 
+  // Research on the summary step (before sending) is linked to the request — not searched again.
+  const draftRun = (await call('researchDraftRequest')({ brief: 'שירותי ניקיון למשרדים', details: { service_name: 'ניקיון' } })) as {
+    data: { runId: string; status: string };
+  };
+  assert.equal(draftRun.data.status, 'skipped', 'no AI in the emulator');
+  const linked = ((await call('createBidRequest')({
+    brief: 'שירותי ניקיון למשרדים',
+    details: REQUEST_DETAILS,
+    researchRunId: draftRun.data.runId,
+  })) as { data: { serial: string } }).data.serial;
+  const linkedReq = (await getDoc(doc(db, 'bidRequests', linked))).data()!;
+  assert.equal(linkedReq.research?.runId, draftRun.data.runId, 'the summary-step run is on the request');
+  await new Promise((r) => setTimeout(r, 2000)); // give the trigger time to (not) run
+  const linkedRuns = await getDocs(collection(db, 'bidRequests', linked, 'research'));
+  assert.deepEqual(linkedRuns.docs.map((d) => d.id), [draftRun.data.runId], 'searched once, not again after sending');
+  // Someone else's run is not linked: that request is researched after sending as usual.
+  await signOut(auth);
+  await login('requester@obms.test');
+  const other = ((await call('createBidRequest')({
+    brief: 'שירותי ניקיון למשרדים',
+    details: REQUEST_DETAILS,
+    researchRunId: draftRun.data.runId,
+  })) as { data: { serial: string } }).data.serial;
+  await signOut(auth);
+  await login('manager@obms.test');
+  const otherReq = (await getDoc(doc(db, 'bidRequests', other))).data()!;
+  assert.notEqual(otherReq.research?.runId, draftRun.data.runId, "another user's run is not linked");
+  console.log('✓ summary-step web research linked to the request; no second search');
+
   // Internal users can no longer be granted ad hoc — only through the team.
   let adHocRefused = false;
   try {
@@ -761,10 +790,21 @@ async function main() {
   const autoTender = (await getDoc(doc(db, 'tenders', autoCase.data.id))).data()!;
   assert.equal(autoTender.params.tender_title, 'שירותי ניקיון', "title = the requester's service name");
   assert.equal(autoTender.params['כתובת מייל של מנהל המכרז'], 'manager@obms.test', "the creating manager's email");
-  assert.equal(autoTender.params['סכום ערבות להצעה'], 20_000, 'guarantee = 2% of the annual estimate');
-  assert.equal(autoTender.params.bid_guarantee_amount, 20_000, 'both guarantee fields agree');
+  assert.equal(autoTender.params['סכום ערבות להצעה'], '20,000', 'guarantee = 2% of the annual estimate');
+  assert.equal(autoTender.params.bid_guarantee_amount, '20,000', 'both guarantee fields agree');
   assert.equal(autoTender.params.bid_guarantee_amount_words, 'עשרים אלף שקלים');
-  assert.equal(autoTender.params['תוקף אחריות'], undefined, 'תוקף אחריות is not asked in step 2');
+  assert.equal(autoTender.params['תוקף אחריות'], '__________', 'not asked in step 2: a blank line to complete in the document');
+  const autoCheck = (await call('runSupervision')({ tenderId: autoCase.data.id })) as {
+    data: { findings: { severity: string; message: string }[] };
+  };
+  assert.ok(
+    autoCheck.data.findings.some((f) => f.severity === 'warn' && /יושלמו ידנית/.test(f.message)),
+    'the inspector lists the blank lines as a warning',
+  );
+  assert.ok(
+    !autoCheck.data.findings.some((f) => f.severity === 'block' && /תוקף אחריות/.test(f.message)),
+    'a blank line does not block the document',
+  );
   assert.equal(autoTender.params.annual_budget, undefined, 'the annual estimate itself is never published');
   console.log('✓ step 2 auto-fill: title, manager email, 2% guarantee (+ words); תוקף אחריות not asked');
   // A request converts to exactly one tender.

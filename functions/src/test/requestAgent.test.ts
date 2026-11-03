@@ -104,7 +104,7 @@ test('scriptTurn asks the missing details in order, one per turn, then the quali
   const t4 = scriptTurn(base({ details: all, brief: LONG }));
   assert.equal(t4.asking, 'service_location', 'after the mandatory details come the optional questions');
   assert.equal(t4.ready, true);
-  const allOptional = { ...all, service_location: 'חיפה', provider_responsibilities: 'פיתוח', team_lead_role: 'מנהל', min_pool_candidates: 5, service_providers_total: 12, supplier_equipment: 'מחשב', work_hours: 'משרה מלאה' };
+  const allOptional = { ...all, service_location: 'חיפה', provider_responsibilities: 'פיתוח', team_lead_role: 'מנהל', min_pool_candidates: 5, service_providers_total: 12, supplier_equipment: 'מחשב', work_hours: 'משרה מלאה', option_periods_count: 2 };
   const t4b = scriptTurn(base({ details: allOptional, brief: LONG }));
   assert.equal(t4b.asking, 'quality');
   assert.ok(t4b.message.includes(QUALITY_QUESTIONS[0].q));
@@ -162,7 +162,7 @@ test('agentDetailsFromFields sends only what the person typed or what is valid; 
 });
 
 test('the agent knows the seven optional answers: schema, extraction, sanitiser and panel text', () => {
-  const ok = { service_location: 'חיפה', provider_responsibilities: 'פיתוח', team_lead_role: 'מנהל צוות', min_pool_candidates: 5, service_providers_total: 12, supplier_equipment: 'מחשב', work_hours: 'משרה מלאה' };
+  const ok = { service_location: 'חיפה', provider_responsibilities: 'פיתוח', team_lead_role: 'מנהל צוות', min_pool_candidates: 5, service_providers_total: 12, supplier_equipment: 'מחשב', work_hours: 'משרה מלאה', option_periods_count: 2 };
   assert.ok(assistRequestInput.safeParse(base({ details: ok })).success);
   for (const bad of [{ min_pool_candidates: 0 }, { service_providers_total: 1.5 }, { service_location: 'a {{b}}' }, { work_hours: 'x'.repeat(201) }, { annual_budget: 1 }]) {
     assert.equal(assistRequestInput.safeParse(base({ details: bad as never })).success, false, JSON.stringify(bad));
@@ -179,7 +179,7 @@ test('the agent knows the seven optional answers: schema, extraction, sanitiser 
   );
 });
 
-test('the chat asks all seven optional questions once each, skippable, never repeats one, and then moves on', () => {
+test('the chat asks all eight optional questions once each, skippable, never repeats one, and then moves on', () => {
   const all = { service_name: 'תמיכה', document_classification: 'בלמ"ס', contract_years: 3 };
   const history: AssistRequestInput['history'] = [];
   const asked: string[] = [];
@@ -193,7 +193,7 @@ test('the chat asks all seven optional questions once each, skippable, never rep
     if (i > 0) assert.ok(!r.message.includes('קיבלתי את כל מה שצריך'), 'the intro is not repeated');
   }
   // the provider count was found in the text, so it is not asked; all the others are, in the form's order
-  assert.deepEqual(asked, ['service_location', 'provider_responsibilities', 'team_lead_role', 'min_pool_candidates', 'supplier_equipment', 'work_hours']);
+  assert.deepEqual(asked, ['service_location', 'provider_responsibilities', 'team_lead_role', 'min_pool_candidates', 'supplier_equipment', 'work_hours', 'option_periods_count']);
   assert.equal(r.asking, 'quality');
   assert.equal(r.ready, true);
 });

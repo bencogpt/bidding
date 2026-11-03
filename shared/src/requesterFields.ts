@@ -32,6 +32,7 @@ export const REQUESTER_FIELDS: readonly RequesterField[] = [
   { key: 'service_providers_total', labelHe: 'כמות נותני השירות', type: 'number', wholeNumber: true, max: 100000 },
   { key: 'supplier_equipment', labelHe: 'ציוד שהספק מספק לנותני השירות', type: 'textarea' },
   { key: 'work_hours', labelHe: 'היקף משרה והאם נדרש גם שעות כוננות', type: 'text' },
+  { key: 'option_periods_count', labelHe: 'מספר תקופות אופציה', type: 'number', wholeNumber: true, max: 10 },
   {
     key: 'annual_budget',
     labelHe: 'מהו אומדן ההתקשרות השנתית או מהו גובה התקציב שהוקצה לשירות?',
@@ -50,7 +51,8 @@ const byKey = new Map(REQUESTER_FIELDS.map((f) => [f.key, f]));
 // How a template spells a question the requester answers, when its words differ from the request screen's.
 // An alias may be a template field's key or its Hebrew label.
 const LABEL_ALIASES: Record<string, string[]> = {
-  service_name: ['tender_title', 'כותרת המכרז'], // the bid's title is the service's name
+  // the bid's title, and the service's name in the bidder's offer heading, are the service's name
+  service_name: ['tender_title', 'כותרת המכרז', 'service_type_summary', 'שם השירות בכותרת הצעת המציע'],
   service_providers_total: ["פה יבוא מס' נותני השירות", "מס' נותני השירות"],
   work_hours: ["מס' שעות עבודה"],
 };

@@ -124,6 +124,15 @@ test('manager reads every bid request; nobody writes from the client', async () 
   await assertFails(getDoc(doc(supplierA(), 'bidRequests/2026-31')));
 });
 // A non-manager internal role, to exercise the isInternal() branch rather than isManager().
+test('research run before sending: clients never read or write it', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'researchDrafts/d1'), { runId: 'd1', createdBy: 'ur', status: 'done' });
+  });
+  await assertFails(getDoc(doc(requester(), 'researchDrafts/d1')));
+  await assertFails(getDoc(doc(manager(), 'researchDrafts/d1')));
+  await assertFails(setDoc(doc(requester(), 'researchDrafts/d2'), { createdBy: 'ur' }));
+});
+
 test('request research: the requester reads their own, managers read all; nobody writes', async () => {
   await assertSucceeds(getDoc(doc(requester(), 'bidRequests/2026-31/research/r1')));
   await assertFails(getDoc(doc(requester(), 'bidRequests/2026-32/research/r2')));

@@ -23,12 +23,12 @@ const SYSTEM =
   'the service; document_classification = the stated classification (e.g. רגיל, שמור, סודי, בלמ"ס); contract_years = ' +
   'whole years (1-30). Also extract, only when stated: service_location (where the service is provided), ' +
   'provider_responsibilities, team_lead_role, min_pool_candidates (whole number), service_providers_total (whole ' +
-  'number of service providers), supplier_equipment, work_hours (job scope and whether standby hours are needed). ' +
-  'Omit what is not stated.\n' +
+  'number of service providers), supplier_equipment, work_hours (job scope and whether standby hours are needed), option_periods_count (whole number ' +
+  'of option/extension periods, 1-10). Omit what is not stated.\n' +
   '2. asking: after extraction, the first missing item of, in this order: service_name, document_classification, ' +
   'scope (the brief has at least 60 characters), contract_years; then, once each and only if still missing and not ' +
   'already asked in the history: service_location, provider_responsibilities, team_lead_role, min_pool_candidates, ' +
-  'service_providers_total, supplier_equipment, work_hours (an answer of "דלג" skips it); when all of those are ' +
+  'service_providers_total, supplier_equipment, work_hours, option_periods_count (an answer of "דלג" skips it); when all of those are ' +
   'done and qualityAsked < 3 then "quality"; otherwise "done".\n' +
   '3. message: in mode "chat", one short Hebrew sentence or question about exactly the item in asking (use the ' +
   'canonical question below as your guide; for the optional items say it can be skipped). In mode "extract" an ' +
@@ -41,7 +41,7 @@ const SYSTEM =
   'מקום אספקת השירות?"; provider_responsibilities "מה תחומי האחריות של נותני השירות?"; team_lead_role "מה תפקיד ' +
   'ראש הצוות?"; min_pool_candidates "מה מספר המועמדים המינימלי למאגר?"; service_providers_total "כמה נותני שירות ' +
   'נדרשים?"; supplier_equipment "איזה ציוד הספק מספק לנותני השירות?"; work_hours "מה היקף המשרה, והאם נדרשות ' +
-  'גם שעות כוננות?".';
+  'גם שעות כוננות?"; option_periods_count "כמה תקופות אופציה (הארכה) נדרשות?".';
 
 const TOOL = {
   name: 'return_request_turn',
@@ -62,6 +62,7 @@ const TOOL = {
           service_providers_total: { type: 'integer' },
           supplier_equipment: { type: 'string' },
           work_hours: { type: 'string' },
+          option_periods_count: { type: 'integer' },
         },
       },
       asking: {
@@ -78,6 +79,7 @@ const TOOL = {
           'service_providers_total',
           'supplier_equipment',
           'work_hours',
+          'option_periods_count',
           'quality',
           'done',
         ],

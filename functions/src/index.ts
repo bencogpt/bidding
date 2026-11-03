@@ -56,6 +56,8 @@ import {
   isAutoSerialParam,
   briefWithDetails,
   isFormHidden,
+  isConfidentialParam,
+  BLANK_LINE,
   fillFromRequestDetails,
   isSystemParam,
   resolveSystemFills,
@@ -66,6 +68,8 @@ import {
   updateTenderDraftInput,
   generateDocumentInput,
   rerunRequestResearchInput,
+  researchDraftInput,
+  RESEARCH_DRAFT_MAX_AGE_MS,
   type BidRequestDoc,
   isAutoParam,
   formatDeadlineFor,
@@ -107,6 +111,8 @@ import {
   countersRepo,
   bidRequestsRepo,
   agentUsageRepo,
+  researchDraftsRepo,
+  researchRepo,
   caseCreationRepo,
 } from './repositories.js';
 import { allocateBidNumber, israelYear } from './services/bidNumber.js';
@@ -142,7 +148,7 @@ import {
   recordVersion,
 } from './services/supervisorService.js';
 import { documentGate, DOCUMENT_GATE_MESSAGE_HE } from './services/draftCalc.js';
-import { runRequestResearch } from './services/requestResearch.js';
+import { runDraftResearch, runRequestResearch } from './services/requestResearch.js';
 import { docHash } from './services/supervisorChecks.js';
 import { templateHash } from './services/supervisorChecks.js';
 import { computeCaseScore, refreshCaseScore } from './services/scoreService.js';
@@ -394,11 +400,18 @@ function buildCaseParams(
     request?: BidRequestDoc | null; // its confidential annual estimate is the guarantee default's base
   },
 ): { publicParams: Record<string, string | number>; internalParams: Record<string, string | number> } {
-  const annual = Number((ctx.request?.details as Record<string, unknown> | undefined)?.annual_budget);
+  const details = (ctx.request?.details ?? {}) as Record<string, unknown>;
+  const annual = Number(details.annual_budget);
+  const years = Number(details.contract_years);
   const params = resolveSystemFills(template.params, asked, {
     submissionDeadline: ctx.submissionDeadline,
     annualEstimate: Number.isFinite(annual) && annual > 0 ? annual : undefined,
-    manager: ctx.owner ? { displayName: ctx.owner.displayName, email: ctx.owner.email } : undefined,
+    contractYears: Number.isInteger(years) && years > 0 ? years : undefined,
+    requestBrief: ctx.request?.brief,
+    serial: ctx.serial,
+    manager: ctx.owner
+      ? { displayName: ctx.owner.displayName, email: ctx.owner.email, phone: ctx.owner.phone }
+      : undefined,
     requester: ctx.requester ? { displayName: ctx.requester.displayName, phone: ctx.requester.phone } : undefined,
   });
   // Confidential values (the estimate, G6) never go on the supplier-readable tender doc.
@@ -408,6 +421,13 @@ function buildCaseParams(
     if (isAutoDeadlineParam(p) && ctx.submissionDeadline) {
       publicParams[p.key] = formatDeadlineFor(p.key, ctx.submissionDeadline);
     }
+  }
+  // A field the form doesn't ask and nothing filled is printed as a blank line to complete in the
+  // document (the inspector lists them as a warning) — not left as a {{placeholder}} that blocks.
+  for (const p of template.params) {
+    const notAsked = isSystemParam(p) || isFormHidden(p);
+    const blank = String(publicParams[p.key] ?? '').trim() === '';
+    if (notAsked && blank && !isConfidentialParam(p)) publicParams[p.key] = BLANK_LINE;
   }
   return { publicParams, internalParams };
 }
@@ -421,6 +441,13 @@ export const createBidRequest = onCall(async (req) => {
     if (prev) return { serial: prev.serial, duplicate: true };
   }
   const createdAt = now();
+  // Web research the requester already ran on the summary step is linked, not searched again. The
+  // summary is on the request from its creation, so the background trigger skips it.
+  const draftRun = input.researchRunId ? await researchDraftsRepo.get(input.researchRunId) : null;
+  const linkRun =
+    draftRun && draftRun.createdBy === caller.uid && createdAt - draftRun.createdAt < RESEARCH_DRAFT_MAX_AGE_MS
+      ? draftRun
+      : null;
   const serial = await allocateBidNumber(israelYear(createdAt), {
     random: Math.random,
     claim: (serial, n) =>
@@ -437,8 +464,13 @@ export const createBidRequest = onCall(async (req) => {
         clientRequestId: input.requestId,
         createdAt,
         convertedAt: null,
+        ...(linkRun ? { research: { status: linkRun.status, runId: linkRun.runId, at: createdAt } } : {}),
       }),
   });
+  if (linkRun) {
+    const { createdBy: _by, ...run } = linkRun;
+    await researchRepo.save({ ...run, serial });
+  }
   await auditRepo.append({
     entityType: 'bidRequest',
     entityId: serial,
@@ -463,6 +495,22 @@ export const researchOnRequestCreated = onDocumentCreated(
     } catch (err) {
       console.error(`researchOnRequestCreated ${event.params.serial} failed`, err);
     }
+  },
+);
+
+// Web research on the request while it is still being written (the summary step): ideas from similar
+// procurements, shown with the recommendations. Its own, smaller hourly budget — web search costs more.
+const RESEARCH_DRAFTS_PER_HOUR = 5;
+export const researchDraftRequest = onCall(
+  { secrets: ['ANTHROPIC_API_KEY'], timeoutSeconds: 300 },
+  async (req) => {
+    const caller = requireRole(req, 'requester', 'tender_manager');
+    const input = parseInput(researchDraftInput, req.data);
+    const allowed = await agentUsageRepo.take(caller.uid, RESEARCH_DRAFTS_PER_HOUR, 3_600_000, Date.now(), 'research');
+    if (!allowed) {
+      throw new HttpsError('resource-exhausted', 'הגעת למספר החיפושים ברשת המותר לשעה. נסה שוב מאוחר יותר.');
+    }
+    return runDraftResearch(input, caller);
   },
 );
 

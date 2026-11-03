@@ -36,6 +36,8 @@ export default function RequestCreate() {
   const [notes, setNotes] = useState('');
   const [chosen, setChosen] = useState<string[]>([]);
   const [bigText, setBigText] = useState(false); // the large writing window over the free-writing box
+  // The web research run on the summary step, linked to the request so it isn't searched again.
+  const [researchRunId, setResearchRunId] = useState<string | null>(null);
   // One id per form: a retried submit returns the request already opened instead of a second one.
   const requestId = useRef(crypto.randomUUID());
 
@@ -76,7 +78,12 @@ export default function RequestCreate() {
     setBusy(true);
     setError('');
     try {
-      const r = await api.createBidRequest({ brief, requestId: requestId.current, details });
+      const r = await api.createBidRequest({
+        brief,
+        requestId: requestId.current,
+        details,
+        ...(researchRunId ? { researchRunId } : {}),
+      });
       // Like the prototype: leave for the list, where the new request is shown with a green notice.
       nav('/', { state: { sentSerial: r.serial } });
     } catch (err) {
@@ -248,6 +255,7 @@ export default function RequestCreate() {
             <div className="space-y-6">
               <RequestSummary brief={a.brief} fields={a.fields} />
               <RequestRecommendations
+                onResearch={setResearchRunId}
                 brief={a.brief}
                 details={agentView}
                 active={ready}
