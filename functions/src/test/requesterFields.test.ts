@@ -18,7 +18,7 @@ import {
 
 const REQ = { service_name: 'שירותי תמיכה', document_classification: 'בלמ"ס', annual_budget: 900000, contract_years: 3 };
 
-test('the request screen asks four required questions and seven optional ones; only the budget is internal', () => {
+test('the request screen asks four required questions and eight optional ones; only the budget is internal', () => {
   assert.deepEqual(
     REQUESTER_FIELDS.filter((f) => f.required).map((f) => f.labelHe),
     ['שם השירות', 'סיווג המסמך', 'מהו אומדן ההתקשרות השנתית או מהו גובה התקציב שהוקצה לשירות?', 'משך תקופת התקשרות בשנים'],
@@ -33,6 +33,7 @@ test('the request screen asks four required questions and seven optional ones; o
       ['service_providers_total', 'כמות נותני השירות'],
       ['supplier_equipment', 'ציוד שהספק מספק לנותני השירות'],
       ['work_hours', 'היקף משרה והאם נדרש גם שעות כוננות'],
+      ['option_periods_count', 'מספר תקופות אופציה'],
     ],
   );
   assert.deepEqual(REQUESTER_FIELDS.filter((f) => f.internal).map((f) => f.key), ['annual_budget']);
@@ -155,7 +156,7 @@ test('normalizeDetailsInput trims, converts numbers, reports bad and missing ans
   for (const bad of ['1.5', '0', '31', 'x']) assert.deepEqual(normalizeDetailsInput({ contract_years: bad }).badNumbers, ['contract_years'], bad);
 });
 
-test('procurement form: the requester answers leave it, removed fields never show, option periods is an ordinary field again', () => {
+test('procurement form: the requester answers leave it (option periods too, per the spreadsheet), removed fields never show', () => {
   assert.equal(isRequesterAnswered('service_name'), true);
   assert.equal(isRequesterAnswered('contract_years'), true);
   assert.equal(isRequesterAnswered('annual_budget'), false);
@@ -170,7 +171,8 @@ test('procurement form: the requester answers leave it, removed fields never sho
     { key: 'work_days' },
     { key: 'estimate', labelHe: 'סכום המסגרת המקסימלי (בש"ח)' },
   ];
-  assert.deepEqual(askedParams(params).map((p) => p.key), ['option_periods', 'estimate']);
+  assert.equal(isRequesterAnswered('option_periods_count'), true);
+  assert.deepEqual(askedParams(params).map((p) => p.key), ['estimate'], 'option periods are asked of the requester');
   assert.equal(isFormHidden(params[2]), true);
   assert.equal(isFormHidden(params[3]), true);
   assert.equal(isFormHidden(params[4]), true, 'the raw template label of the provider count');

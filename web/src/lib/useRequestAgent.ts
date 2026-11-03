@@ -20,6 +20,7 @@ export interface Fields {
   service_providers_total: string;
   supplier_equipment: string;
   work_hours: string;
+  option_periods_count: string;
 }
 
 export const DEFAULT_CLASSIFICATION = 'בלמ"ס';
@@ -36,6 +37,7 @@ const initialFields = (): Fields => ({
   service_providers_total: '',
   supplier_equipment: '',
   work_hours: '',
+  option_periods_count: '',
 });
 
 // The optional answers are collected only by the agent (the screen does not show them).
@@ -47,6 +49,7 @@ const OPTIONAL_KEYS: readonly (keyof Fields)[] = [
   'service_providers_total',
   'supplier_equipment',
   'work_hours',
+  'option_periods_count',
 ];
 
 export function useRequestAgent() {

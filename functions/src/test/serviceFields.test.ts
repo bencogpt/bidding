@@ -185,40 +185,101 @@ const typed: TemplateParam[] = [
   { key: 'tender_title', labelHe: 'tender_title', type: 'text', required: true },
   { key: 'כתובת מייל של מנהל המכרז', labelHe: 'כתובת מייל של מנהל המכרז', type: 'text', required: true },
   { key: 'סכום ערבות להצעה', labelHe: 'סכום ערבות להצעה', type: 'text', required: true },
-  { key: 'סכום ערבות ביצוע', labelHe: 'סכום ערבות ביצוע', type: 'text', required: true },
-  { key: 'תוקף אחריות', labelHe: 'תוקף אחריות', type: 'text', required: true },
   { key: 'bid_guarantee_amount', labelHe: 'סכום ערבות ההצעה (בש"ח)', type: 'number', required: true },
   { key: 'bid_guarantee_amount_words', labelHe: 'סכום ערבות ההצעה במילים', type: 'text', required: true },
   { key: 'bid_guarantee_validity_date', labelHe: 'תוקף ערבות ההצעה', type: 'date', required: true },
+  { key: 'guarantee_duration', labelHe: 'guarantee_duration', type: 'text', required: true },
+  { key: 'bid_validity_date', labelHe: 'תוקף ההצעה', type: 'date', required: true },
+  { key: 'סכום ערבות ביצוע', labelHe: 'סכום ערבות ביצוע', type: 'text', required: true },
+  { key: 'תוקף אחריות', labelHe: 'תוקף אחריות', type: 'text', required: true },
+  { key: 'service_field_summary', labelHe: "עיקרי השירות הנדרש (פרק ב')", type: 'textarea', required: true },
+  { key: 'agreement_service_field', labelHe: 'תחום השירות (בהסכם)', type: 'text', required: true },
+  { key: 'gathering_hour', labelHe: 'gathering_hour', type: 'text', required: true },
+  { key: 'bank_name', labelHe: 'bank_name', type: 'text', required: true },
+  { key: 'phone_number', labelHe: 'phone_number', type: 'text', required: true },
+  { key: 'clarifications_email', labelHe: 'כתובת דוא"ל לשאלות הבהרה', type: 'text', required: true },
+  { key: 'clarifications_reference', labelHe: 'מזהה הבל"ם לפנייה בשאלות', type: 'text', required: true },
+  { key: "מס' שעות עבודה", labelHe: "מס' שעות עבודה", type: 'text', required: true },
+  { key: 'framework_max_amount', labelHe: 'סכום המסגרת המקסימלי (בש"ח)', type: 'number', required: true },
+  { key: 'option_periods_count', labelHe: 'מספר תקופות אופציה', type: 'number', required: true },
+  { key: 'option_period_months', labelHe: 'מספר חודשים לכל תקופת אופציה', type: 'number', required: true },
+  { key: 'option_total_months', labelHe: 'סך מצטבר של חודשי אופציה', type: 'number', required: true },
+  { key: 'gathering_date', labelHe: 'gathering_date', type: 'date', required: true },
+  { key: 'הוראות ביטחון', labelHe: 'הוראות ביטחון', type: 'text', required: true },
 ];
 
-test('built-in rules: step 2 no longer asks the title, the manager email or תוקף אחריות', async () => {
+test('procurement form: step 2 asks only what the spreadsheet leaves to procurement', async () => {
   const { withBuiltinFills, askedParams } = await import('@obms/shared');
   const asked = askedParams(withBuiltinFills(typed)).map((p) => p.key);
-  assert.deepEqual(asked, ['סכום ערבות להצעה', 'סכום ערבות ביצוע', 'bid_guarantee_validity_date']);
-  const guarantee = withBuiltinFills(typed).find((p) => p.key === 'סכום ערבות להצעה')!;
-  assert.equal(guarantee.defaultFrom, 'guarantee_pct', 'the bid guarantee is pre-filled, still editable');
-  assert.equal(guarantee.type, 'number');
-  assert.equal(withBuiltinFills(typed).find((p) => p.key === 'סכום ערבות ביצוע')!.fill, undefined, 'performance guarantee untouched');
+  assert.deepEqual(asked, ['option_period_months', 'הוראות ביטחון']);
 });
 
-test('built-in rules: 2% of the annual estimate on both guarantee fields, words, manager email', async () => {
+test('procurement form: calculated, fixed and context values', async () => {
   const { withBuiltinFills } = await import('@obms/shared');
   const all = withBuiltinFills(typed);
-  const out = resolveSystemFills(all, {}, { ...ctx, annualEstimate: 1_000_000 });
-  assert.equal(out['סכום ערבות להצעה'], 20_000);
-  assert.equal(out.bid_guarantee_amount, 20_000, 'the second guarantee field copies the first');
-  assert.equal(out.bid_guarantee_amount_words, 'עשרים אלף שקלים');
+  const out = resolveSystemFills(
+    all,
+    { option_periods_count: 2, option_period_months: 12, "מס' שעות עבודה": 'חצי משרה' },
+    {
+      ...ctx,
+      manager: { ...ctx.manager, phone: '03-1234567' },
+      annualEstimate: 4_367_200,
+      contractYears: 2,
+      requestBrief: 'שירותי ניקיון למבנה משרדים',
+      serial: '2026-31',
+    },
+  );
+  assert.equal(out['סכום ערבות להצעה'], '87,000', '2% floored to thousands (87,344 → 87,000)');
+  assert.equal(out.bid_guarantee_amount, '87,000');
+  assert.equal(out.bid_guarantee_amount_words, 'שמונים ושבעה אלף שקלים');
+  assert.equal(out['סכום ערבות ביצוע'], '218,360', '5% of the annual estimate');
+  assert.equal(out.framework_max_amount, '4,367,200', 'the annual estimate, published as the framework amount');
   assert.equal(out['כתובת מייל של מנהל המכרז'], 'manager@obms.test');
-  const typedByManager = resolveSystemFills(all, { 'סכום ערבות להצעה': 15_000 }, { ...ctx, annualEstimate: 1_000_000 });
-  assert.equal(typedByManager.bid_guarantee_amount, 15_000, "the manager's amount wins");
-  assert.equal(typedByManager.bid_guarantee_amount_words, 'חמישה עשר אלף שקלים');
+  assert.equal(out.clarifications_email, 'manager@obms.test');
+  assert.equal(out.phone_number, '03-1234567');
+  assert.equal(out.clarifications_reference, '2026-31');
+  assert.equal(out.service_field_summary, 'שירותי ניקיון למבנה משרדים');
+  assert.equal(out.agreement_service_field, 'שירותי ניקיון למבנה משרדים', "copied from פרק ב'");
+  assert.equal(out.gathering_hour, 'בין 08:00-13:00');
+  assert.equal(out.bank_name, 'אוצר החייל');
+  assert.equal(out["מס' שעות עבודה"], 'חצי משרה', "the requester's answer beats the fixed default");
+  assert.equal(out.option_total_months, 48, '2 years + 2 × 12 option months');
+  // Sunday 1/11/2026: +60 days = 31/12/2026; +90 days = Sat 30/1/2027 → Sun 31/1/2027.
+  assert.equal(out.bid_guarantee_validity_date, '31/12/2026');
+  assert.equal(out.bid_validity_date, '31/01/2027');
+  assert.equal('gathering_date' in out, false, 'not asked, nothing fills it');
 });
 
-test('built-in rules: explicit field metadata wins', async () => {
+test('procurement form: no bid guarantee under ₪1M', async () => {
+  const { withBuiltinFills, bidGuarantee } = await import('@obms/shared');
+  assert.equal(bidGuarantee(999_999), null);
+  assert.equal(bidGuarantee(1_000_000), 20_000);
+  const out = resolveSystemFills(withBuiltinFills(typed), {}, { ...ctx, annualEstimate: 800_000 });
+  assert.equal(out['סכום ערבות להצעה'], undefined);
+  assert.equal(out.bid_guarantee_amount_words, undefined);
+});
+
+test('built-in rules: explicit field metadata wins; keys match case-insensitively', async () => {
   const { withBuiltinFills } = await import('@obms/shared');
-  const fixed: TemplateParam = { key: 'manager_email', labelHe: 'מייל', type: 'text', required: false, fill: { kind: 'fixed', value: 'x@y' } };
-  assert.deepEqual(withBuiltinFills([fixed])[0].fill, { kind: 'fixed', value: 'x@y' });
+  const fixedEmail: TemplateParam = { key: 'manager_email', labelHe: 'מייל', type: 'text', required: false, fill: { kind: 'fixed', value: 'x@y' } };
+  assert.deepEqual(withBuiltinFills([fixedEmail])[0].fill, { kind: 'fixed', value: 'x@y' });
   const lead: TemplateParam = { key: 'BID_LEAD_EMAIL', labelHe: 'BID_LEAD_EMAIL', type: 'text', required: true };
-  assert.deepEqual(withBuiltinFills([lead])[0].fill, { kind: 'formula', formula: 'manager_email' }, 'matched case-insensitively');
+  assert.deepEqual(withBuiltinFills([lead])[0].fill, { kind: 'formula', formula: 'manager_email' });
+});
+
+test('Israeli working days: weekends and holidays move the date forward', async () => {
+  const { isIsraeliWorkingDay, addDaysToWorkingDay } = await import('@obms/shared');
+  const at = (d: string) => new Date(`${d}T10:00:00Z`);
+  assert.equal(isIsraeliWorkingDay(at('2026-11-03')), true, 'a Tuesday');
+  assert.equal(isIsraeliWorkingDay(at('2026-11-06')), false, 'Friday');
+  assert.equal(isIsraeliWorkingDay(at('2026-09-12')), false, 'Rosh Hashana');
+  assert.equal(isIsraeliWorkingDay(at('2026-09-21')), false, 'Yom Kippur');
+  assert.equal(isIsraeliWorkingDay(at('2026-04-02')), false, 'Pesach');
+  assert.equal(isIsraeliWorkingDay(at('2026-04-22')), false, 'Independence Day 2026');
+  assert.equal(isIsraeliWorkingDay(at('2026-05-22')), false, 'Shavuot');
+  assert.equal(isIsraeliWorkingDay(at('2026-04-23')), true, 'the day after Independence Day');
+  // 90 days after 16/6/2026 is Mon 14/9 — the day after Rosh Hashana (12–13/9): a working day.
+  assert.equal(new Date(addDaysToWorkingDay(at('2026-06-16').getTime(), 90)).toISOString().slice(0, 10), '2026-09-14');
+  // 90 days after 14/6/2026 is Sat 12/9 (Rosh Hashana), then Sun 13/9 (its second day) → Mon 14/9.
+  assert.equal(new Date(addDaysToWorkingDay(at('2026-06-14').getTime(), 90)).toISOString().slice(0, 10), '2026-09-14');
 });
