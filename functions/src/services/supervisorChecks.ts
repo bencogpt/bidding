@@ -8,6 +8,7 @@ import {
   isSystemParam,
   isFormHidden,
   BLANK_LINE,
+  isOmittedParam,
   type SkillUse,
   type SupervisionFinding,
   type TemplateDoc,
@@ -326,7 +327,7 @@ export function checkValues(i: DeterministicInput): Finding[] {
       continue;
     }
     if (isBlank(value)) {
-      if (p.required) {
+      if (p.required && !isOmittedParam(p)) {
         out.push({
           code: 'MISSING_INFO',
           severity: 'block',

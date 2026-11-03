@@ -2,7 +2,7 @@
 // createTender on the server and by the create form for the guarantee default.
 import type { SystemFill, TemplateParam } from './templates.js';
 import { addDaysToWorkingDay, formatIsraelDate } from './israelCalendar.js';
-import { GUARANTEE_AMOUNT_NAMES, OPTION_KEYS, procurementRuleFor, ruleNamed } from './procurementForm.js';
+import { GUARANTEE_AMOUNT_NAMES, OPTION_KEYS, isOmittedParam, procurementRuleFor, ruleNamed } from './procurementForm.js';
 
 /** Keys of the services template that the formulas read. */
 export const SERVICE_KEYS = {
@@ -259,6 +259,7 @@ export const isGuaranteeAmountParam = (p: { key: string; labelHe?: string }): bo
 /** The template's fields with the procurement form's rules attached (for creating and checking cases). */
 export function withBuiltinFills(params: readonly TemplateParam[]): TemplateParam[] {
   return params.map((p) => {
+    if (isOmittedParam(p)) return { ...p, hidden: true, required: false };
     if (p.fill) return p;
     const rule = procurementRuleFor(p, params);
     if (!rule) return p;

@@ -15,6 +15,7 @@ export default function InternalUsers() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [googleEmail, setGoogleEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [role, setRole] = useState<InternalRole>('requester');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -25,10 +26,11 @@ export default function InternalUsers() {
     setBusy(true);
     setError('');
     try {
-      setCreds(await api.createInternalUser({ name, email, role, googleEmail }));
+      setCreds(await api.createInternalUser({ name, email, role, googleEmail, phone }));
       setName('');
       setEmail('');
       setGoogleEmail('');
+      setPhone('');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -43,7 +45,7 @@ export default function InternalUsers() {
 
   return (
     <div>
-      <form onSubmit={add} className="card mb-6 grid gap-3 p-6 md:grid-cols-5">
+      <form onSubmit={add} className="card mb-6 grid gap-3 p-6 md:grid-cols-6">
         <div className="md:col-span-1">
           <label className="label">{t('users.name')}</label>
           <input className="input" value={name} onChange={(e) => setName(e.target.value)} required />
@@ -64,6 +66,23 @@ export default function InternalUsers() {
           />
         </div>
         <div className="md:col-span-1">
+          {/* The bid manager's phone is printed in the bid documents, so it is required for that role. */}
+          <label className="label">
+            {t('users.phone')}
+            {role === 'tender_manager' && <span className="text-red-600"> *</span>}
+          </label>
+          <input
+            className="input"
+            type="tel"
+            dir="ltr"
+            pattern="[0-9+\-() ]{7,20}"
+            placeholder="050-0000000"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            required={role === 'tender_manager'}
+          />
+        </div>
+        <div className="md:col-span-1">
           <label className="label">{t('users.role')}</label>
           <select className="input" value={role} onChange={(e) => setRole(e.target.value as InternalRole)}>
             {INTERNAL_ROLES.map((r) => (
@@ -78,8 +97,8 @@ export default function InternalUsers() {
             {busy ? t('users.creating') : t('users.add')}
           </button>
         </div>
-        {error && <div className="text-sm text-red-600 md:col-span-5">{error}</div>}
-        <p className="text-xs text-tx-mute md:col-span-5">{t('users.googleEmailNote')}</p>
+        {error && <div className="text-sm text-red-600 md:col-span-6">{error}</div>}
+        <p className="text-xs text-tx-mute md:col-span-6">{t('users.googleEmailNote')}</p>
       </form>
 
       <div className="card overflow-hidden">
@@ -90,6 +109,9 @@ export default function InternalUsers() {
                 <td className="px-5 py-3 font-semibold">{u.displayName}</td>
                 <td className="px-5 py-3 text-tx-soft" dir="ltr">
                   {u.email}
+                </td>
+                <td className="px-5 py-3 text-tx-soft" dir="ltr">
+                  {u.phone ?? '—'}
                 </td>
                 <td className="px-5 py-3 text-tx-soft" dir="ltr">
                   {u.googleEmail ?? (

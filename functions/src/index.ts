@@ -58,6 +58,7 @@ import {
   isFormHidden,
   isConfidentialParam,
   BLANK_LINE,
+  isOmittedParam,
   fillFromRequestDetails,
   isSystemParam,
   resolveSystemFills,
@@ -427,7 +428,8 @@ function buildCaseParams(
   for (const p of template.params) {
     const notAsked = isSystemParam(p) || isFormHidden(p);
     const blank = String(publicParams[p.key] ?? '').trim() === '';
-    if (notAsked && blank && !isConfidentialParam(p)) publicParams[p.key] = BLANK_LINE;
+    if (isOmittedParam(p)) publicParams[p.key] = ''; // removed from the system: printed as nothing
+    else if (notAsked && blank && !isConfidentialParam(p)) publicParams[p.key] = BLANK_LINE;
   }
   return { publicParams, internalParams };
 }
@@ -1844,6 +1846,7 @@ export const createInternalUser = onCall(async (req) => {
     displayName: input.name,
     role: input.role,
     googleEmail: input.googleEmail, // stripUndefined drops it when not provided
+    phone: input.phone, // the bid manager's phone fills BID_MANAGER_PHONE in documents
     createdAt: now(),
   });
   await auditRepo.append({
