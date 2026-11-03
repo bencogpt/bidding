@@ -3,6 +3,7 @@ import { setGlobalOptions } from 'firebase-functions/v2';
 import {
   createTenderInput,
   createBidRequestInput,
+  assistRequestInput,
   grantAccessInput,
   askQuestionInput,
   answerQuestionsInput,
@@ -93,6 +94,7 @@ import {
   settingsRepo,
   countersRepo,
   bidRequestsRepo,
+  agentUsageRepo,
   caseCreationRepo,
 } from './repositories.js';
 import { allocateBidNumber, israelYear } from './services/bidNumber.js';
@@ -114,7 +116,9 @@ import {
   compareResponses,
   draftBidContent,
   suggestExternalSuppliers,
+  getClient,
 } from './services/aiService.js';
+import { requestAgentTurn } from './services/requestAgent.js';
 import { findCandidates } from './services/supplierSearch.js';
 import { requiredSkillsFor, skillsCatalog } from './services/skillsRegistry.js';
 import { superviseTender, splitConfidential } from './services/supervisorService.js';
@@ -383,6 +387,17 @@ export const createBidRequest = onCall(async (req) => {
     newState: 'open',
   });
   return { serial, duplicate: false };
+});
+
+// The "בל"מ חדש" screen's assistant: extracts the mandatory details from the requester's text and asks the
+// next question. At most AGENT_CALLS_PER_HOUR model calls per user per hour; over that the scripted answer is
+// returned instead of an error. The budget is not part of the input (strict schema).
+const AGENT_CALLS_PER_HOUR = 30;
+export const assistRequest = onCall({ secrets: ['ANTHROPIC_API_KEY'], timeoutSeconds: 60 }, async (req) => {
+  const caller = requireRole(req, 'requester', 'tender_manager');
+  const input = parseInput(assistRequestInput, req.data);
+  const allowed = await agentUsageRepo.take(caller.uid, AGENT_CALLS_PER_HOUR, 3_600_000, Date.now());
+  return requestAgentTurn(input, allowed ? getClient() : null);
 });
 
 // ---- Tenders ----

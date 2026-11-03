@@ -2,6 +2,7 @@
 // Repository Pattern — no raw firestore.collection(...).set(...) outside this file).
 import { HttpsError } from 'firebase-functions/v2/https';
 import { db, now } from './lib/admin.js';
+import { nextUsage, type UsageWindow } from './lib/rateWindow.js';
 import { isInternalRole, formatSerial } from '@obms/shared';
 import type {
   TenderDoc,
@@ -152,6 +153,20 @@ export const bidRequestsRepo = {
       .limit(1)
       .get();
     return q.empty ? null : (q.docs[0].data() as BidRequestDoc);
+  },
+};
+
+// ---- per-user call counter for the request agent (one document per user; the Admin SDK only) ----
+export const agentUsageRepo = {
+  /** Count one call; false (nothing counted) when the user is over the limit for the current window. */
+  async take(uid: string, limit: number, windowMs: number, nowMs: number): Promise<boolean> {
+    const ref = db.collection('agentUsage').doc(uid);
+    return db.runTransaction(async (tx) => {
+      const prev = (await tx.get(ref)).data() as UsageWindow | undefined;
+      const { allowed, next } = nextUsage(prev, nowMs, limit, windowMs);
+      if (allowed) tx.set(ref, next);
+      return allowed;
+    });
   },
 };
 
