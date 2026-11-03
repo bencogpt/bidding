@@ -81,6 +81,14 @@ ${bodyToHtml(body)}
 </body></html>`;
 }
 
+/**
+ * Plain text of the document a draft WOULD produce — the template filled with the draft values, in
+ * memory, no Google Doc. The inspector checks drafts on this preview.
+ */
+export function renderDraftText(tender: TenderDoc, template: TemplateDoc): string {
+  return htmlToText(renderHtml(tender, template));
+}
+
 const htmlPath = (id: string) => `tenders/${id}/document.html`;
 
 export interface GeneratedDoc {

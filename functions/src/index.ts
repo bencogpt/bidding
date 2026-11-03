@@ -1,4 +1,5 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
+import { onDocumentCreated } from 'firebase-functions/v2/firestore';
 import { setGlobalOptions } from 'firebase-functions/v2';
 import {
   createTenderInput,
@@ -55,6 +56,11 @@ import {
   resolveSystemFills,
   SERVICE_KEYS,
   isAutoDeadlineParam,
+  hasDocument,
+  updateTenderDraftInput,
+  generateDocumentInput,
+  rerunRequestResearchInput,
+  type BidRequestDoc,
   isAutoParam,
   formatDeadlineFor,
   analyzeTemplateFieldsInput,
@@ -107,6 +113,7 @@ import {
   googleIdentityOf,
   removeDocumentPermission,
   discardGeneratedDocument,
+  readTenderDocText,
   type GeneratedDoc,
 } from './services/docsService.js';
 import {
@@ -117,7 +124,15 @@ import {
 } from './services/aiService.js';
 import { findCandidates } from './services/supplierSearch.js';
 import { requiredSkillsFor, skillsCatalog } from './services/skillsRegistry.js';
-import { superviseTender, splitConfidential } from './services/supervisorService.js';
+import {
+  superviseTender,
+  splitConfidential,
+  currentDraftDataHash,
+  recordVersion,
+} from './services/supervisorService.js';
+import { documentGate, DOCUMENT_GATE_MESSAGE_HE } from './services/draftCalc.js';
+import { runRequestResearch } from './services/requestResearch.js';
+import { docHash } from './services/supervisorChecks.js';
 import { templateHash } from './services/supervisorChecks.js';
 import { computeCaseScore, refreshCaseScore } from './services/scoreService.js';
 import { analyzeTemplate, applyConversion } from './services/templateConverter.js';
@@ -346,6 +361,33 @@ async function grantTeamAccess(
   return skipped;
 }
 
+/**
+ * A case's field values from what was asked: calculated and fixed fields (guarantee default and
+ * words, total months, manager and requester details, …) completed before the confidential split
+ * (the guarantee default reads the estimate); then the bid number = the case serial and the
+ * submission-date fields = the deadline. Shared by createTender and updateTenderDraft.
+ */
+function buildCaseParams(
+  template: TemplateDoc,
+  asked: Record<string, string | number>,
+  ctx: { serial: string; submissionDeadline: number | null; owner: UserDoc | null; requester?: UserDoc },
+): { publicParams: Record<string, string | number>; internalParams: Record<string, string | number> } {
+  const params = resolveSystemFills(template.params, asked, {
+    submissionDeadline: ctx.submissionDeadline,
+    manager: ctx.owner ? { displayName: ctx.owner.displayName, email: ctx.owner.email } : undefined,
+    requester: ctx.requester ? { displayName: ctx.requester.displayName, phone: ctx.requester.phone } : undefined,
+  });
+  // Confidential values (the estimate, G6) never go on the supplier-readable tender doc.
+  const { publicParams, internalParams } = splitConfidential(template, params);
+  for (const p of template.params) if (isAutoSerialParam(p)) publicParams[p.key] = ctx.serial;
+  for (const p of template.params) {
+    if (isAutoDeadlineParam(p) && ctx.submissionDeadline) {
+      publicParams[p.key] = formatDeadlineFor(p.key, ctx.submissionDeadline);
+    }
+  }
+  return { publicParams, internalParams };
+}
+
 // Phase 1: the requester's summary becomes a request with its bid number. No AI, no document yet.
 export const createBidRequest = onCall(async (req) => {
   const caller = requireRole(req, 'requester', 'tender_manager');
@@ -383,6 +425,36 @@ export const createBidRequest = onCall(async (req) => {
   });
   return { serial, duplicate: false };
 });
+
+// Requirement research: starts by itself when a request is opened (the request itself is created
+// instantly; the research is ready a minute or two later). Ideas only — generic queries, sourced.
+export const researchOnRequestCreated = onDocumentCreated(
+  { document: 'bidRequests/{serial}', secrets: ['ANTHROPIC_API_KEY'], timeoutSeconds: 540 },
+  async (event) => {
+    const data = event.data?.data() as BidRequestDoc | undefined;
+    if (!data || data.research) return; // already researched (event redelivery)
+    try {
+      await runRequestResearch(event.params.serial, SYSTEM);
+    } catch (err) {
+      console.error(`researchOnRequestCreated ${event.params.serial} failed`, err);
+    }
+  },
+);
+
+// Re-run the research (failed / outdated): the request's owner or a manager.
+export const rerunRequestResearch = onCall(
+  { secrets: ['ANTHROPIC_API_KEY'], timeoutSeconds: 540 },
+  async (req) => {
+    const caller = requireInternal(req);
+    const input = parseInput(rerunRequestResearchInput, req.data);
+    const bidReq = await bidRequestsRepo.get(input.serial);
+    if (!bidReq) throw new HttpsError('not-found', 'הבקשה לא נמצאה.');
+    if (caller.role !== 'tender_manager' && bidReq.requesterUid !== caller.uid) {
+      throw new HttpsError('permission-denied', 'רק פותח הבקשה או מנהל מכרז יכולים להריץ את המחקר.');
+    }
+    return runRequestResearch(input.serial, caller);
+  },
+);
 
 // ---- Tenders ----
 // Creating a case is all-or-nothing and retry-safe:
@@ -454,30 +526,18 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
   const { team, users: teamUsers } = await resolveTeam(teamInput);
   const owner = await usersRepo.get(caller.uid);
 
-  // Calculated and fixed fields (guarantee default and words, total months, manager and requester
-  // details, …) are completed from what was asked, before the confidential split: the guarantee
-  // default reads the estimate.
   const requester = teamUsers.find((u) => u.role === 'requester');
-  const params = resolveSystemFills(template.params, asked, {
-    submissionDeadline: input.submissionDeadline ?? null,
-    manager: owner ? { displayName: owner.displayName, email: owner.email } : undefined,
-    requester: requester ? { displayName: requester.displayName, phone: requester.phone } : undefined,
-  });
-  // Confidential values (the estimate, G6) never go on the supplier-readable tender doc.
-  const { publicParams, internalParams } = splitConfidential(template, params);
-
-  // ---- 2. serial + document ----
-  const id = tendersRepo.newId();
   const serial = bidReq.serial;
-  // The bid number is the case serial — filled by the system, never typed or guessed.
-  for (const p of template.params) if (isAutoSerialParam(p)) publicParams[p.key] = serial;
+  const { publicParams, internalParams } = buildCaseParams(template, asked, {
+    serial,
+    submissionDeadline: input.submissionDeadline ?? null,
+    owner,
+    requester,
+  });
+
+  // ---- 2. the draft case (no document yet — draft-first) ----
+  const id = tendersRepo.newId();
   // A blank title is named by the system: the type and the case serial.
-  // ...and the submission-date fields are the form's deadline.
-  for (const p of template.params) {
-    if (isAutoDeadlineParam(p) && input.submissionDeadline) {
-      publicParams[p.key] = formatDeadlineFor(p.key, input.submissionDeadline);
-    }
-  }
   const systemKeys = new Set(template.params.filter(isSystemParam).map((p) => p.key));
   const title = input.title?.trim() || `${TENDER_TYPE_LABELS_HE[input.type]} ${serial}`;
   const tender: TenderDoc = {
@@ -492,6 +552,7 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
     status: 'draft',
     googleDocId: null,
     docExportPath: null,
+    documentStatus: 'none',
     ownerUid: caller.uid,
     submissionDeadline: input.submissionDeadline ?? null,
     awardDate: input.awardDate ?? null,
@@ -543,15 +604,11 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
       })),
   ];
 
-  // ---- 3. one atomic write ----
-  let gen: GeneratedDoc | null = null;
+  // ---- 3. one atomic write (the document is created later, after the inspector passes) ----
+  tender.draftDataHash = currentDraftDataHash(tender, template, internalParams);
   try {
-    gen = await generateTenderDocument(tender, template);
-    tender.googleDocId = gen.googleDocId;
-    tender.docExportPath = gen.exportPath;
     await caseCreationRepo.commit({ tender, access, provenance, internalParams, requestId, uid: caller.uid, bidRequestSerial: bidReq.serial });
   } catch (err) {
-    if (gen) await discardGeneratedDocument(id, gen);
     // A concurrent duplicate of this submission committed first — return that case.
     const raced = await alreadyCreated();
     if (raced) return raced;
@@ -572,24 +629,8 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
     throw new HttpsError('internal', 'יצירת המכרז נכשלה ולא נשמר דבר. ניתן לנסות שוב.');
   }
 
-  // ---- after commit: best-effort extras (never undo the case) ----
-  let skipped: string[] = [];
-  try {
-    // The caller's own token email is a real Google address when they signed in with SSO, so it
-    // is an acceptable fallback for the owner only.
-    const callerAddress = googleIdentityOf(owner ?? {}) ?? caller.email;
-    if (callerAddress) await setDocumentPermissions(gen.googleDocId, { writerEmails: [callerAddress] });
-    const recipients = splitDocsRecipients(teamUsers);
-    skipped = recipients.skipped;
-    if (recipients.writerEmails.length || recipients.commenterEmails.length) {
-      await setDocumentPermissions(gen.googleDocId, {
-        writerEmails: recipients.writerEmails,
-        commenterEmails: recipients.commenterEmails,
-      });
-    }
-  } catch (err) {
-    console.error(`createTender ${serial}: Docs permissions failed`, err);
-  }
+  // Docs permissions are granted when the document is created (generateDocument).
+  const skipped = splitDocsRecipients(teamUsers).skipped;
   const missing = missingRoles(requiredRoles, team);
   await auditRepo.append({
     entityType: 'tender',
@@ -635,12 +676,172 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
   return { id, serial, docsSkipped: skipped, verdict: null, missingRoles: missing, duplicate: false };
 });
 
+// Draft-first: edit a case's data in the app while it has no document (manager). Same checks as
+// creation; any change makes earlier inspector checks stale (a new fingerprint).
+export const updateTenderDraft = onCall(async (req) => {
+  const caller = requireManager(req);
+  const input = parseInput(updateTenderDraftInput, req.data);
+  const tender = await tendersRepo.get(input.tenderId);
+  if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  if (hasDocument(tender)) {
+    throw new HttpsError('failed-precondition', 'למכרז כבר נוצר מסמך — יש לערוך את המסמך עצמו.');
+  }
+  if (tender.status !== 'draft') throw new HttpsError('failed-precondition', 'ניתן לערוך רק מכרז בטיוטה.');
+  const template = await templatesRepo.get(tender.type);
+  if (!template) throw new HttpsError('failed-precondition', `אין תבנית לסוג המכרז: ${tender.type}`);
+
+  const submissionDeadline =
+    input.submissionDeadline !== undefined ? input.submissionDeadline : tender.submissionDeadline;
+  if (template.params.some(isAutoDeadlineParam) && !submissionDeadline) {
+    throw new HttpsError('invalid-argument', 'יש לקבוע מועד הגשה — הוא ממולא אוטומטית במסמך המכרז.');
+  }
+  const internalBefore = await internalRepo.getParams(tender.id);
+  // The edit overlays the current values (public + confidential); validation is the create form's.
+  const asked = validateParams(template, { ...tender.params, ...internalBefore, ...(input.params ?? {}) });
+  const owner = await usersRepo.get(tender.ownerUid);
+  const requester = tender.team?.requester ? await usersRepo.get(tender.team.requester) : null;
+  const { publicParams, internalParams } = buildCaseParams(template, asked, {
+    serial: tender.serial ?? '',
+    submissionDeadline,
+    owner,
+    requester: requester ?? undefined,
+  });
+  const next: TenderDoc = {
+    ...tender,
+    title: input.title ?? tender.title,
+    params: publicParams,
+    submissionDeadline,
+    awardDate: input.awardDate !== undefined ? input.awardDate : tender.awardDate,
+    domainTags: input.domainTags ?? tender.domainTags ?? [],
+    evaluationCriteria: input.evaluationCriteria ?? tender.evaluationCriteria ?? [],
+  };
+  const draftDataHash = currentDraftDataHash(next, template, internalParams);
+  const changed = [...new Set([...Object.keys(tender.params), ...Object.keys(publicParams)])].filter(
+    (k) => String(tender.params[k] ?? '') !== String(publicParams[k] ?? ''),
+  );
+  await tendersRepo.replaceDraftData(tender.id, {
+    title: next.title,
+    params: next.params,
+    submissionDeadline: next.submissionDeadline,
+    awardDate: next.awardDate,
+    domainTags: next.domainTags,
+    evaluationCriteria: next.evaluationCriteria,
+    draftDataHash,
+  });
+  await internalRepo.setParams(tender.id, internalParams);
+
+  // Provenance: which values now differ from the AI draft (G11).
+  const provenance = await internalRepo.getProvenance(tender.id);
+  if (provenance?.draftId) {
+    const draft = await bidDraftsRepo.get(provenance.draftId);
+    if (draft) {
+      const systemKeys = new Set(template.params.filter(isSystemParam).map((p) => p.key));
+      provenance.editedByManager = Object.keys(publicParams).filter(
+        (k) => !systemKeys.has(k) && String(draft.params[k] ?? '') !== String(publicParams[k] ?? ''),
+      );
+      await internalRepo.setProvenance(tender.id, provenance);
+    }
+  }
+  await auditRepo.append({
+    entityType: 'tender',
+    entityId: tender.id,
+    tenderId: tender.id,
+    actorUid: caller.uid,
+    actorName: caller.name,
+    action: 'draft_updated',
+    prevState: null,
+    newState: `${changed.length} fields`,
+    detail: changed.slice(0, 20).join(', ') || undefined,
+  });
+  return { ok: true, draftDataHash, changed };
+});
+
+// Draft-first: create the case's document — manager only, and only when the latest inspector check
+// covered exactly the current draft data with no blocking finding (no override).
+export const generateDocument = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 }, async (req) => {
+  const caller = requireManager(req);
+  const input = parseInput(generateDocumentInput, req.data);
+  const tender = await tendersRepo.get(input.tenderId);
+  if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  const template = await templatesRepo.get(tender.type);
+  if (!template) throw new HttpsError('failed-precondition', `אין תבנית לסוג המכרז: ${tender.type}`);
+  const internalParams = await internalRepo.getParams(tender.id);
+  const reason = documentGate(tender, currentDraftDataHash(tender, template, internalParams));
+  if (reason) throw new HttpsError('failed-precondition', DOCUMENT_GATE_MESSAGE_HE[reason]);
+  if (!(await tendersRepo.claimDocumentGeneration(tender.id))) {
+    throw new HttpsError('failed-precondition', 'המסמך כבר נוצר או נמצא ביצירה.');
+  }
+
+  let gen: GeneratedDoc | null = null;
+  try {
+    gen = await generateTenderDocument(tender, template);
+    await tendersRepo.update(tender.id, {
+      googleDocId: gen.googleDocId,
+      docExportPath: gen.exportPath,
+      documentStatus: 'generated',
+      documentGeneratedAt: now(),
+      documentGeneratedBy: caller.uid,
+    });
+  } catch (err) {
+    if (gen) await discardGeneratedDocument(tender.id, gen);
+    await tendersRepo.update(tender.id, { documentStatus: 'none' });
+    console.error(`generateDocument failed for ${tender.serial}`, err);
+    throw new HttpsError('internal', 'יצירת המסמך נכשלה — הטיוטה לא השתנתה. ניתן לנסות שוב.');
+  }
+  const withDoc: TenderDoc = { ...tender, googleDocId: gen.googleDocId, docExportPath: gen.exportPath, documentStatus: 'generated' };
+
+  // Docs permissions: owner (writer) + the case team (writer/commenter by role). Best-effort.
+  let skipped: string[] = [];
+  try {
+    const owner = await usersRepo.get(tender.ownerUid);
+    const ownerAddress = googleIdentityOf(owner ?? {}) ?? (caller.uid === tender.ownerUid ? caller.email : undefined);
+    if (ownerAddress) await setDocumentPermissions(gen.googleDocId, { writerEmails: [ownerAddress] });
+    const teamUsers = (await Promise.all(Object.values(tender.team ?? {}).map((uid) => usersRepo.get(uid!)))).filter(
+      (u): u is UserDoc => !!u,
+    );
+    const recipients = splitDocsRecipients(teamUsers);
+    skipped = recipients.skipped;
+    if (recipients.writerEmails.length || recipients.commenterEmails.length) {
+      await setDocumentPermissions(gen.googleDocId, {
+        writerEmails: recipients.writerEmails,
+        commenterEmails: recipients.commenterEmails,
+      });
+    }
+  } catch (err) {
+    console.error(`generateDocument ${tender.serial}: Docs permissions failed`, err);
+  }
+  // Version 1 = the document as created (the baseline for document-change scoring).
+  try {
+    const text = await readTenderDocText(withDoc);
+    await recordVersion(withDoc, text, docHash(text), 'created');
+  } catch (err) {
+    console.error(`generateDocument ${tender.serial}: version 1 not recorded`, err);
+  }
+  await auditRepo.append({
+    entityType: 'tender',
+    entityId: tender.id,
+    tenderId: tender.id,
+    actorUid: caller.uid,
+    actorName: caller.name,
+    action: 'document_generated',
+    prevState: tender.lastSupervision?.runId ?? null,
+    newState: gen.googleDocId ?? gen.exportPath,
+    detail: skipped.length ? `ללא חשבון Google: ${skipped.join(', ')}` : undefined,
+  });
+  await refreshCaseScore(SYSTEM, tender.id);
+  return { ok: true, googleDocId: gen.googleDocId, docsSkipped: skipped };
+});
+
 export const transitionTender = onCall(SUPERVISED, async (req) => {
   const caller = requireManager(req);
   const input = parseInput(transitionTenderInput, req.data);
   const current = await tendersRepo.get(input.tenderId);
   if (!current) throw new HttpsError('not-found', 'מכרז לא נמצא.');
 
+  // Internal review happens in the document — it must exist (draft-first).
+  if (input.to === 'internal_review' && canTransition(current.status, 'internal_review') && !hasDocument(current)) {
+    throw new HttpsError('failed-precondition', 'יש ליצור את מסמך המכרז (לאחר אישור הסוכן המפקח) לפני שליחה לבדיקה פנימית.');
+  }
   // The case team must be complete before internal review.
   if (input.to === 'internal_review' && canTransition(current.status, 'internal_review')) {
     const missing = missingRoles(current.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[current.type], current.team);
@@ -883,6 +1084,8 @@ export const getTenderDocument = onCall({ secrets: DOCS_SECRETS }, async (req) =
   } else {
     requireCaseAccess(caller, tender);
   }
+  // Draft-first: no document yet — say so instead of failing to read one.
+  if (!hasDocument(tender)) return { kind: 'none' as const, title: tender.title };
   return getViewable(tender, caller.role !== 'supplier');
 });
 

@@ -199,6 +199,14 @@ service cloud.firestore {
     match /bidRequests/{serial} {
       allow read: if isManager() || (isInternal() && resource.data.requesterUid == request.auth.uid);
       allow write: if false;
+
+      // requirement research (agent): the request's owner and managers; function-only writes
+      match /research/{runId} {
+        allow read: if isManager()
+          || (isInternal()
+              && get(/databases/$(database)/documents/bidRequests/$(serial)).data.requesterUid == request.auth.uid);
+        allow write: if false;
+      }
     }
 
     // ---- audit log (immutable, append-only via functions) ----

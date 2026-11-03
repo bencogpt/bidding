@@ -46,6 +46,10 @@ import type {
   TeamRole,
   SupervisionReport,
   SupervisionVerdict,
+  UpdateTenderDraftInput,
+  GenerateDocumentInput,
+  RerunRequestResearchInput,
+  ResearchStatus,
 } from '@obms/shared';
 
 // The Firebase client gives up after 70 s by default and reports an error — while the server keeps
@@ -97,8 +101,15 @@ export const api = {
   grantAccess: call<GrantAccessInput, { ok: true; docsSkipped: string[] }>('grantAccess'),
   getTenderDocument: call<
     { tenderId: string },
-    { kind: 'html'; content: string; title: string }
+    { kind: 'html'; content: string; title: string } | { kind: 'none'; title: string }
   >('getTenderDocument'),
+  updateTenderDraft: call<UpdateTenderDraftInput, { ok: true; draftDataHash: string; changed: string[] }>(
+    'updateTenderDraft',
+  ),
+  generateDocument: call<GenerateDocumentInput, { ok: true }>('generateDocument'),
+  rerunRequestResearch: call<RerunRequestResearchInput, { status: ResearchStatus; runId: string }>(
+    'rerunRequestResearch',
+  ),
   askQuestion: call<AskQuestionInput, { id: string }>('askQuestion'),
   clusterTenderQuestions: call<
     { tenderId: string },

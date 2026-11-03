@@ -13,11 +13,12 @@ import {
   useTemplate,
   useChat,
 } from '../lib/hooks';
-import { REQUIRED_ROLES_BY_TYPE, REQUIRE_APPROVALS, missingRoles, missingApprovals } from '@obms/shared';
+import { REQUIRED_ROLES_BY_TYPE, REQUIRE_APPROVALS, missingRoles, missingApprovals, hasDocument } from '@obms/shared';
 import TeamPanel from '../components/TeamPanel';
 import ChatPanel from '../components/ChatPanel';
 import { api } from '../lib/api';
 import DocumentViewer from '../components/DocumentViewer';
+import DraftPanel, { draftGate } from '../components/DraftPanel';
 import AccessPanel from '../components/AccessPanel';
 import QuestionsPanel from '../components/QuestionsPanel';
 import EvaluationPanel from '../components/EvaluationPanel';
@@ -129,7 +130,15 @@ export default function TenderWorkspace() {
   // The next step for this case, shown as the header's main button.
   let action: HeaderAction | undefined;
   if (isManager) {
-    if (tender.status === 'draft') {
+    if (tender.status === 'draft' && !hasDocument(tender)) {
+      // Draft-first: the next step is creating the document, from the document tab.
+      const gate = draftGate(tender);
+      action = {
+        label: t('draft.nextAction'),
+        onClick: () => setTab('document'),
+        title: gate ? t(`draft.gate.${gate}`) : undefined,
+      };
+    } else if (tender.status === 'draft') {
       action = {
         label: t('ws.finalApprove'),
         onClick: () => transitionTo('internal_review'),
@@ -229,7 +238,16 @@ export default function TenderWorkspace() {
       )}
       {tab === 'document' && (
         <div className="grid items-start gap-4 lg:grid-cols-[1fr_340px]">
-          <DocumentViewer tenderId={tender.id} googleDocId={tender.googleDocId} />
+          {hasDocument(tender) ? (
+            <DocumentViewer tenderId={tender.id} googleDocId={tender.googleDocId} />
+          ) : (
+            <DraftPanel
+              tender={tender}
+              template={template}
+              canManage={isManager}
+              onOpenInspector={() => setTab('supervisor')}
+            />
+          )}
           <ChatPanel tenderId={tender.id} title={tender.title} messages={chat.messages} />
         </div>
       )}

@@ -28,6 +28,8 @@ import type {
   SkillTipsRun,
   ConversionRun,
   BidRequestDoc,
+  RequestResearch,
+  ResearchSummary,
 } from '@obms/shared';
 
 const stripUndefined = <T extends Record<string, unknown>>(o: T): T =>
@@ -155,6 +157,25 @@ export const bidRequestsRepo = {
       .get();
     return q.empty ? null : (q.docs[0].data() as BidRequestDoc);
   },
+  /** The request's research summary (status + latest run). */
+  async setResearch(serial: string, research: ResearchSummary): Promise<void> {
+    await db.collection('bidRequests').doc(serial).set({ research }, { merge: true });
+  },
+};
+
+// ---- requirement research runs (bidRequests/{serial}/research/{runId}; function-only writes) ----
+export const researchRepo = {
+  newId(serial: string): string {
+    return db.collection('bidRequests').doc(serial).collection('research').doc().id;
+  },
+  async save(r: RequestResearch): Promise<void> {
+    await db
+      .collection('bidRequests')
+      .doc(r.serial)
+      .collection('research')
+      .doc(r.runId)
+      .set(JSON.parse(JSON.stringify(r)));
+  },
 };
 
 // ---- atomic case creation (all-or-nothing, retry-safe) ----
@@ -206,6 +227,24 @@ export const caseCreationRepo = {
 
 // ---- tenders ----
 export const tendersRepo = {
+  /**
+   * Claim document creation for a draft (documentStatus none → generating) in a transaction, so two
+   * concurrent requests can't both create a document. Returns false if not claimable.
+   */
+  async claimDocumentGeneration(id: string): Promise<boolean> {
+    const ref = db.collection('tenders').doc(id);
+    return db.runTransaction(async (tx) => {
+      const t = (await tx.get(ref)).data() as TenderDoc | undefined;
+      if (!t || (t.documentStatus ?? 'none') !== 'none' || t.googleDocId || t.docExportPath) return false;
+      tx.update(ref, { documentStatus: 'generating', updatedAt: now() });
+      return true;
+    });
+  },
+  /** Replace draft data fields outright (params is a full map — a cleared value must disappear). */
+  async replaceDraftData(id: string, patch: Partial<TenderDoc>): Promise<void> {
+    const clean = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
+    await db.collection('tenders').doc(id).update({ ...clean, updatedAt: now() });
+  },
   async listAll(): Promise<TenderDoc[]> {
     const q = await db.collection('tenders').get();
     return q.docs.map((d) => d.data() as TenderDoc);

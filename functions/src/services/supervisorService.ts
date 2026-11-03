@@ -10,6 +10,7 @@ import {
   LEGAL_CLAUSE_CHECKLIST,
   REQUIRED_SKILLS,
   TENDER_TYPE_LABELS_HE,
+  hasDocument,
   isConfidentialParam,
   verdictOf,
   type FindingCode,
@@ -32,7 +33,8 @@ import {
   versionsRepo,
 } from '../repositories.js';
 import { COMPARE_MODEL, getClient, toolInput } from './aiService.js';
-import { readTenderDocText, readVersionSnapshot, saveVersionSnapshot } from './docsService.js';
+import { readTenderDocText, readVersionSnapshot, renderDraftText, saveVersionSnapshot } from './docsService.js';
+import { draftDataHash } from './draftCalc.js';
 import { changeRatio } from './scoreCalc.js';
 import { SUPERVISOR_SKILLS, currentSkillHash, loadGlobalRules, loadSkill } from './skillsRegistry.js';
 import { docHash, normalize, presentLegalSections, runDeterministicChecks } from './supervisorChecks.js';
@@ -281,7 +283,7 @@ export async function aiReview(
  * supervision checkpoint reads the live document, so this captures each version that reached a
  * checkpoint (v1 = the generated document at creation). Best-effort: never fails supervision.
  */
-async function recordVersion(tender: TenderDoc, text: string, hash: string, stage: SupervisionStage) {
+export async function recordVersion(tender: TenderDoc, text: string, hash: string, stage: SupervisionStage) {
   try {
     const list = await versionsRepo.list(tender.id);
     const prev = list[list.length - 1];
@@ -304,6 +306,21 @@ async function recordVersion(tender: TenderDoc, text: string, hash: string, stag
   }
 }
 
+/** Fingerprint of a draft's current data (see draftCalc.draftDataHash). */
+export function currentDraftDataHash(
+  tender: TenderDoc,
+  template: TemplateDoc,
+  internalParams: Record<string, string | number>,
+): string {
+  return draftDataHash({
+    previewText: renderDraftText(tender, template),
+    submissionDeadline: tender.submissionDeadline ?? null,
+    awardDate: tender.awardDate ?? null,
+    evaluationCriteria: tender.evaluationCriteria ?? [],
+    internalParams,
+  });
+}
+
 /** Run the supervisor for a tender at a checkpoint, persist the report and audit it. */
 export async function superviseTender(
   caller: Pick<Caller, 'uid' | 'name'>,
@@ -320,12 +337,20 @@ export async function superviseTender(
   const template = allTemplates.find((t) => t?.type === tender.type);
   if (!template) throw new Error(`no template for type ${tender.type}`);
 
+  // Draft-first: a case without its document is checked on a preview rendered from the draft data
+  // (template + values, in memory). The report then fingerprints exactly the data it checked.
+  const isDraft = !hasDocument(tender);
   let docText: string | null = null;
-  try {
-    docText = await readTenderDocText(tender);
-  } catch (err) {
-    console.error('supervisor: document unreadable', err);
+  if (isDraft) {
+    docText = renderDraftText(tender, template);
+  } else {
+    try {
+      docText = await readTenderDocText(tender);
+    } catch (err) {
+      console.error('supervisor: document unreadable', err);
+    }
   }
+  const dataHash = isDraft ? currentDraftDataHash(tender, template, internalParams) : null;
 
   const findings = runDeterministicChecks({
     tender,
@@ -337,7 +362,8 @@ export async function superviseTender(
     currentSkillHash,
   });
 
-  if (docText !== null) await recordVersion(tender, docText, docHash(docText), stage);
+  // Versions track the real document; a draft's preview is not a version.
+  if (docText !== null && !isDraft) await recordVersion(tender, docText, docHash(docText), stage);
 
   let aiModel: string | null = null;
   if (!RULES_ONLY.includes(stage) && docText !== null) {
@@ -359,11 +385,21 @@ export async function superviseTender(
     aiModel,
     runBy: caller.uid,
     at: now(),
+    basis: isDraft ? 'draft' : 'document',
+    dataHash,
   };
   await supervisionRepo.add(report);
   const blockers = findings.filter((f) => f.severity === 'block').length;
   await tendersRepo.update(tenderId, {
-    lastSupervision: { runId: report.runId, verdict: report.verdict, stage, blockers, at: report.at },
+    lastSupervision: {
+      runId: report.runId,
+      verdict: report.verdict,
+      stage,
+      blockers,
+      at: report.at,
+      basis: report.basis,
+      dataHash,
+    },
   });
   await auditRepo.append({
     entityType: 'tender',

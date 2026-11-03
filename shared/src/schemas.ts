@@ -3,6 +3,7 @@ import { TENDER_STATUSES } from './tender.js';
 import { SYSTEM_FORMULAS } from './templates.js';
 import type { SupervisionSummary, ValueSource, BidDraftRecord } from './supervision.js';
 import { createTenderTeamFields, type CaseApprovals, type CaseTeam, type TeamRole } from './team.js';
+import type { DocumentStatus, ResearchSummary } from './draft.js';
 
 // Inline string-literal tuples so z.enum infers a literal union (passing values from a
 // const object widens to a non-tuple and fails tsc).
@@ -135,6 +136,11 @@ export type TenderDoc = z.infer<typeof tenderDocSchema> & {
   requiredRoles?: TeamRole[];
   memberUids?: string[]; // owner + team: the only internal users (besides managers) who see the case
   approvals?: CaseApprovals; // role → sign-off during internal review; cleared when a review starts
+  // Draft-first: the document is created only after the inspector passes (see draft.ts).
+  documentStatus?: DocumentStatus;
+  documentGeneratedAt?: number;
+  documentGeneratedBy?: string;
+  draftDataHash?: string; // fingerprint of the current draft data (compared with the last check)
 };
 
 export const accessDocSchema = z.object({
@@ -247,7 +253,9 @@ export const bidRequestDocSchema = z.object({
   createdAt: z.number(),
   convertedAt: z.number().nullable(),
 });
-export type BidRequestDoc = z.infer<typeof bidRequestDocSchema>;
+export type BidRequestDoc = z.infer<typeof bidRequestDocSchema> & {
+  research?: ResearchSummary; // requirement research (agent), see draft.ts
+};
 
 export const createBidRequestInput = z.object({
   brief: z.string().trim().min(3).max(BRIEF_MAX_LENGTH),

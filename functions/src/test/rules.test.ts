@@ -47,6 +47,8 @@ before(async () => {
     await setDoc(doc(db, 'tenders/t1/access/ul'), { principalId: 'ul', kind: 'internal', level: 'comment' });
     await setDoc(doc(db, 'bidRequests/2026-31'), { serial: '2026-31', brief: 'א', requesterUid: 'ur', status: 'open' });
     await setDoc(doc(db, 'bidRequests/2026-32'), { serial: '2026-32', brief: 'ב', requesterUid: 'other', status: 'open' });
+    await setDoc(doc(db, 'bidRequests/2026-31/research/r1'), { runId: 'r1', serial: '2026-31', status: 'done' });
+    await setDoc(doc(db, 'bidRequests/2026-32/research/r2'), { runId: 'r2', serial: '2026-32', status: 'done' });
     await setDoc(doc(db, 'auditLog/a1'),{ id: 'a1', tenderId: 't1', action: 'create', at: 1 });
     await setDoc(doc(db, 'tenders/t1/chat/m0'), { id: 'm0', uid: 'mgr', name: 'M', role: 'tender_manager', text: 'שלום', createdAt: 1 });
     // An unpublished tender the supplier somehow holds access to (defense in depth).
@@ -122,6 +124,15 @@ test('manager reads every bid request; nobody writes from the client', async () 
   await assertFails(getDoc(doc(supplierA(), 'bidRequests/2026-31')));
 });
 // A non-manager internal role, to exercise the isInternal() branch rather than isManager().
+test('request research: the requester reads their own, managers read all; nobody writes', async () => {
+  await assertSucceeds(getDoc(doc(requester(), 'bidRequests/2026-31/research/r1')));
+  await assertFails(getDoc(doc(requester(), 'bidRequests/2026-32/research/r2')));
+  await assertSucceeds(getDoc(doc(manager(), 'bidRequests/2026-32/research/r2')));
+  await assertFails(getDoc(doc(supplierA(), 'bidRequests/2026-31/research/r1')));
+  await assertFails(setDoc(doc(requester(), 'bidRequests/2026-31/research/x'), { status: 'done' }));
+  await assertFails(setDoc(doc(manager(), 'bidRequests/2026-31/research/x'), { status: 'done' }));
+});
+
 const legal = () => env.authenticatedContext('ul', { role: 'legal' }).firestore();
 // An internal user who is NOT on t1's team.
 const finance = () => env.authenticatedContext('uf', { role: 'finance' }).firestore();
