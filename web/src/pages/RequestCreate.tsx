@@ -1,13 +1,18 @@
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { BRIEF_MAX_LENGTH } from '@obms/shared';
+import { BRIEF_MAX_LENGTH, REQUESTER_FIELDS, REQUESTER_TEXTAREA_MAX, REQUESTER_TEXT_MAX, normalizeDetailsInput } from '@obms/shared';
 import { api } from '../lib/api';
 
-// Phase 1 (the requester): only the tender brief. The system answers with the bid number.
+// Defaults (work days / hours) start filled in; the requester can change them.
+const initialDetails = (): Record<string, string> =>
+  Object.fromEntries(REQUESTER_FIELDS.filter((f) => f.default).map((f) => [f.key, f.default as string]));
+
+// Phase 1 (the requester): the tender brief and a few follow-up questions. The system answers with the bid number.
 export default function RequestCreate() {
   const { t } = useTranslation();
   const [brief, setBrief] = useState('');
+  const [details, setDetails] = useState<Record<string, string>>(initialDetails);
   const [serial, setSerial] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -20,10 +25,21 @@ export default function RequestCreate() {
       setError(t('req.briefTooShort'));
       return;
     }
+    const { details: answers, badNumbers } = normalizeDetailsInput(details);
+    if (badNumbers.length) {
+      const field = REQUESTER_FIELDS.find((f) => f.key === badNumbers[0])?.labelHe ?? badNumbers[0];
+      setError(t('req.badNumber', { field }));
+      document.getElementById(`detail-${badNumbers[0]}`)?.focus();
+      return;
+    }
     setBusy(true);
     setError('');
     try {
-      const r = await api.createBidRequest({ brief, requestId: requestId.current });
+      const r = await api.createBidRequest({
+        brief,
+        requestId: requestId.current,
+        ...(Object.keys(answers).length ? { details: answers } : {}),
+      });
       setSerial(r.serial);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -34,6 +50,7 @@ export default function RequestCreate() {
 
   const reset = () => {
     setBrief('');
+    setDetails(initialDetails());
     setSerial(null);
     requestId.current = crypto.randomUUID();
   };
@@ -71,6 +88,39 @@ export default function RequestCreate() {
               required
             />
           </div>
+
+          <div className="border-t pt-4">
+            <h2 className="font-semibold">{t('req.detailsTitle')}</h2>
+            <p className="mb-3 text-sm text-tx-soft">{t('req.detailsHint')}</p>
+            <div className="space-y-4">
+              {REQUESTER_FIELDS.map((f) => (
+                <div key={f.key}>
+                  <label className="label" htmlFor={`detail-${f.key}`}>
+                    {f.labelHe}
+                  </label>
+                  {f.type === 'textarea' ? (
+                    <textarea
+                      id={`detail-${f.key}`}
+                      className="input min-h-20"
+                      maxLength={REQUESTER_TEXTAREA_MAX}
+                      value={details[f.key] ?? ''}
+                      onChange={(e) => setDetails((d) => ({ ...d, [f.key]: e.target.value }))}
+                    />
+                  ) : (
+                    <input
+                      id={`detail-${f.key}`}
+                      className="input"
+                      type={f.type === 'number' ? 'number' : 'text'}
+                      {...(f.type === 'number' ? { min: 0, step: 'any' } : { maxLength: REQUESTER_TEXT_MAX })}
+                      value={details[f.key] ?? ''}
+                      onChange={(e) => setDetails((d) => ({ ...d, [f.key]: e.target.value }))}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
           {error && <div className="text-sm text-red-600">{error}</div>}
           <button className="btn btn-gold" disabled={busy}>
             {busy ? t('req.creating') : t('req.submit')}
