@@ -122,8 +122,13 @@ export default function InternalLayout() {
           <nav className="space-y-0.5">
             <NavItem to="/" label={t('nav.myDesk')} badge={pendingFeedback.length} />
             <NavItem to="/all" label={t('nav.dashboard')} />
-            {(isManager || role === 'requester') && <NavItem to="/requests/new" label={t('nav.newRequest')} />}
-            <NavItem to="/suppliers" label={t('nav.suppliers')} />
+            <div
+              className="flex cursor-default items-center justify-between rounded-[10px] px-3.5 py-2 text-sm text-tx-soft opacity-[.55]"
+              aria-disabled="true"
+            >
+              {t('nav.suppliers')}
+              <small className="rounded border border-paper-2 px-1.5 text-[10px]">{t('nav.soon')}</small>
+            </div>
             {isManager && <NavItem to="/reports" label={t('nav.reports')} />}
             {isManager && <NavItem to="/audit" label={t('nav.audit')} />}
             {isManager && <div className="mx-2 my-3 h-px bg-paper-2" />}
