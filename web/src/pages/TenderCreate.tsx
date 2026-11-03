@@ -28,6 +28,8 @@ import { useBidRequest, useTemplate, useUsers } from '../lib/hooks';
 import { api } from '../lib/api';
 import TagsInput from '../components/TagsInput';
 import RequesterDetails from '../components/RequesterDetails';
+import StageBar from '../components/StageBar';
+import SectionCard, { StatusChip } from '../components/SectionCard';
 
 type Criterion = { name: string; weight: number };
 
@@ -314,26 +316,46 @@ export default function TenderCreate() {
     );
 
   return (
-    <div className="mx-auto max-w-2xl">
+    <div className="mx-auto max-w-5xl">
       <h1 className="mb-2 font-display text-2xl font-bold">{t('req.phase2Title')}</h1>
-      <p className="mb-6 text-sm text-tx-soft">{t('req.phase2Hint')}</p>
-      <div className="card mb-5 space-y-2 p-6">
-        <div className="text-sm">
+      <p className="mb-5 text-sm text-tx-soft">{t('req.phase2Hint')}</p>
+      <StageBar
+        steps={[
+          { label: `1 · ${t('req.sectionTitle')}`, state: 'done' },
+          { label: `2 · ${t('req.procSection')}`, state: 'cur' },
+        ]}
+      />
+      <SectionCard
+        n={1}
+        title={t('req.sectionTitle')}
+        owner={
+          <>
+            <span>{t('req.owner')} · {request.requesterName}</span>
+            <StatusChip tone="ok">{t('req.statusSent')}</StatusChip>
+          </>
+        }
+      >
+        <div className="mb-3 text-sm">
           <span className="text-tx-soft">{t('req.bidNumber')}: </span>
           <span className="font-semibold">{request.serial}</span>
-          <span className="mr-4 text-tx-soft">{t('req.requestedBy')}: </span>
-          {request.requesterName}
         </div>
         <div className="whitespace-pre-wrap rounded bg-paper-2 p-3 text-sm">{request.brief}</div>
-      </div>
-      <RequesterDetails details={request.details} />
+        <div className="mt-4">
+          <RequesterDetails details={request.details} />
+        </div>
+      </SectionCard>
 
       {notConverted && (
         <div className="card mb-5 border-amber-300 bg-amber-50 p-4 text-sm text-amber-800">
           {t('conv.createBlocked', { n: templateStatus!.unresolved })}
         </div>
       )}
-      <form onSubmit={submit} className="card space-y-5 p-6">
+      <SectionCard
+        n={2}
+        title={t('req.procSection')}
+        owner={<StatusChip tone="wait">{t('req.statusInProgress')}</StatusChip>}
+      >
+      <form onSubmit={submit} className="space-y-5">
         <div>
           <label className="label">{t('create.type')}</label>
           <select
@@ -457,6 +479,7 @@ export default function TenderCreate() {
           {busy ? t('create.creating') : t('create.submit')}
         </button>
       </form>
+      </SectionCard>
     </div>
   );
 }

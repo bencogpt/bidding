@@ -88,3 +88,12 @@ test('a model that returns nothing usable falls back to the script', async () =>
   const r = await recommendationsFor(input(), fake(async () => toolUse({ items: [{ kind: 'הערה', text: '' }] })));
   assert.equal(r.source, 'script');
 });
+
+test('composeRequestBrief appends the notes and the chosen recommendations, and nothing when there are none', async () => {
+  const { composeRequestBrief } = await import('@obms/shared');
+  assert.equal(composeRequestBrief('הבקשה', '', []), 'הבקשה');
+  assert.equal(composeRequestBrief('הבקשה', '   ', ['  ']), 'הבקשה');
+  const out = composeRequestBrief('הבקשה', ' הערה חשובה ', ['סעיף א', 'סעיף ב']);
+  assert.equal(out, 'הבקשה\n\nהערות נוספות:\nהערה חשובה\n\nהמלצות שנבחרו:\n- סעיף א\n- סעיף ב');
+  assert.equal(composeRequestBrief('הבקשה', '', ['סעיף א']), 'הבקשה\n\nהמלצות שנבחרו:\n- סעיף א');
+});

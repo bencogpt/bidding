@@ -71,3 +71,13 @@ export function scriptRecommendations(input: RecommendationsInput): Recommendati
   }
   return out.slice(0, 5);
 }
+
+/** The brief as it is sent to procurement: the requester's text, their free notes and the recommendations they chose. */
+export function composeRequestBrief(brief: string, notes: string, chosen: readonly string[]): string {
+  let out = brief;
+  const n = notes.trim();
+  if (n) out += `\n\nהערות נוספות:\n${n}`;
+  const picks = chosen.map((c) => c.trim()).filter(Boolean);
+  if (picks.length) out += `\n\nהמלצות שנבחרו:\n${picks.map((c) => `- ${c}`).join('\n')}`;
+  return out;
+}
