@@ -4,7 +4,7 @@ import { useAuth } from './auth/AuthProvider';
 import { useTranslation } from 'react-i18next';
 import Login from './pages/Login';
 import Unauthorized from './pages/Unauthorized';
-import InternalUsers from './pages/InternalUsers';
+import Settings from './pages/Settings';
 import InternalLayout from './layouts/InternalLayout';
 import SupplierLayout from './layouts/SupplierLayout';
 import Dashboard from './pages/Dashboard';
@@ -56,7 +56,8 @@ export default function App() {
         <Route path="/requests/:serial" element={managerOnly(<TenderCreate />)} />
         <Route path="/tenders/:id" element={<TenderWorkspace />} />
         <Route path="/templates" element={managerOnly(<Templates />)} />
-        <Route path="/users" element={managerOnly(<InternalUsers />)} />
+        <Route path="/settings" element={managerOnly(<Settings />)} />
+        <Route path="/users" element={<Navigate to="/settings" replace />} />
         <Route path="/suppliers" element={<Suppliers />} />
         <Route path="/reports" element={managerOnly(<Reports />)} />
         <Route path="/audit" element={managerOnly(<Audit />)} />

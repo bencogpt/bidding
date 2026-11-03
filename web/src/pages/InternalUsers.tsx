@@ -43,8 +43,6 @@ export default function InternalUsers() {
 
   return (
     <div>
-      <h1 className="mb-6 font-display text-2xl font-bold">{t('users.title')}</h1>
-
       <form onSubmit={add} className="card mb-6 grid gap-3 p-6 md:grid-cols-5">
         <div className="md:col-span-1">
           <label className="label">{t('users.name')}</label>
