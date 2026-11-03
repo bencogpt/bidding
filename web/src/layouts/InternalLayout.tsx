@@ -124,10 +124,11 @@ export default function InternalLayout() {
             <NavItem to="/all" label={t('nav.dashboard')} />
             {(isManager || role === 'requester') && <NavItem to="/requests/new" label={t('nav.newRequest')} />}
             {isManager && <NavItem to="/templates" label={t('nav.templates')} />}
-            {isManager && <NavItem to="/users" label={t('nav.users')} />}
             <NavItem to="/suppliers" label={t('nav.suppliers')} />
             {isManager && <NavItem to="/reports" label={t('nav.reports')} />}
             {isManager && <NavItem to="/audit" label={t('nav.audit')} />}
+            {isManager && <div className="mx-2 my-3 h-px bg-paper-2" />}
+            {isManager && <NavItem to="/settings" label={t('nav.settings')} />}
           </nav>
         </aside>
         <main className="flex-1 overflow-auto p-8">
