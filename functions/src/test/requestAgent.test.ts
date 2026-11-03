@@ -231,3 +231,11 @@ test('a request may run to five pages: the limit, the page counter and the over-
   assert.ok(assistRequestInput.safeParse(base({ brief: 'x'.repeat(15000) })).success);
   assert.equal(assistRequestInput.safeParse(base({ brief: 'x'.repeat(15001) })).success, false);
 });
+
+test('the checklist counts the frame amount only from 240,000', () => {
+  const f = { service_name: 'תמיכה', document_classification: 'בלמ"ס', annual_budget: '239999', contract_years: '3' };
+  const low = requestChecklist(LONG, f);
+  assert.equal(low.find((r) => r.key === 'annual_budget')?.present, false);
+  const ok = requestChecklist(LONG, { ...f, annual_budget: '240000' });
+  assert.ok(ok.every((r) => r.present));
+});

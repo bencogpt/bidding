@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { BUDGET_MIN } from '@obms/shared';
 import type { Fields } from '../lib/useRequestAgent';
 
 interface Row {
@@ -50,6 +51,9 @@ export default function RequestPanel({
                 onChange={(e) => onField(r.key as keyof Fields, e.target.value)}
                 maxLength={r.key === 'document_classification' ? 40 : 200}
               />
+            )}
+            {r.key === 'annual_budget' && fields.annual_budget.trim() !== '' && !r.present && (
+              <small className="block text-red-600">{t('req.budgetMin', { min: BUDGET_MIN.toLocaleString('en-US') })}</small>
             )}
           </li>
         ))}

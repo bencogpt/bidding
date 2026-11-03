@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   BRIEF_MAX_LENGTH,
+  BUDGET_MIN,
   REQUESTER_FIELDS,
   agentDetailsFromFields,
   composeRequestBrief,
@@ -58,9 +59,11 @@ export default function RequestCreate() {
     if (missing || missingKeys.length || badNumbers.length) {
       const k = missingKeys[0] ?? badNumbers[0];
       setError(
-        k
-          ? t(badNumbers.length && !missingKeys.length ? 'req.badNumber' : 'req.missingField', { field: labelOf(k) })
-          : t('req.briefTooShort'),
+        k === 'annual_budget' && !missingKeys.length
+          ? t('req.budgetMin', { min: BUDGET_MIN.toLocaleString('en-US') })
+          : k
+            ? t(badNumbers.length && !missingKeys.length ? 'req.badNumber' : 'req.missingField', { field: labelOf(k) })
+            : t('req.briefTooShort'),
       );
       return;
     }

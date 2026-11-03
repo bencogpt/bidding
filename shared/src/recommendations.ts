@@ -81,3 +81,22 @@ export function composeRequestBrief(brief: string, notes: string, chosen: readon
   if (picks.length) out += `\n\nהמלצות שנבחרו:\n${picks.map((c) => `- ${c}`).join('\n')}`;
   return out;
 }
+
+/** Why an edited recommendation text is not acceptable (an empty string when it is). */
+export function recommendationTextError(text: string): string {
+  const t = text.trim();
+  if (!t) return 'יש להזין טקסט';
+  if (t.length < TEXT_MIN) return 'הטקסט קצר מדי';
+  if (t.length > TEXT_MAX) return `הטקסט ארוך מ-${TEXT_MAX} תווים`;
+  if (t.includes('{{')) return 'אי אפשר להשתמש ב-{{';
+  return '';
+}
+
+/** The chosen list after a recommendation's text changed: the old text is replaced in place, or the new one is added. */
+export function replaceChosen(chosen: readonly string[], from: string, to: string): string[] {
+  const i = chosen.indexOf(from);
+  if (i === -1) return chosen.includes(to) ? [...chosen] : [...chosen, to];
+  const out = [...chosen];
+  out[i] = to;
+  return out;
+}

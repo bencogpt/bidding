@@ -98,3 +98,16 @@ test('composeRequestBrief appends the notes and the chosen recommendations, and 
   assert.equal(out, 'הבקשה\n\nהערות נוספות:\nהערה חשובה\n\nהמלצות שנבחרו:\n- סעיף א\n- סעיף ב');
   assert.equal(composeRequestBrief('הבקשה', '', ['סעיף א']), 'הבקשה\n\nהמלצות שנבחרו:\n- סעיף א');
 });
+
+test('editing a recommendation: valid text, and the chosen list follows the edit', async () => {
+  const { recommendationTextError, replaceChosen } = await import('@obms/shared');
+  assert.equal(recommendationTextError('סעיף תקין'), '');
+  assert.notEqual(recommendationTextError('  '), '');
+  assert.notEqual(recommendationTextError('אב'), '');
+  assert.notEqual(recommendationTextError('x {{y}}'), '');
+  assert.notEqual(recommendationTextError('ש'.repeat(301)), '');
+  assert.equal(recommendationTextError('ש'.repeat(300)), '');
+  assert.deepEqual(replaceChosen(['א', 'ב'], 'א', 'א מתוקן'), ['א מתוקן', 'ב']);
+  assert.deepEqual(replaceChosen(['ב'], 'א', 'א מתוקן'), ['ב', 'א מתוקן'], 'saving an edit also picks the item');
+  assert.deepEqual(replaceChosen(['א מתוקן', 'ב'], 'א מתוקן', 'א'), ['א', 'ב'], 'restoring the original swaps it back');
+});

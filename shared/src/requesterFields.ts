@@ -11,7 +11,11 @@ export interface RequesterField {
   required?: boolean; // must be answered to open the request
   wholeNumber?: boolean; // a number field that must be a whole number
   max?: number; // upper bound of a whole-number field
+  min?: number; // lower bound of a number field
 }
+
+/** The smallest maximum frame amount (₪) a request may state. */
+export const BUDGET_MIN = 240000;
 
 export const REQUESTER_TEXT_MAX = 200;
 export const REQUESTER_TEXTAREA_MAX = 1000;
@@ -34,6 +38,7 @@ export const REQUESTER_FIELDS: readonly RequesterField[] = [
     type: 'number',
     internal: true,
     required: true,
+    min: BUDGET_MIN,
   },
   { key: 'contract_years', labelHe: 'משך תקופת התקשרות בשנים', type: 'number', required: true, wholeNumber: true, max: 30 },
 ];
@@ -62,7 +67,9 @@ function requesterFieldFor(p: { key: string; labelHe?: string }): RequesterField
 
 function valueSchema(f: RequesterField) {
   if (f.type === 'number') {
-    return f.wholeNumber ? z.number().int().min(1).max(f.max ?? 1_000_000) : z.number().finite().positive();
+    return f.wholeNumber
+      ? z.number().int().min(1).max(f.max ?? 1_000_000)
+      : z.number().finite().positive().min(f.min ?? 0);
   }
   // A {{…}} would be pasted into the document as an unfilled placeholder.
   return z
@@ -149,7 +156,7 @@ export function normalizeDetailsInput(
       const n = Number(s);
       const ok = f.wholeNumber
         ? Number.isInteger(n) && n >= 1 && n <= (f.max ?? 1_000_000)
-        : Number.isFinite(n) && n > 0;
+        : Number.isFinite(n) && n > 0 && n >= (f.min ?? 0);
       if (ok) details[f.key] = n;
       else badNumbers.push(f.key);
     } else {
