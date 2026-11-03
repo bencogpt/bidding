@@ -120,6 +120,34 @@ export default function RequestCreate() {
             <RequestChat chat={a.chat} chips={a.chips} typing={a.typing} disabled={a.asking === 'done'} onSay={a.say} />
           )}
 
+          {a.mode === 'chat' && (a.asking === 'quality' || a.asking === 'done') && (
+            <div
+              className={
+                'flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3 text-sm ' +
+                (missing ? 'border-amber-300 bg-amber-50 text-amber-900' : 'border-emerald-300 bg-emerald-50 text-emerald-900')
+              }
+            >
+              <span>
+                {missing
+                  ? t('req.chatMissing', { fields: rows.filter((r) => !r.present).map((r) => r.label).join(', ') })
+                  : t('req.chatReady')}
+              </span>
+              {missing ? (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => document.getElementById(`rq-${rows.find((r) => !r.present && r.key !== 'scope')?.key}`)?.focus()}
+                >
+                  {t('req.chatGoTo')}
+                </button>
+              ) : (
+                <button type="button" className="btn btn-gold btn-sm" disabled={busy} onClick={submit}>
+                  {t('req.sendToProcurement')}
+                </button>
+              )}
+            </div>
+          )}
+
           {a.limited && a.mode === 'chat' && <p className="text-xs text-tx-soft">{t('req.limited')}</p>}
           {a.error && <p className="text-sm text-red-600">{t('req.agentError')}</p>}
         </div>

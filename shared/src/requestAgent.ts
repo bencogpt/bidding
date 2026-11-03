@@ -61,8 +61,8 @@ export const QUALITY_QUESTIONS: readonly { q: string; chips: string[] }[] = [
 ];
 
 const GREETING = 'שלום, אעזור לך להשלים את הבקשה. אשאל שאלה אחת בכל פעם. ';
-const QUALITY_INTRO = 'כל פרטי החובה מולאו. עוד כמה שאלות להשלמה, אפשר לדלג על כל אחת. ';
-const DONE = 'מצוין, זה מספיק. הבקשה מוכנה לשליחה לרכש.';
+const QUALITY_INTRO = 'קיבלתי את כל מה שצריך מהשיחה. עוד כמה שאלות להשלמה, אפשר לדלג על כל אחת. ';
+const DONE = 'מצוין, סיימנו את השאלות.';
 
 export const scopeOk = (brief: string): boolean => brief.trim().length >= SCOPE_MIN_LENGTH;
 
