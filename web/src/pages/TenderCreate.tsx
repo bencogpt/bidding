@@ -358,18 +358,27 @@ export default function TenderCreate() {
       <form onSubmit={submit} className="space-y-5">
         <div>
           <label className="label">{t('create.type')}</label>
-          <select
-            className="input"
-            value={type}
-            onChange={(e) => pickType(e.target.value as TenderType | '')}
-          >
-            <option value="">{t('req.pickType')}</option>
-            {Object.values(TENDER_TYPES).map((tt) => (
-              <option key={tt} value={tt}>
-                {t(`type.${tt}`)}
-              </option>
-            ))}
-          </select>
+          <div className="grid gap-3 sm:grid-cols-3" role="radiogroup" aria-label={t('create.type')}>
+            {(['service', 'goods', 'project'] as const).map((tt) => {
+              const on = type === tt;
+              return (
+                <button
+                  key={tt}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  onClick={() => pickType(on ? '' : tt)}
+                  className={
+                    'rounded-lg border px-4 py-3 text-start transition ' +
+                    (on ? 'border-gold bg-gold-soft/40 ring-1 ring-gold' : 'border-black/10 hover:border-gold')
+                  }
+                >
+                  <b className={'mb-1 block text-sm ' + (on ? 'text-gold-deep' : '')}>{t(`type.${tt}`)}</b>
+                  <span className="text-xs leading-relaxed text-tx-soft">{t(`type.desc.${tt}`)}</span>
+                </button>
+              );
+            })}
+          </div>
           {drafting && <div className="mt-2 text-sm text-tx-soft">{t('create.drafting')}</div>}
           {draftNote && <div className="mt-2 rounded bg-amber-100 p-2 text-xs text-amber-700">{draftNote}</div>}
         </div>
