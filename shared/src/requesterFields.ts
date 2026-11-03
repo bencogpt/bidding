@@ -56,14 +56,14 @@ export const requesterDetailsSchema = z
 const isBlank = (v: unknown) => String(v ?? '').trim() === '';
 
 /** The answers procurement and the AI draft may see: known, non-internal and not blank. */
-export function publicDetails(details?: RequesterDetails | null): RequesterDetails {
+export function publicDetails(details?: Partial<RequesterDetails> | null): RequesterDetails {
   return Object.fromEntries(
     Object.entries(details ?? {}).filter(([k, v]) => byKey.has(k) && !byKey.get(k)?.internal && !isBlank(v)),
-  );
+  ) as RequesterDetails;
 }
 
 /** The brief with the requester's answers appended (what the model and the supervisor both read). */
-export function briefWithDetails(brief: string, details?: RequesterDetails | null): string {
+export function briefWithDetails(brief: string, details?: Partial<RequesterDetails> | null): string {
   const pub = publicDetails(details);
   const lines = REQUESTER_FIELDS.filter((f) => pub[f.key] !== undefined).map((f) => `${f.labelHe}: ${pub[f.key]}`);
   return lines.length ? `${brief}\n\nפרטים מהדורש:\n${lines.join('\n')}` : brief;
@@ -73,7 +73,7 @@ export function briefWithDetails(brief: string, details?: RequesterDetails | nul
 export function fillFromRequestDetails(
   params: readonly { key: string }[],
   values: Record<string, string | number>,
-  details?: RequesterDetails | null,
+  details?: Partial<RequesterDetails> | null,
 ): Record<string, string | number> {
   const out = { ...values };
   const pub = publicDetails(details);

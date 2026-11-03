@@ -48,6 +48,8 @@ import {
   templateFieldsStatus,
   hasPlaceholder,
   isAutoSerialParam,
+  briefWithDetails,
+  fillFromRequestDetails,
   isSystemParam,
   resolveSystemFills,
   SERVICE_KEYS,
@@ -360,6 +362,7 @@ export const createBidRequest = onCall(async (req) => {
         year: Number(serial.split('-')[0]),
         n,
         brief: input.brief,
+        details: input.details,
         requesterUid: caller.uid,
         requesterName: caller.name,
         status: 'open',
@@ -428,6 +431,8 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
   const bidReq = await bidRequestsRepo.get(input.bidRequestId);
   if (!bidReq) throw new HttpsError('not-found', 'הבקשה לא נמצאה.');
   if (bidReq.status !== 'open') throw new HttpsError('failed-precondition', 'הבקשה כבר הומרה למכרז.');
+  // What the requester already answered in phase 1 fills the matching fields the manager left blank.
+  const askedWithDetails = fillFromRequestDetails(template.params, asked, bidReq.details);
 
   const draft = input.draftId ? await bidDraftsRepo.get(input.draftId) : null;
   if (input.draftId && (!draft || draft.createdBy !== caller.uid)) {
@@ -455,7 +460,7 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
   // details, …) are completed from what was asked, before the confidential split: the guarantee
   // default reads the estimate.
   const requester = teamUsers.find((u) => u.role === 'requester');
-  const params = resolveSystemFills(template.params, asked, {
+  const params = resolveSystemFills(template.params, askedWithDetails, {
     submissionDeadline: input.submissionDeadline ?? null,
     manager: owner ? { displayName: owner.displayName, email: owner.email } : undefined,
     requester: requester ? { displayName: requester.displayName, phone: requester.phone } : undefined,
@@ -506,7 +511,7 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
     googleTemplateDocId: template.googleTemplateDocId ?? null,
     draftId: draft?.draftId ?? null,
     draftType: draft?.type ?? null,
-    brief: draft?.brief ?? bidReq.brief,
+    brief: draft?.brief ?? briefWithDetails(bidReq.brief, bidReq.details),
     aiModel: draft?.model ?? null,
     aiStatus: draft?.status ?? null,
     skillsUsed: draft?.status === 'FAILED' ? [] : draft?.skillsUsed ?? [],
@@ -1067,14 +1072,18 @@ export const draftBid = onCall(
     const template = await templatesRepo.get(input.type);
     if (!template) throw new HttpsError('failed-precondition', `אין תבנית לסוג: ${input.type}`);
     const skills = requiredSkillsFor(input.type);
-    const draft = await draftBidContent(input.type, input.brief, template, skills);
+    // The requester's phase 1 answers (never the internal budget) ride along with the brief.
+    const bidReq = input.bidRequestId ? await bidRequestsRepo.get(input.bidRequestId) : null;
+    if (input.bidRequestId && !bidReq) throw new HttpsError('not-found', 'הבקשה לא נמצאה.');
+    const brief = briefWithDetails(input.brief, bidReq?.details);
+    const draft = await draftBidContent(input.type, brief, template, skills);
 
     // Keep the raw draft so the supervisor can later tell AI-written values from manager edits.
     const draftId = bidDraftsRepo.newId();
     await bidDraftsRepo.save({
       draftId,
       type: input.type,
-      brief: input.brief,
+      brief,
       model: draft.model ?? 'none',
       status: draft.status,
       params: draft.params,
