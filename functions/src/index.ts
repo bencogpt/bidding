@@ -84,6 +84,7 @@ import {
   type SupervisionReport,
   type CaseTeam,
   type TeamRole,
+  hebrewLabel,
 } from '@obms/shared';
 import { randomBytes } from 'node:crypto';
 import { auth, db, now } from './lib/admin.js';
@@ -207,7 +208,7 @@ function validateParams(
   const clean: Record<string, string | number> = {};
   const stillPlaceholders = template.params
     .filter((p) => !isSystemParam(p) && !isFormHidden(p) && hasPlaceholder(params[p.key]))
-    .map((p) => p.labelHe);
+    .map((p) => hebrewLabel(p.key, p.labelHe));
   if (stillPlaceholders.length) {
     throw new HttpsError(
       'invalid-argument',
@@ -221,14 +222,16 @@ function validateParams(
     if (blank) {
       const defaulted =
         p.defaultFrom === 'guarantee_pct' && guaranteeDefault(annualEstimate ?? params[SERVICE_KEYS.estimate]) !== null;
-      if (p.required && !defaulted) throw new HttpsError('invalid-argument', `שדה חובה חסר: ${p.labelHe}`);
+      if (p.required && !defaulted) {
+        throw new HttpsError('invalid-argument', `שדה חובה חסר: ${hebrewLabel(p.key, p.labelHe)}`);
+      }
       continue;
     }
     if (p.type === 'number' && !Number.isFinite(Number(v))) {
-      throw new HttpsError('invalid-argument', `השדה "${p.labelHe}" חייב להיות מספר.`);
+      throw new HttpsError('invalid-argument', `השדה "${hebrewLabel(p.key, p.labelHe)}" חייב להיות מספר.`);
     }
     if (p.key === SERVICE_KEYS.economicPct && (Number(v) < 0 || Number(v) > 100)) {
-      throw new HttpsError('invalid-argument', `השדה "${p.labelHe}" חייב להיות בין 0 ל-100.`);
+      throw new HttpsError('invalid-argument', `השדה "${hebrewLabel(p.key, p.labelHe)}" חייב להיות בין 0 ל-100.`);
     }
     clean[p.key] = p.type === 'number' ? Number(v) : v;
   }

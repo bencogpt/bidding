@@ -187,10 +187,18 @@ export function resolveSystemFills(params: readonly TemplateParam[], input: Valu
 
 const GUARANTEE_AMOUNT_KEYS = new Set(['guarantee_amount', 'bid_guarantee_amount', 'סכום ערבות להצעה']);
 const GUARANTEE_WORDS_KEYS = new Set(['guarantee_amount_words', 'bid_guarantee_amount_words']);
-const MANAGER_EMAIL_KEYS = new Set(['manager_email', 'tender_manager_email', 'כתובת מייל של מנהל המכרז']);
+const MANAGER_EMAIL_KEYS = new Set([
+  'manager_email',
+  'tender_manager_email',
+  'bid_lead_email',
+  'email', // labelled "דוא\"ל מנהל המכרז" (fieldLabels.ts)
+  'כתובת מייל של מנהל המכרז',
+  'דוא"ל מנהל המכרז',
+]);
 
+// Keys case-insensitively ({{BID_LEAD_EMAIL}}), labels exactly.
 const named = (p: { key: string; labelHe?: string }, names: ReadonlySet<string>) =>
-  names.has(p.key) || (p.labelHe !== undefined && names.has(p.labelHe));
+  names.has(p.key.trim().toLowerCase()) || (p.labelHe !== undefined && names.has(p.labelHe.trim()));
 
 /** The bid-guarantee amount (not the performance guarantee "סכום ערבות ביצוע", not its validity). */
 export const isGuaranteeAmountParam = (p: { key: string; labelHe?: string }): boolean =>

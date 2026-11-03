@@ -219,4 +219,6 @@ test('built-in rules: explicit field metadata wins', async () => {
   const { withBuiltinFills } = await import('@obms/shared');
   const fixed: TemplateParam = { key: 'manager_email', labelHe: 'מייל', type: 'text', required: false, fill: { kind: 'fixed', value: 'x@y' } };
   assert.deepEqual(withBuiltinFills([fixed])[0].fill, { kind: 'fixed', value: 'x@y' });
+  const lead: TemplateParam = { key: 'BID_LEAD_EMAIL', labelHe: 'BID_LEAD_EMAIL', type: 'text', required: true };
+  assert.deepEqual(withBuiltinFills([lead])[0].fill, { kind: 'formula', formula: 'manager_email' }, 'matched case-insensitively');
 });
