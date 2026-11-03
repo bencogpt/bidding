@@ -221,7 +221,7 @@ export type AuditDoc = z.infer<typeof auditDocSchema>;
 // ---- Callable function payloads ----
 
 /** Longest tender brief accepted (it is stored on the case and sent to the AI draft). */
-export const BRIEF_MAX_LENGTH = 5000;
+export const BRIEF_MAX_LENGTH = 15000; // about five pages of text
 
 export const createTenderInput = z.object({
   title: z.string().optional(), // blank: the system names the case from its type and serial

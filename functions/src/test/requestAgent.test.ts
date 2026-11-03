@@ -12,6 +12,9 @@ import {
   requestChecklist,
   agentDetailsFromFields,
   needsAgent,
+  BRIEF_MAX_LENGTH,
+  SCOPE_PAGE_CHARS,
+  pageCount,
   QUALITY_QUESTIONS,
   type AssistRequestInput,
 } from '@obms/shared';
@@ -214,4 +217,25 @@ test('needsAgent: the text is not enough while the agent still has data to ask f
   }
   assert.equal(needsAgent('quality'), false);
   assert.equal(needsAgent('done'), false);
+});
+
+test('a request may run to five pages: the limit, the page counter and the over-limit check', () => {
+  assert.equal(BRIEF_MAX_LENGTH, 15000);
+  assert.equal(SCOPE_PAGE_CHARS, 3000);
+  assert.equal(BRIEF_MAX_LENGTH / SCOPE_PAGE_CHARS, 5);
+  assert.equal(pageCount(''), 0);
+  assert.equal(pageCount('x'), 0.1, 'a little text is never shown as 0');
+  assert.equal(pageCount('x'.repeat(3000)), 1);
+  assert.equal(pageCount('x'.repeat(4500)), 1.5);
+  assert.equal(pageCount('x'.repeat(15000)), 5);
+  assert.ok(assistRequestInput.safeParse(base({ brief: 'x'.repeat(15000) })).success);
+  assert.equal(assistRequestInput.safeParse(base({ brief: 'x'.repeat(15001) })).success, false);
+});
+
+test('the checklist counts the frame amount only from 240,000', () => {
+  const f = { service_name: 'תמיכה', document_classification: 'בלמ"ס', annual_budget: '239999', contract_years: '3' };
+  const low = requestChecklist(LONG, f);
+  assert.equal(low.find((r) => r.key === 'annual_budget')?.present, false);
+  const ok = requestChecklist(LONG, { ...f, annual_budget: '240000' });
+  assert.ok(ok.every((r) => r.present));
 });

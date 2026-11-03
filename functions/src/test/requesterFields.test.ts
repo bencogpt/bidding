@@ -14,6 +14,7 @@ import {
   askedParams,
   isRequesterAnswered,
   isFormHidden,
+  BUDGET_MIN,
 } from '@obms/shared';
 
 const REQ = { service_name: 'שירותי תמיכה', document_classification: 'בלמ"ס', annual_budget: 900000, contract_years: 3 };
@@ -211,4 +212,15 @@ test("the bid's title is the requester's service name, and step 2 doesn't ask it
   assert.ok(params.every((p) => isFormHidden(p)));
   assert.ok(isFormHidden({ key: 'תוקף אחריות', labelHe: 'תוקף אחריות' }));
   assert.ok(!isFormHidden({ key: 'תקופת האחריות', labelHe: 'תקופת האחריות' }));
+});
+
+test('the maximum frame amount must be at least 240,000', () => {
+  assert.equal(BUDGET_MIN, 240000);
+  assert.ok(requesterDetailsInputSchema.safeParse({ ...REQ, annual_budget: 240000 }).success);
+  assert.equal(requesterDetailsInputSchema.safeParse({ ...REQ, annual_budget: 239999 }).success, false);
+  assert.equal(requesterDetailsInputSchema.safeParse({ ...REQ, annual_budget: 1 }).success, false);
+  assert.equal(createBidRequestInput.safeParse({ brief: 'שירותי תמיכה', details: { ...REQ, annual_budget: 100000 } }).success, false);
+  assert.deepEqual(normalizeDetailsInput({ annual_budget: '239999' }).badNumbers, ['annual_budget']);
+  assert.deepEqual(normalizeDetailsInput({ annual_budget: '240000' }).details, { annual_budget: 240000 });
+  assert.deepEqual(normalizeDetailsInput({ annual_budget: '240000' }).badNumbers, []);
 });

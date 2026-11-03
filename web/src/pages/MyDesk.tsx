@@ -1,6 +1,6 @@
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useBidRequests, useMyFeedbackRequests } from '../lib/hooks';
 import FeedbackForm from '../components/FeedbackForm';
 import { useAuth } from '../auth/AuthProvider';
@@ -17,6 +17,22 @@ export default function MyDesk() {
   const { requests } = useBidRequests();
   const isManager = role === 'tender_manager';
   const [open, setOpen] = useState<string | null>(null);
+  // Right after "שלח לרכש" the create page brings us here: a green notice and the new request marked for a few seconds.
+  const location = useLocation();
+  const nav = useNavigate();
+  const [justSent, setJustSent] = useState<string | null>(
+    (location.state as { sentSerial?: string } | null)?.sentSerial ?? null,
+  );
+  const toast = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!justSent) return;
+    nav(location.pathname, { replace: true, state: null }); // a refresh must not show the notice again
+    window.scrollTo({ top: 0 });
+    toast.current?.scrollIntoView({ block: 'start' });
+    const timer = setTimeout(() => setJustSent(null), 9000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [justSent === null]);
 
   return (
     <div>
@@ -28,6 +44,21 @@ export default function MyDesk() {
           </Link>
         )}
       </div>
+
+      {justSent && (
+        <div
+          ref={toast}
+          className="mb-5 flex items-start gap-3 rounded-lg border border-emerald-300 bg-emerald-50 px-5 py-4 text-emerald-900"
+        >
+          <span className="grid h-7 w-7 flex-none place-items-center rounded-full bg-emerald-600 text-white">✓</span>
+          <div>
+            <div className="font-semibold">
+              {t('req.sentToast')} <bdi>{justSent}</bdi>
+            </div>
+            <p className="mt-1 text-sm">{t('req.sentToastSub')}</p>
+          </div>
+        </div>
+      )}
 
       {(requests.length > 0 || isManager) && (
         <div className="mb-6">
@@ -48,8 +79,16 @@ export default function MyDesk() {
                 </thead>
                 <tbody>
                   {requests.map((r) => (
-                    <tr key={r.serial} className="border-t border-paper-2 hover:bg-paper">
+                    <tr
+                      key={r.serial}
+                      className={'border-t border-paper-2 hover:bg-paper ' + (r.serial === justSent ? 'bg-emerald-50' : '')}
+                    >
                       <td className="whitespace-nowrap px-5 py-3 font-semibold text-tx-soft">
+                        {r.serial === justSent && (
+                          <span className="ml-2 rounded-full bg-emerald-600 px-2 text-[10px] leading-4 text-white">
+                            {t('req.newTag')}
+                          </span>
+                        )}
                         <span dir="ltr">{r.serial}</span>
                       </td>
                       <td className="whitespace-nowrap px-5 py-3 text-xs text-tx-mute">{fmtDate(r.createdAt)}</td>
@@ -61,7 +100,13 @@ export default function MyDesk() {
                             {t('req.handle')}
                           </Link>
                         ) : (
-                          <span className="chip">{r.status === 'open' ? t('req.statusOpen') : t('req.statusConverted')}</span>
+                          <span className="chip">
+                            {r.status === 'open'
+                              ? r.serial === justSent
+                                ? t('req.inProcurement')
+                                : t('req.statusOpen')
+                              : t('req.statusConverted')}
+                          </span>
                         )}
                       </td>
                     </tr>

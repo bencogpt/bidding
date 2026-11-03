@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type Anthropic from '@anthropic-ai/sdk';
 import {
+  BRIEF_MAX_LENGTH,
   recommendationsInput,
   sanitizeRecommendations,
   scriptRecommendations,
@@ -20,7 +21,7 @@ test('the input never accepts the budget or unknown keys, and needs a real brief
   assert.equal(recommendationsInput.safeParse(input({ details: { annual_budget: 5 } as never })).success, false);
   assert.equal(recommendationsInput.safeParse({ ...input(), annual_budget: 5 }).success, false);
   assert.equal(recommendationsInput.safeParse(input({ brief: 'ab' })).success, false);
-  assert.equal(recommendationsInput.safeParse(input({ brief: 'x'.repeat(5001) })).success, false);
+  assert.equal(recommendationsInput.safeParse(input({ brief: 'x'.repeat(BRIEF_MAX_LENGTH + 1) })).success, false);
 });
 
 test('sanitizeRecommendations keeps at most six clean, bounded, distinct items', () => {
@@ -96,4 +97,17 @@ test('composeRequestBrief appends the notes and the chosen recommendations, and 
   const out = composeRequestBrief('הבקשה', ' הערה חשובה ', ['סעיף א', 'סעיף ב']);
   assert.equal(out, 'הבקשה\n\nהערות נוספות:\nהערה חשובה\n\nהמלצות שנבחרו:\n- סעיף א\n- סעיף ב');
   assert.equal(composeRequestBrief('הבקשה', '', ['סעיף א']), 'הבקשה\n\nהמלצות שנבחרו:\n- סעיף א');
+});
+
+test('editing a recommendation: valid text, and the chosen list follows the edit', async () => {
+  const { recommendationTextError, replaceChosen } = await import('@obms/shared');
+  assert.equal(recommendationTextError('סעיף תקין'), '');
+  assert.notEqual(recommendationTextError('  '), '');
+  assert.notEqual(recommendationTextError('אב'), '');
+  assert.notEqual(recommendationTextError('x {{y}}'), '');
+  assert.notEqual(recommendationTextError('ש'.repeat(301)), '');
+  assert.equal(recommendationTextError('ש'.repeat(300)), '');
+  assert.deepEqual(replaceChosen(['א', 'ב'], 'א', 'א מתוקן'), ['א מתוקן', 'ב']);
+  assert.deepEqual(replaceChosen(['ב'], 'א', 'א מתוקן'), ['ב', 'א מתוקן'], 'saving an edit also picks the item');
+  assert.deepEqual(replaceChosen(['א מתוקן', 'ב'], 'א מתוקן', 'א'), ['א', 'ב'], 'restoring the original swaps it back');
 });

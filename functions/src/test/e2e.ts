@@ -41,7 +41,7 @@ const adminApp = initAdmin({ projectId: 'biding-system', storageBucket: 'biding-
 const call = (n: string) => httpsCallable(fns, n);
 const login = (email: string) => signInWithEmailAndPassword(auth, email, 'password');
 // The requester's mandatory phase-1 answers.
-const REQUEST_DETAILS = { service_name: 'שירות לבדיקה', document_classification: 'בלמ"ס', annual_budget: 100000, contract_years: 2 };
+const REQUEST_DETAILS = { service_name: 'שירות לבדיקה', document_classification: 'בלמ"ס', annual_budget: 240000, contract_years: 2 };
 const newRequest = async (brief = 'דרישה לבדיקה'): Promise<string> =>
   ((await call('createBidRequest')({ brief, details: REQUEST_DETAILS })) as { data: { serial: string } }).data.serial;
 

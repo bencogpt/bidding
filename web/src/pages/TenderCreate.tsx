@@ -133,12 +133,15 @@ export default function TenderCreate() {
       const answers = publicDetails(request?.details);
       // The service name the requester gave is the tender title.
       const named = String(answers.service_name ?? '').trim();
-      if (named || d.title) setTitle(named || d.title);
+      // A {{PLACEHOLDER}} the draft left behind is never shown: the field stays empty (and is listed as missing).
+      const draftTitle = hasPlaceholder(d.title) ? '' : d.title;
+      if (named || draftTitle) setTitle(named || draftTitle);
       // What the requester answered fills the fields the draft left empty (the same rule the server applies).
       // The template in this closure may still be the previous type's (the pick and the draft run together), so the
       // keys come from the draft and the answers instead; `initial_period_months` is the one derived from the years.
       const keys = new Set([...Object.keys(d.params ?? {}), ...Object.keys(answers), 'initial_period_months']);
-      const filled = fillFromRequestDetails([...keys].map((key) => ({ key })), d.params ?? {}, request?.details);
+      const clean = Object.fromEntries(Object.entries(d.params ?? {}).filter(([, v]) => !hasPlaceholder(v)));
+      const filled = fillFromRequestDetails([...keys].map((key) => ({ key })), clean, request?.details);
       setParams(Object.fromEntries(Object.entries(filled).map(([k, v]) => [k, String(v)])));
       setDomainTags(d.domainTags ?? []);
       setCriteria(d.evaluationCriteria ?? []);
@@ -240,8 +243,8 @@ export default function TenderCreate() {
         </div>
       );
     }
-    const value = valueOf(p);
-    const bad = hasPlaceholder(params[p.key]);
+    const raw = valueOf(p);
+    const value = hasPlaceholder(raw) ? '' : raw; // whatever the source, a {{placeholder}} never reaches an input
     return (
       <div key={p.key}>
         <label className="label">
@@ -259,7 +262,7 @@ export default function TenderCreate() {
         ) : p.type === 'textarea' ? (
           <textarea
             id={`param-${p.key}`}
-            className={`input min-h-20 ${bad ? 'border-red-400 bg-red-50' : ''}`}
+            className="input min-h-20"
             value={value}
             onChange={(e) => setParam(p.key, e.target.value)}
             required={p.required}
@@ -267,7 +270,7 @@ export default function TenderCreate() {
         ) : (
           <input
             id={`param-${p.key}`}
-            className={`input ${bad ? 'border-red-400 bg-red-50' : ''}`}
+            className="input"
             type={p.type === 'number' ? 'number' : p.type === 'date' ? 'date' : 'text'}
             value={value}
             onChange={(e) => setParam(p.key, e.target.value)}
@@ -280,7 +283,6 @@ export default function TenderCreate() {
         {p.key === SERVICE_KEYS.economicPct && Number(value) >= 0 && Number(value) <= 100 && value !== '' && (
           <div className="mt-1 text-xs text-tx-mute">{t('create.qualityShare', { pct: 100 - Number(value) })}</div>
         )}
-        {bad && <div className="mt-1 text-xs text-red-600">{t('create.placeholderHint')}</div>}
         {p.defaultFrom === 'guarantee_pct' && (
           <div className="mt-1 text-xs text-tx-mute">
             {t('create.guaranteeHint')}
@@ -358,18 +360,27 @@ export default function TenderCreate() {
       <form onSubmit={submit} className="space-y-5">
         <div>
           <label className="label">{t('create.type')}</label>
-          <select
-            className="input"
-            value={type}
-            onChange={(e) => pickType(e.target.value as TenderType | '')}
-          >
-            <option value="">{t('req.pickType')}</option>
-            {Object.values(TENDER_TYPES).map((tt) => (
-              <option key={tt} value={tt}>
-                {t(`type.${tt}`)}
-              </option>
-            ))}
-          </select>
+          <div className="grid gap-3 sm:grid-cols-3" role="radiogroup" aria-label={t('create.type')}>
+            {(['service', 'goods', 'project'] as const).map((tt) => {
+              const on = type === tt;
+              return (
+                <button
+                  key={tt}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  onClick={() => pickType(on ? '' : tt)}
+                  className={
+                    'rounded-lg border px-4 py-3 text-start transition ' +
+                    (on ? 'border-gold bg-gold-soft/40 ring-1 ring-gold' : 'border-black/10 hover:border-gold')
+                  }
+                >
+                  <b className={'mb-1 block text-sm ' + (on ? 'text-gold-deep' : '')}>{t(`type.${tt}`)}</b>
+                  <span className="text-xs leading-relaxed text-tx-soft">{t(`type.desc.${tt}`)}</span>
+                </button>
+              );
+            })}
+          </div>
           {drafting && <div className="mt-2 text-sm text-tx-soft">{t('create.drafting')}</div>}
           {draftNote && <div className="mt-2 rounded bg-amber-100 p-2 text-xs text-amber-700">{draftNote}</div>}
         </div>

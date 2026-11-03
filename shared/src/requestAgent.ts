@@ -3,6 +3,7 @@
 // The budget (annual_budget) is deliberately absent everywhere in this file (GLOBAL_RULES G6).
 import { z } from 'zod';
 import { BRIEF_MAX_LENGTH } from './schemas.js';
+import { BUDGET_MIN } from './requesterFields.js';
 
 export const SCOPE_MIN_LENGTH = 60;
 export const AGENT_HISTORY_MAX = 20;
@@ -332,7 +333,7 @@ export function requestChecklist(
   return CHECKLIST.map(({ key, label }) => {
     let present: boolean;
     if (key === 'scope') present = scopeOk(brief);
-    else if (key === 'annual_budget') present = Number.isFinite(Number(fields.annual_budget)) && Number(fields.annual_budget) > 0 && text(key);
+    else if (key === 'annual_budget') present = text(key) && Number.isFinite(Number(fields.annual_budget)) && Number(fields.annual_budget) >= BUDGET_MIN;
     else if (key === 'contract_years') {
       const n = Number(fields.contract_years);
       present = text(key) && Number.isInteger(n) && n >= 1 && n <= 30;
@@ -358,4 +359,13 @@ export function agentDetailsFromFields(fields: Record<string, string>, touched: 
 }
 
 /** In the text mode: while the agent still has data to ask for, the main button continues to the agent instead of sending. */
-export const needsAgent = (asking: AskKey): boolean => asking !== 'quality' && asking !== 'done';
+export const needsAgent = (asking: string): boolean => asking !== 'quality' && asking !== 'done';
+
+/** About 3,000 characters make a page of the request; BRIEF_MAX_LENGTH is five pages. */
+export const SCOPE_PAGE_CHARS = 3000;
+
+/** The length of a text in pages, to one decimal place (a little text is never shown as 0). */
+export function pageCount(text: string): number {
+  if (!text) return 0;
+  return Math.max(0.1, Math.round((text.length / SCOPE_PAGE_CHARS) * 10) / 10);
+}
