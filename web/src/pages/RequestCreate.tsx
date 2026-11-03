@@ -1,12 +1,11 @@
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { BRIEF_MAX_LENGTH, REQUESTER_FIELDS, normalizeDetailsInput, requestChecklist } from '@obms/shared';
+import { BRIEF_MAX_LENGTH, REQUESTER_FIELDS, needsAgent, normalizeDetailsInput, requestChecklist } from '@obms/shared';
 import { api } from '../lib/api';
 import { useRequestAgent } from '../lib/useRequestAgent';
 import RequestPanel from '../components/RequestPanel';
 import RequestChat from '../components/RequestChat';
-import RequestExtras from '../components/RequestExtras';
 
 // "בל"מ חדש" (the requester): free writing or an AI agent collects the five mandatory details, then the
 // request goes to procurement and gets its bid number.
@@ -21,6 +20,12 @@ export default function RequestCreate() {
 
   const rows = requestChecklist(a.brief, a.fields as unknown as Record<string, string>);
   const missing = rows.filter((r) => !r.present).length;
+  // The extra questions are asked only by the agent. In text mode the main button continues to the agent while it
+  // still has something to ask; the request can be sent when the five details are there and the agent is done.
+  const textMode = a.mode === 'free';
+  const goAgent = textMode && a.needsMore;
+  const agentDone = a.asking !== null && !needsAgent(a.asking);
+  const canSend = missing === 0 && (textMode ? !a.needsMore : agentDone || !!a.error);
 
   const submit = async () => {
     const { details, badNumbers, missing: missingKeys } = normalizeDetailsInput({ ...a.fields });
@@ -121,9 +126,7 @@ export default function RequestCreate() {
             <RequestChat chat={a.chat} chips={a.chips} typing={a.typing} disabled={a.asking === 'done'} onSay={a.say} />
           )}
 
-          {a.mode === 'chat' &&
-            a.asking !== null &&
-            !['service_name', 'document_classification', 'scope', 'contract_years'].includes(a.asking) && (
+          {a.mode === 'chat' && agentDone && (
             <div
               className={
                 'flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3 text-sm ' +
@@ -158,13 +161,18 @@ export default function RequestCreate() {
         <div className="space-y-4">
           <RequestPanel rows={rows} fields={a.fields} onField={a.setField} />
           {error && <div className="text-sm text-red-600">{error}</div>}
-          <button type="button" className="btn btn-gold w-full" disabled={busy || missing > 0} onClick={submit}>
-            {busy ? t('req.creating') : t('req.sendToProcurement')}
-          </button>
-        </div>
-
-        <div className="border-t border-black/5 pt-4 md:col-span-2">
-          <RequestExtras fields={a.fields} onField={a.setField} />
+          {goAgent ? (
+            <>
+              <button type="button" className="btn btn-gold w-full" disabled={busy || a.typing} onClick={a.continueToAgent}>
+                {t('req.continue')}
+              </button>
+              <p className="text-xs text-tx-soft">{t('req.continueHint')}</p>
+            </>
+          ) : (
+            <button type="button" className="btn btn-gold w-full" disabled={busy || !canSend} onClick={submit}>
+              {busy ? t('req.creating') : t('req.sendToProcurement')}
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -11,6 +11,7 @@ import {
   scopeOk,
   requestChecklist,
   agentDetailsFromFields,
+  needsAgent,
   QUALITY_QUESTIONS,
   type AssistRequestInput,
 } from '@obms/shared';
@@ -100,7 +101,7 @@ test('scriptTurn asks the missing details in order, one per turn, then the quali
   const t4 = scriptTurn(base({ details: all, brief: LONG }));
   assert.equal(t4.asking, 'service_location', 'after the mandatory details come the optional questions');
   assert.equal(t4.ready, true);
-  const allOptional = { ...all, service_location: 'חיפה', service_providers_total: 12, work_hours: 'משרה מלאה' };
+  const allOptional = { ...all, service_location: 'חיפה', provider_responsibilities: 'פיתוח', team_lead_role: 'מנהל', min_pool_candidates: 5, service_providers_total: 12, supplier_equipment: 'מחשב', work_hours: 'משרה מלאה' };
   const t4b = scriptTurn(base({ details: allOptional, brief: LONG }));
   assert.equal(t4b.asking, 'quality');
   assert.ok(t4b.message.includes(QUALITY_QUESTIONS[0].q));
@@ -175,24 +176,42 @@ test('the agent knows the seven optional answers: schema, extraction, sanitiser 
   );
 });
 
-test('the chat asks the three optional questions once each, skippable, and does not repeat a skipped one', () => {
+test('the chat asks all seven optional questions once each, skippable, never repeats one, and then moves on', () => {
   const all = { service_name: 'תמיכה', document_classification: 'בלמ"ס', contract_years: 3 };
-  const a1 = scriptTurn(base({ details: all, brief: LONG }));
-  assert.equal(a1.asking, 'service_location');
-  assert.ok(a1.message.includes('קיבלתי את כל מה שצריך'), 'the intro is said once, at the first extra question');
-  assert.ok(a1.chips.includes('דלג'));
-  // skipping the location moves on to the provider count (it was found in the text, so this goes on to hours)
-  const h1 = [{ role: 'agent' as const, text: a1.message }, { role: 'user' as const, text: 'דלג' }];
-  const a2 = scriptTurn(base({ details: all, brief: LONG, history: h1 }));
-  assert.equal(a2.asking, 'work_hours', 'the provider count came from the text; the location was skipped');
-  assert.ok(!a2.message.includes('קיבלתי את כל מה שצריך'), 'the intro is not repeated');
-  // answering the hours question fills it
-  const h2 = [...h1, { role: 'agent' as const, text: a2.message }, { role: 'user' as const, text: 'משרה מלאה + כוננות' }];
-  const a3 = scriptTurn(base({ details: all, brief: LONG, history: h2 }));
-  assert.equal(a3.details.work_hours, 'משרה מלאה + כוננות');
-  assert.equal(a3.asking, 'quality');
-  assert.equal(a3.ready, true);
-  // an answer to the location question fills it
-  const withAnswer = scriptTurn(base({ details: all, brief: LONG, history: [{ role: 'agent', text: a1.message }, { role: 'user', text: 'תל אביב' }] }));
-  assert.equal(withAnswer.details.service_location, 'תל אביב');
+  const history: AssistRequestInput['history'] = [];
+  const asked: string[] = [];
+  let r = scriptTurn(base({ details: all, brief: LONG, history }));
+  assert.ok(r.message.includes('קיבלתי את כל מה שצריך'), 'the intro is said once, at the first extra question');
+  for (let i = 0; i < 12 && r.asking !== 'quality' && r.asking !== 'done'; i++) {
+    asked.push(r.asking);
+    assert.ok(r.chips.includes('דלג'), `${r.asking} can be skipped`);
+    history.push({ role: 'agent', text: r.message }, { role: 'user', text: 'דלג' });
+    r = scriptTurn(base({ details: all, brief: LONG, history: [...history] }));
+    if (i > 0) assert.ok(!r.message.includes('קיבלתי את כל מה שצריך'), 'the intro is not repeated');
+  }
+  // the provider count was found in the text, so it is not asked; all the others are, in the form's order
+  assert.deepEqual(asked, ['service_location', 'provider_responsibilities', 'team_lead_role', 'min_pool_candidates', 'supplier_equipment', 'work_hours']);
+  assert.equal(r.asking, 'quality');
+  assert.equal(r.ready, true);
+});
+
+test('answers to the optional questions fill their fields', () => {
+  const all = { service_name: 'תמיכה', document_classification: 'בלמ"ס', contract_years: 3 };
+  const ask = (question: string, reply: string) =>
+    scriptTurn(base({ details: all, brief: LONG, history: [{ role: 'agent', text: question }, { role: 'user', text: reply }] })).details;
+  assert.equal(ask('מה מקום אספקת השירות?', 'תל אביב').service_location, 'תל אביב');
+  assert.equal(ask('מה תחומי האחריות של נותני השירות?', 'פיתוח ובדיקות').provider_responsibilities, 'פיתוח ובדיקות');
+  assert.equal(ask('מה תפקיד ראש הצוות?', 'מנהל פרויקט').team_lead_role, 'מנהל פרויקט');
+  assert.equal(ask('מה מספר המועמדים המינימלי למאגר?', 'לפחות 5').min_pool_candidates, 5);
+  assert.equal(ask('איזה ציוד הספק מספק לנותני השירות?', 'מחשב נייד').supplier_equipment, 'מחשב נייד');
+  assert.equal(ask('כמה נותני שירות נדרשים?', '8').service_providers_total, 8);
+  assert.equal(ask('מה היקף המשרה, והאם נדרשות גם שעות כוננות?', 'משרה מלאה + כוננות').work_hours, 'משרה מלאה + כוננות');
+});
+
+test('needsAgent: the text is not enough while the agent still has data to ask for', () => {
+  for (const k of ['service_name', 'document_classification', 'scope', 'contract_years', 'service_location', 'provider_responsibilities', 'team_lead_role', 'min_pool_candidates', 'service_providers_total', 'supplier_equipment', 'work_hours'] as const) {
+    assert.equal(needsAgent(k), true, k);
+  }
+  assert.equal(needsAgent('quality'), false);
+  assert.equal(needsAgent('done'), false);
 });

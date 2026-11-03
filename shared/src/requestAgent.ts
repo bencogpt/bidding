@@ -39,7 +39,14 @@ export const assistRequestInput = z
   .strict();
 export type AssistRequestInput = z.infer<typeof assistRequestInput>;
 
-export type OptionalAskKey = 'service_location' | 'service_providers_total' | 'work_hours';
+export type OptionalAskKey =
+  | 'service_location'
+  | 'provider_responsibilities'
+  | 'team_lead_role'
+  | 'min_pool_candidates'
+  | 'service_providers_total'
+  | 'supplier_equipment'
+  | 'work_hours';
 export type AskKey =
   | 'service_name'
   | 'document_classification'
@@ -54,7 +61,11 @@ const ASK_KEYS: readonly AskKey[] = [
   'scope',
   'contract_years',
   'service_location',
+  'provider_responsibilities',
+  'team_lead_role',
+  'min_pool_candidates',
   'service_providers_total',
+  'supplier_equipment',
   'work_hours',
   'quality',
   'done',
@@ -81,10 +92,22 @@ export const REQUEST_QUESTIONS: Record<MissingKey, { q: string; chips: string[] 
 };
 
 /** Asked in the chat after the mandatory details; each can be skipped. */
-const OPTIONAL_ORDER: readonly OptionalAskKey[] = ['service_location', 'service_providers_total', 'work_hours'];
+const OPTIONAL_ORDER: readonly OptionalAskKey[] = [
+  'service_location',
+  'provider_responsibilities',
+  'team_lead_role',
+  'min_pool_candidates',
+  'service_providers_total',
+  'supplier_equipment',
+  'work_hours',
+];
 export const OPTIONAL_QUESTIONS: Record<OptionalAskKey, { q: string; chips: string[] }> = {
   service_location: { q: 'מה מקום אספקת השירות?', chips: ['דלג'] },
+  provider_responsibilities: { q: 'מה תחומי האחריות של נותני השירות?', chips: ['דלג'] },
+  team_lead_role: { q: 'מה תפקיד ראש הצוות?', chips: ['דלג'] },
+  min_pool_candidates: { q: 'מה מספר המועמדים המינימלי למאגר?', chips: ['דלג'] },
   service_providers_total: { q: 'כמה נותני שירות נדרשים?', chips: ['דלג'] },
+  supplier_equipment: { q: 'איזה ציוד הספק מספק לנותני השירות?', chips: ['דלג'] },
   work_hours: { q: 'מה היקף המשרה, והאם נדרשות גם שעות כוננות?', chips: ['משרה מלאה', 'משרה מלאה + כוננות', 'דלג'] },
 };
 
@@ -254,8 +277,10 @@ function applyAnswer(
 ): AgentDetails {
   const t = text.trim();
   if (!t || t === 'דלג') return {};
-  if (key === 'service_location' || key === 'work_hours') return optionalFrom({ [key]: t });
-  if (key === 'service_providers_total') return optionalFrom({ service_providers_total: t.match(/\d{1,6}/)?.[0] });
+  if (key in OPTIONAL_TEXT) return optionalFrom({ [key]: t });
+  if (key === 'min_pool_candidates' || key === 'service_providers_total') {
+    return optionalFrom({ [key]: t.match(/[0-9]{1,6}/)?.[0] });
+  }
   if (key === 'service_name') {
     const v = cleanText(t, 200);
     return v ? { service_name: v } : {};
@@ -325,3 +350,6 @@ export function agentDetailsFromFields(fields: Record<string, string>, touched: 
   Object.assign(out, optionalFrom(fields));
   return out;
 }
+
+/** In the text mode: while the agent still has data to ask for, the main button continues to the agent instead of sending. */
+export const needsAgent = (asking: AskKey): boolean => asking !== 'quality' && asking !== 'done';
