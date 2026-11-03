@@ -18,7 +18,7 @@ import {
 
 const REQ = { service_name: 'שירותי תמיכה', document_classification: 'בלמ"ס', annual_budget: 900000, contract_years: 3 };
 
-test('the request screen asks four required questions and five optional ones; only the budget is internal', () => {
+test('the request screen asks four required questions and seven optional ones; only the budget is internal', () => {
   assert.deepEqual(
     REQUESTER_FIELDS.filter((f) => f.required).map((f) => f.labelHe),
     ['שם השירות', 'סיווג המסמך', 'מהו אומדן ההתקשרות השנתית או מהו גובה התקציב שהוקצה לשירות?', 'משך תקופת התקשרות בשנים'],
@@ -32,7 +32,7 @@ test('the request screen asks four required questions and five optional ones; on
       ['min_pool_candidates', 'מספר מועמדים מינימלי למאגר'],
       ['service_providers_total', 'כמות נותני השירות'],
       ['supplier_equipment', 'ציוד שהספק מספק לנותני השירות'],
-      ["work_hours", "מס' שעות עבודה"],
+      ['work_hours', 'היקף משרה והאם נדרש גם שעות כוננות'],
     ],
   );
   assert.deepEqual(REQUESTER_FIELDS.filter((f) => f.internal).map((f) => f.key), ['annual_budget']);
@@ -50,7 +50,7 @@ test('the optional answers are accepted, may be left out, and are checked when g
   const out = briefWithDetails('שירותי תמיכה', { ...REQ, ...extras });
   assert.ok(out.includes('מקום אספקת השירות: חיפה'));
   assert.ok(out.includes('כמות נותני השירות: 12'));
-  assert.ok(out.includes("מס' שעות עבודה: משרה מלאה - 170 שעות"));
+  assert.ok(out.includes('היקף משרה והאם נדרש גם שעות כוננות: משרה מלאה - 170 שעות'));
   const n = normalizeDetailsInput({ ...REQ, annual_budget: '900000', contract_years: '3', service_location: ' חיפה ', min_pool_candidates: '5', service_providers_total: '2.5', team_lead_role: ' ' } as never);
   assert.equal(n.details.service_location, 'חיפה');
   assert.equal(n.details.min_pool_candidates, 5);
@@ -182,16 +182,19 @@ test('a template field is matched to a requester answer by its Hebrew label too,
     { key: 'SERVICE_PROVIDERS_COUNT', labelHe: "פה יבוא מס' נותני השירות" },
     { key: 'loc', labelHe: 'מקום אספקת השירות' },
     { key: 'other', labelHe: 'משהו אחר' },
+    { key: 'HOURS', labelHe: "מס' שעות עבודה" },
   ];
   const out = fillFromRequestDetails(params, {}, { service_providers_total: 12, service_location: 'חיפה', annual_budget: 5 });
   assert.equal(out.SERVICE_PROVIDERS_COUNT, 12);
   assert.equal(out.loc, 'חיפה');
   assert.ok(!('other' in out));
+  assert.equal(fillFromRequestDetails(params, {}, { work_hours: 'משרה מלאה, ללא כוננות' }).HOURS, 'משרה מלאה, ללא כוננות', "the template still says מס' שעות עבודה");
   assert.equal(fillFromRequestDetails(params, { SERVICE_PROVIDERS_COUNT: 7 }, { service_providers_total: 12 }).SERVICE_PROVIDERS_COUNT, 7, 'the manager wins');
   assert.equal(isFormHidden(params[0]), true);
   assert.equal(isFormHidden(params[1]), true);
   assert.equal(isFormHidden(params[2]), false);
   assert.deepEqual(askedParams(params).map((p) => p.key), ['other']);
+  assert.equal(isFormHidden(params[3]), true);
   // the budget is never matched by label either
   assert.ok(!('b' in fillFromRequestDetails([{ key: 'b', labelHe: 'מהו אומדן ההתקשרות השנתית או מהו גובה התקציב שהוקצה לשירות?' }], {}, { annual_budget: 5 })));
 });

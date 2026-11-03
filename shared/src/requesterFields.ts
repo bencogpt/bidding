@@ -27,7 +27,7 @@ export const REQUESTER_FIELDS: readonly RequesterField[] = [
   { key: 'min_pool_candidates', labelHe: 'מספר מועמדים מינימלי למאגר', type: 'number', wholeNumber: true, max: 100000 },
   { key: 'service_providers_total', labelHe: 'כמות נותני השירות', type: 'number', wholeNumber: true, max: 100000 },
   { key: 'supplier_equipment', labelHe: 'ציוד שהספק מספק לנותני השירות', type: 'textarea' },
-  { key: 'work_hours', labelHe: "מס' שעות עבודה", type: 'text' },
+  { key: 'work_hours', labelHe: 'היקף משרה והאם נדרש גם שעות כוננות', type: 'text' },
   {
     key: 'annual_budget',
     labelHe: 'מהו אומדן ההתקשרות השנתית או מהו גובה התקציב שהוקצה לשירות?',
@@ -45,6 +45,7 @@ const byKey = new Map(REQUESTER_FIELDS.map((f) => [f.key, f]));
 // How a template spells a question the requester answers, when its words differ from the request screen's.
 const LABEL_ALIASES: Record<string, string[]> = {
   service_providers_total: ["פה יבוא מס' נותני השירות", "מס' נותני השירות"],
+  work_hours: ["מס' שעות עבודה"],
 };
 const byLabel = new Map<string, RequesterField>();
 for (const f of REQUESTER_FIELDS) {
