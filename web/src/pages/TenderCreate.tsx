@@ -8,6 +8,7 @@ import {
   requiredRolesFor,
   templateFieldsStatus,
   hasPlaceholder,
+  publicDetails,
   isAutoSerialParam,
   askedParams,
   guaranteeDefault,
@@ -122,8 +123,16 @@ export default function TenderCreate() {
       setDraftId(d.draftId);
       setDraftFailed(d.status === 'FAILED');
       setDraftMissing(d.status === 'FAILED' ? [] : d.missing);
-      if (d.title) setTitle(d.title);
-      setParams(Object.fromEntries(Object.entries(d.params ?? {}).map(([k, v]) => [k, String(v)])));
+      const answers = publicDetails(request?.details);
+      // The service name the requester gave is the tender title.
+      const named = String(answers.service_name ?? '').trim();
+      if (named || d.title) setTitle(named || d.title);
+      const fromDraft = Object.fromEntries(Object.entries(d.params ?? {}).map(([k, v]) => [k, String(v)]));
+      // What the requester answered fills the fields the form still shows (e.g. option periods) and the draft left empty.
+      for (const [k, v] of Object.entries(answers)) {
+        if (!(fromDraft[k] ?? '').trim()) fromDraft[k] = String(v);
+      }
+      setParams(fromDraft);
       setDomainTags(d.domainTags ?? []);
       setCriteria(d.evaluationCriteria ?? []);
       if (d.submissionDeadlineDays) setDeadline(toLocalInput(Date.now() + d.submissionDeadlineDays * 86400000));

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { TENDER_STATUSES } from './tender.js';
 import { SYSTEM_FORMULAS } from './templates.js';
 import type { SupervisionSummary, ValueSource, BidDraftRecord } from './supervision.js';
-import { requesterDetailsSchema } from './requesterFields.js';
+import { requesterDetailsSchema, requesterDetailsInputSchema } from './requesterFields.js';
 import { createTenderTeamFields, type CaseTeam, type TeamRole } from './team.js';
 
 // Inline string-literal tuples so z.enum infers a literal union (passing values from a
@@ -252,7 +252,7 @@ export type BidRequestDoc = z.infer<typeof bidRequestDocSchema>;
 
 export const createBidRequestInput = z.object({
   brief: z.string().trim().min(3).max(BRIEF_MAX_LENGTH),
-  details: requesterDetailsSchema.optional(), // the requester's answers to the phase 1 questions
+  details: requesterDetailsInputSchema, // the requester's answers to the phase 1 questions
   requestId: z.string().min(8).max(100).optional(), // one per form: a retried submit returns the same request
 });
 export type CreateBidRequestInput = z.infer<typeof createBidRequestInput>;

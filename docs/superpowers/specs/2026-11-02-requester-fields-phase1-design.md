@@ -67,3 +67,10 @@ requester (own) and by managers.
   wins, the budget is not on the tender record.
 - Rules (emulator): the requester reads only their own request; no client writes.
 - Existing tests still pass.
+
+## Update 2026-11-03 — required answers and removed field
+
+- "סוג האישור הרפואי הנדרש" is removed from both screens (the request form and, by label, procurement's form).
+- Required on the request screen: שם השירות, סיווג המסמך (default בלמ"ס), עיקרי השירות הנדרש (פרק ב') — this is the brief —,
+  the budget question (סכום המסגרת המקסימלי) and מספר תקופות אופציה (a whole number, 0 allowed). All other answers stay optional.
+- שם השירות becomes the tender title. מספר תקופות אופציה stays on procurement's form, pre-filled; the other answers leave it.

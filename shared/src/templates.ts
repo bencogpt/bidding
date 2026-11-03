@@ -1,7 +1,7 @@
 // Pure helpers for binding a Google Doc template to a tender type. Shared by functions
 // (the bind callable) and tests — no I/O here.
 
-import { isRequesterAnswered } from './requesterFields.js';
+import { isFormHidden } from './requesterFields.js';
 
 /**
  * A value the system fills in itself instead of asking the manager: a fixed text, a copy of another
@@ -227,11 +227,11 @@ export const isSystemParam = (p: { key: string; fill?: SystemFill }): boolean =>
 
 // What the requester already answered in phase 1 is not asked again (the server fills it in).
 /** The fields the create form asks for, in display order (stable for fields without an order). */
-export function askedParams<T extends { key: string; fill?: SystemFill; hidden?: boolean; order?: number }>(
+export function askedParams<T extends { key: string; labelHe?: string; fill?: SystemFill; hidden?: boolean; order?: number }>(
   params: readonly T[],
 ): T[] {
   return params
-    .filter((p) => !isSystemParam(p) && !p.hidden && !isRequesterAnswered(p.key))
+    .filter((p) => !isSystemParam(p) && !isFormHidden(p))
     .map((p, i) => ({ p, i }))
     .sort((a, b) => (a.p.order ?? Infinity) - (b.p.order ?? Infinity) || a.i - b.i)
     .map(({ p }) => p);

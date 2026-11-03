@@ -25,10 +25,15 @@ export default function RequestCreate() {
       setError(t('req.briefTooShort'));
       return;
     }
-    const { details: answers, badNumbers } = normalizeDetailsInput(details);
+    const { details: answers, badNumbers, missing } = normalizeDetailsInput(details);
+    const labelOf = (key: string) => REQUESTER_FIELDS.find((f) => f.key === key)?.labelHe ?? key;
+    if (missing.length) {
+      setError(t('req.missingField', { field: labelOf(missing[0]) }));
+      document.getElementById(`detail-${missing[0]}`)?.focus();
+      return;
+    }
     if (badNumbers.length) {
-      const field = REQUESTER_FIELDS.find((f) => f.key === badNumbers[0])?.labelHe ?? badNumbers[0];
-      setError(t('req.badNumber', { field }));
+      setError(t('req.badNumber', { field: labelOf(badNumbers[0]) }));
       document.getElementById(`detail-${badNumbers[0]}`)?.focus();
       return;
     }
@@ -38,7 +43,7 @@ export default function RequestCreate() {
       const r = await api.createBidRequest({
         brief,
         requestId: requestId.current,
-        ...(Object.keys(answers).length ? { details: answers } : {}),
+        details: answers,
       });
       setSerial(r.serial);
     } catch (err) {
@@ -76,7 +81,7 @@ export default function RequestCreate() {
         <form onSubmit={submit} className="card space-y-4 p-6">
           <div>
             <label className="label">
-              {t('create.brief')}
+              {t('req.principalService')}
               <span className="text-red-600"> *</span>
             </label>
             <textarea
@@ -97,12 +102,14 @@ export default function RequestCreate() {
                 <div key={f.key}>
                   <label className="label" htmlFor={`detail-${f.key}`}>
                     {f.labelHe}
+                    {f.required && <span className="text-red-600"> *</span>}
                   </label>
                   {f.type === 'textarea' ? (
                     <textarea
                       id={`detail-${f.key}`}
                       className="input min-h-20"
                       maxLength={REQUESTER_TEXTAREA_MAX}
+                      required={f.required}
                       value={details[f.key] ?? ''}
                       onChange={(e) => setDetails((d) => ({ ...d, [f.key]: e.target.value }))}
                     />
@@ -111,7 +118,8 @@ export default function RequestCreate() {
                       id={`detail-${f.key}`}
                       className="input"
                       type={f.type === 'number' ? 'number' : 'text'}
-                      {...(f.type === 'number' ? { min: 0, step: 'any' } : { maxLength: REQUESTER_TEXT_MAX })}
+                      required={f.required}
+                      {...(f.type === 'number' ? { min: 0, step: f.allowZero ? 1 : 'any' } : { maxLength: REQUESTER_TEXT_MAX })}
                       value={details[f.key] ?? ''}
                       onChange={(e) => setDetails((d) => ({ ...d, [f.key]: e.target.value }))}
                     />

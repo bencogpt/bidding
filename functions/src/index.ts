@@ -49,7 +49,7 @@ import {
   hasPlaceholder,
   isAutoSerialParam,
   briefWithDetails,
-  isRequesterAnswered,
+  isFormHidden,
   fillFromRequestDetails,
   isSystemParam,
   resolveSystemFills,
@@ -182,7 +182,7 @@ function validateParams(
 ): Record<string, string | number> {
   const clean: Record<string, string | number> = {};
   const stillPlaceholders = template.params
-    .filter((p) => !isSystemParam(p) && !p.hidden && !isRequesterAnswered(p.key) && hasPlaceholder(params[p.key]))
+    .filter((p) => !isSystemParam(p) && !isFormHidden(p) && hasPlaceholder(params[p.key]))
     .map((p) => p.labelHe);
   if (stillPlaceholders.length) {
     throw new HttpsError(
@@ -191,7 +191,7 @@ function validateParams(
     );
   }
   for (const p of template.params) {
-    if (isSystemParam(p) || p.hidden || isRequesterAnswered(p.key)) continue; // filled by the system / the requester (or not asked at all)
+    if (isSystemParam(p) || isFormHidden(p)) continue; // filled by the system / the requester (or not asked at all)
     const v = params[p.key];
     const blank = v === undefined || String(v).trim() === '';
     if (blank) {

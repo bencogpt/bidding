@@ -12,15 +12,19 @@ import {
   normalizeDetailsInput,
   askedParams,
   isRequesterAnswered,
+  isFormHidden,
+  requesterDetailsInputSchema,
 } from '@obms/shared';
 
-test('the field list: 11 unique keys, only the budget is internal, two defaults', () => {
+const REQ = { service_name: 'שירותי תמיכה', document_classification: 'בלמ"ס', annual_budget: 900000, option_periods: 2 };
+
+test('the field list: 13 unique keys, only the budget is internal, three defaults', () => {
   const keys = REQUESTER_FIELDS.map((f) => f.key);
-  assert.equal(keys.length, 11);
-  assert.equal(new Set(keys).size, 11);
+  assert.equal(keys.length, 13);
+  assert.equal(new Set(keys).size, 13);
   assert.deepEqual(REQUESTER_FIELDS.filter((f) => f.internal).map((f) => f.key), ['annual_budget']);
   const defaults = Object.fromEntries(REQUESTER_FIELDS.filter((f) => f.default).map((f) => [f.key, f.default]));
-  assert.deepEqual(defaults, { work_days: "ימים א' עד ה'", work_hours: 'משרה מלאה - 170 שעות' });
+  assert.deepEqual(defaults, { document_classification: 'בלמ"ס', work_days: "ימים א' עד ה'", work_hours: 'משרה מלאה - 170 שעות' });
   assert.equal(REQUESTER_FIELDS.find((f) => f.key === 'service_providers_total')?.labelHe, 'כמות נותני השירות');
 });
 
@@ -47,9 +51,9 @@ test('details schema rejects unknown keys, bad numbers, empty and over-long text
 });
 
 test('createBidRequestInput and draftBidInput take the new optional fields', () => {
-  assert.ok(createBidRequestInput.safeParse({ brief: 'שירותי תמיכה' }).success);
-  assert.ok(createBidRequestInput.safeParse({ brief: 'שירותי תמיכה', details: { work_days: 'א-ה' } }).success);
-  assert.equal(createBidRequestInput.safeParse({ brief: 'שירותי תמיכה', details: { nope: 'x' } }).success, false);
+  assert.ok(createBidRequestInput.safeParse({ brief: 'שירותי תמיכה', details: REQ }).success);
+  assert.ok(createBidRequestInput.safeParse({ brief: 'שירותי תמיכה', details: { ...REQ, work_days: 'א-ה' } }).success);
+  assert.equal(createBidRequestInput.safeParse({ brief: 'שירותי תמיכה', details: { ...REQ, nope: 'x' } }).success, false);
   const base = { type: 'service', brief: 'שירותי תמיכה' };
   assert.ok(draftBidInput.safeParse(base).success);
   assert.ok(draftBidInput.safeParse({ ...base, bidRequestId: '2026-31' }).success);
@@ -124,4 +128,49 @@ test('askedParams leaves out what the requester answers (procurement form), keep
   assert.equal(isRequesterAnswered('service_providers_total'), true);
   assert.equal(isRequesterAnswered('annual_budget'), false);
   assert.equal(isRequesterAnswered('estimate'), false);
+});
+
+test('the medical approval type is on neither screen', () => {
+  assert.ok(!REQUESTER_FIELDS.some((f) => f.labelHe === 'סוג האישור הרפואי הנדרש'));
+  // a template field with that label (whatever its key) is not asked on the procurement form, nor required
+  const params = [{ key: 'סוג_האישור_הרפואי_הנדרש', labelHe: 'סוג האישור הרפואי הנדרש', required: true }, { key: 'option_periods', labelHe: 'מספר תקופות אופציה' }];
+  assert.deepEqual(askedParams(params).map((p) => p.key), ['option_periods']);
+  assert.equal(isFormHidden(params[0]), true);
+  assert.equal(isFormHidden(params[1]), false);
+});
+
+test('the five required answers of the request screen, and nothing else', () => {
+  assert.deepEqual(
+    REQUESTER_FIELDS.filter((f) => f.required).map((f) => f.labelHe),
+    ['שם השירות', 'סיווג המסמך', 'מהו אומדן ההתקשרות השנתית או מהו גובה התקציב שהוקצה לשירות?', 'מספר תקופות אופציה'],
+  ); // the fifth, "עיקרי השירות הנדרש (פרק ב')", is the brief itself
+  const all = { service_name: 'שירותי תמיכה', document_classification: 'בלמ"ס', annual_budget: 900000, option_periods: 0 };
+  assert.ok(requesterDetailsInputSchema.safeParse(all).success, 'zero option periods is a valid answer');
+  for (const k of Object.keys(all)) {
+    const { [k]: _omit, ...rest } = all as Record<string, string | number>;
+    assert.equal(requesterDetailsInputSchema.safeParse(rest).success, false, `${k} is required`);
+  }
+  assert.equal(requesterDetailsInputSchema.safeParse({ ...all, option_periods: 1.5 }).success, false);
+  assert.equal(requesterDetailsInputSchema.safeParse({ ...all, option_periods: -1 }).success, false);
+  // an older request without these answers must still parse as a stored document
+  assert.ok(requesterDetailsSchema.safeParse({}).success);
+});
+
+test('createBidRequestInput needs the required answers', () => {
+  const all = { service_name: 'שירותי תמיכה', document_classification: 'בלמ"ס', annual_budget: 900000, option_periods: 2 };
+  assert.ok(createBidRequestInput.safeParse({ brief: 'עיקרי השירות', details: all }).success);
+  assert.equal(createBidRequestInput.safeParse({ brief: 'עיקרי השירות' }).success, false);
+});
+
+test('normalizeDetailsInput reports missing required answers and accepts a zero option count', () => {
+  const r = normalizeDetailsInput({ service_name: '  ', option_periods: '0', annual_budget: '5' });
+  assert.deepEqual(r.missing, ['service_name', 'document_classification']);
+  assert.equal(r.details.option_periods, 0);
+  assert.deepEqual(normalizeDetailsInput({ option_periods: '1.5' }).badNumbers, ['option_periods']);
+});
+
+test('option periods stay on the procurement form, the other answers leave it', () => {
+  assert.equal(isRequesterAnswered('option_periods'), false);
+  assert.equal(isRequesterAnswered('service_name'), true);
+  assert.equal(isRequesterAnswered('work_days'), true);
 });
