@@ -347,7 +347,7 @@ export default function RequestCreate() {
           <SubHead letter="ב" title={t('req.subB')} hint={t('req.subBHint')} />
           {ready ? (
             <div className="space-y-6">
-              <RequestSummary brief={a.brief} fields={a.fields} rich={rich} />
+              <RequestSummary brief={a.brief} fields={a.fields} rich={rich} chosen={chosen} />
               <RequestRecommendations
                 onResearch={setResearchRunId}
                 onStatus={setRecsStatus}

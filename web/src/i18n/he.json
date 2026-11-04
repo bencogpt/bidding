@@ -119,6 +119,8 @@
   "req.toSummary": "המשך לסיכום",
   "req.summaryLocked": "הסיכום יופיע אחרי שיושלמו פרטי החובה.",
   "req.summaryExtras": "פרטים נוספים שנאספו",
+  "req.summaryRecs": "המלצות שיוטמעו במסמך ({{n}})",
+  "req.summaryNoRecs": "לא נבחרו המלצות.",
   "req.recTitle": "המלצות לשיפור ודיוק",
   "req.recHint": "הצעות AI לדיוק הבקשה. מה שתבחרו יצורף לבקשה.",
   "req.recBusy": "מכינים המלצות…",

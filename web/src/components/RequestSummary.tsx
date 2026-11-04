@@ -12,10 +12,12 @@ export default function RequestSummary({
   brief,
   fields,
   rich,
+  chosen = [],
 }: {
   brief: string;
   fields: Fields;
   rich?: { text: string; html: string } | null;
+  chosen?: string[];
 }) {
   const { t } = useTranslation();
   const value = (key: string): string => {
@@ -72,6 +74,20 @@ export default function RequestSummary({
             <div className="text-sm">—</div>
           )}
         </div>
+      </div>
+      <div className="rounded-lg border border-black/5 p-4">
+        <h4 className="mb-2 text-sm font-semibold">{t('req.summaryRecs', { n: chosen.length })}</h4>
+        {chosen.length ? (
+          <ul className="list-disc space-y-1.5 ps-5 text-sm leading-relaxed">
+            {chosen.map((c) => (
+              <li key={c} className="whitespace-pre-wrap">
+                {c}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-tx-soft">{t('req.summaryNoRecs')}</p>
+        )}
       </div>
       {extras.length > 0 && (
         <div className="rounded-lg border border-black/5 p-4">
