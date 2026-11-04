@@ -26,7 +26,7 @@ import {
 import { getFunctions, connectFunctionsEmulator, httpsCallable } from 'firebase/functions';
 import { SKILL_IDS } from '@obms/shared';
 import { initializeApp as initAdmin } from 'firebase-admin/app';
-import { getFirestore as adminFirestore } from 'firebase-admin/firestore';
+import { getFirestore as adminFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getStorage as adminStorage } from 'firebase-admin/storage';
 
 const app = initializeApp({ projectId: 'biding-system', apiKey: 'demo' });
@@ -225,6 +225,19 @@ async function main() {
   const approved = (await getDoc(doc(db, 'tenders', tenderId))).data()!.approvals ?? {};
   assert.deepEqual(Object.keys(approved).sort(), ['finance', 'legal', 'requester'], 'each role recorded its approval');
   await call('transitionTender')({ tenderId, to: 'ready' });
+  // Publishing goes to the suppliers the manager picked beforehand — at least one.
+  let noSuppliers = false;
+  try {
+    await call('transitionTender')({ tenderId, to: 'published' });
+  } catch (e) {
+    noSuppliers = /לפחות ספק אחד/.test((e as Error).message);
+  }
+  assert.ok(noSuppliers, 'publish is refused until a supplier is picked');
+  await call('setPendingSuppliers')({ tenderId, supplierIds: ['sup_aegis'] });
+  const pick = await getDoc(doc(db, 'tenders', tenderId, 'internal', 'suppliers'));
+  assert.deepEqual(pick.data()?.supplierIds, ['sup_aegis'], 'the pick is kept internally');
+  const preAccess = await getDocs(collection(db, 'tenders', tenderId, 'access'));
+  assert.ok(!preAccess.docs.some((d) => d.id === 'sup_aegis'), 'no supplier access before publication');
   const published = (await call('transitionTender')({ tenderId, to: 'published' })) as {
     data: { verdict: string };
   };
@@ -282,6 +295,24 @@ async function main() {
   console.log('✓ review gate: refused with an empty slot, passes once the team is complete');
   await approveAs(bad.data.id, ['requester', 'legal', 'finance', 'security']);
   await call('transitionTender')({ tenderId: bad.data.id, to: 'ready' });
+  // A case that is "ready" without every approval (e.g. from before approvals were required) can't be
+  // published; sent back to review it keeps the approvals already given.
+  process.env.FIRESTORE_EMULATOR_HOST ??= '127.0.0.1:8080';
+  await adminFirestore(adminApp).collection('tenders').doc(bad.data.id).update({ 'approvals.legal': FieldValue.delete() });
+  let unapproved = false;
+  try {
+    await call('transitionTender')({ tenderId: bad.data.id, to: 'published' });
+  } catch (e) {
+    unapproved = /לא ניתן לפרסם — ממתין לאישור/.test((e as Error).message);
+  }
+  assert.ok(unapproved, 'publish is refused while a required role has not approved');
+  await call('transitionTender')({ tenderId: bad.data.id, to: 'internal_review' });
+  const kept = (await getDoc(doc(db, 'tenders', bad.data.id))).data()!.approvals ?? {};
+  assert.deepEqual(Object.keys(kept).sort(), ['finance', 'requester', 'security'], 'approvals already given are kept');
+  await approveAs(bad.data.id, ['legal']);
+  await call('transitionTender')({ tenderId: bad.data.id, to: 'ready' });
+  console.log('✓ approvals: publish needs every role; back to review keeps given approvals');
+  await call('setPendingSuppliers')({ tenderId: bad.data.id, supplierIds: ['sup_globex'] });
   let blocked = false;
   try {
     await call('transitionTender')({ tenderId: bad.data.id, to: 'published' });
@@ -356,8 +387,10 @@ async function main() {
     adHocRefused = true;
   }
   assert.ok(adHocRefused, 'ad-hoc internal grants are refused');
-  await call('grantAccess')({ tenderId, supplierIds: ['sup_aegis'], internalUids: [] });
-  console.log('✓ manager published tender + shared with aegis');
+  const postAccess = await getDocs(collection(db, 'tenders', tenderId, 'access'));
+  assert.ok(postAccess.docs.some((d) => d.id === 'sup_aegis'), 'the picked supplier got access on publish');
+  assert.ok(!postAccess.docs.some((d) => d.id === 'sup_meridian'), 'only the picked suppliers');
+  console.log('✓ manager picked aegis before publishing; aegis got access on publish');
 
   // Removing legal from a case revokes their access to it.
   await call('assignTeamMember')({ tenderId: bad.data.id, role: 'legal', uid: null });

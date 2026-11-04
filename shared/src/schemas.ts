@@ -289,6 +289,13 @@ export const grantAccessInput = z.object({
 });
 export type GrantAccessInput = z.infer<typeof grantAccessInput>;
 
+/** The suppliers the case will be published to (picked before publication; internal until then). */
+export const setPendingSuppliersInput = z.object({
+  tenderId: z.string(),
+  supplierIds: z.array(z.string()).max(200),
+});
+export type SetPendingSuppliersInput = z.infer<typeof setPendingSuppliersInput>;
+
 export const askQuestionInput = z.object({
   tenderId: z.string(),
   text: z.string().min(3),
@@ -361,7 +368,14 @@ export interface ExternalSupplierSuggestion {
   contactEmail?: string;
   country?: string;
   sourceUrl?: string;
+  // Track record with the Government of Israel (ministries, central tenders, government bodies), with
+  // the page it was found on. hasGovRecord is true only when that page was really returned by the search.
+  govRecordHe?: string;
+  govSourceUrl?: string;
+  hasGovRecord?: boolean;
 }
+
+export type ExternalSearchStatus = 'ok' | 'none' | 'no_tags' | 'failed';
 
 export const createSupplierAccountInput = z.object({
   supplierId: z.string(),

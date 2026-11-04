@@ -12,6 +12,7 @@ import {
   useSubmissions,
   useTemplate,
   useChat,
+  useTenderInternal,
 } from '../lib/hooks';
 import { REQUIRED_ROLES_BY_TYPE, REQUIRE_APPROVALS, missingRoles, missingApprovals, hasDocument } from '@obms/shared';
 import TeamPanel from '../components/TeamPanel';
@@ -44,6 +45,7 @@ export default function TenderWorkspace() {
   const answers = useAnswers(id);
   const submissions = useSubmissions(id);
   const template = useTemplate(tender?.type);
+  const { pendingSuppliers } = useTenderInternal(id);
   const [tab, setTab] = useState<Tab>('overview');
   const [chatOpen, setChatOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -136,8 +138,9 @@ export default function TenderWorkspace() {
         title: gate ? t(`draft.gate.${gate}`) : undefined,
       };
     } else if (tender.status === 'draft') {
+      // The manager's own approval: the case goes to the team for theirs.
       action = {
-        label: t('ws.finalApprove'),
+        label: t('ws.sendForApproval'),
         onClick: () => transitionTo('internal_review'),
         disabled: busy || missing.length > 0,
         title: missing.length
@@ -145,8 +148,13 @@ export default function TenderWorkspace() {
           : undefined,
       };
     } else if (tender.status === 'internal_review') {
+      // Says what it waits for instead of looking like a dead button.
+      const done = requiredRoles.length - waiting.length;
       action = {
-        label: t('ws.finalApprove'),
+        label:
+          REQUIRE_APPROVALS && waiting.length
+            ? t('ws.waitingTeam', { done, total: requiredRoles.length })
+            : t('ws.finalApprove'),
         onClick: () => transitionTo('ready'),
         disabled: busy || (REQUIRE_APPROVALS && waiting.length > 0),
         title: REQUIRE_APPROVALS && waiting.length
@@ -154,10 +162,16 @@ export default function TenderWorkspace() {
           : undefined,
       };
     } else if (tender.status === 'ready') {
+      // Publishing needs every required role's approval too (cases that reached "ready" without them).
       action = {
         label: busy ? t('sup.checking') : t('ws.publish'),
         onClick: () => transitionTo('published'),
-        disabled: busy,
+        disabled: busy || (REQUIRE_APPROVALS && waiting.length > 0) || pendingSuppliers.length === 0,
+        title: REQUIRE_APPROVALS && waiting.length
+          ? t('ws.awaitingApproval', { roles: waiting.map((r) => t(`role.${r}`)).join(', ') })
+          : pendingSuppliers.length === 0
+            ? t('ws.pickSuppliersFirst')
+            : undefined,
       };
     } else if (tender.status === 'responses' || tender.status === 'evaluated') {
       action = { label: t('ws.toEvaluation'), onClick: () => setTab('evaluation') };
@@ -199,6 +213,27 @@ export default function TenderWorkspace() {
       {(initialCheck || (!tender.lastSupervision && isManager)) && (
         <div className="card mb-4 border-teal-200 bg-teal-soft p-3 text-sm text-teal-600">
           {t('sup.initialRunning')}
+        </div>
+      )}
+      {isManager && REQUIRE_APPROVALS && tender.status === 'internal_review' && waiting.length > 0 && (
+        <div className="card mb-4 border-teal-200 bg-teal-soft p-3 text-sm text-teal-700">
+          {t('ws.reviewWaiting', { roles: waiting.map((r) => t(`role.${r}`)).join(', ') })}
+        </div>
+      )}
+      {isManager && REQUIRE_APPROVALS && tender.status === 'ready' && waiting.length > 0 && (
+        <div className="card mb-4 flex flex-wrap items-center justify-between gap-2 border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          <span>{t('ws.readyMissingApprovals', { roles: waiting.map((r) => t(`role.${r}`)).join(', ') })}</span>
+          <button className="btn btn-sm" disabled={busy} onClick={() => transitionTo('internal_review')}>
+            {t('ws.backToReview')}
+          </button>
+        </div>
+      )}
+      {isManager && tender.status === 'ready' && waiting.length === 0 && pendingSuppliers.length === 0 && (
+        <div className="card mb-4 flex flex-wrap items-center justify-between gap-2 border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          <span>{t('ws.pickSuppliersFirst')}</span>
+          <button className="btn btn-sm" onClick={() => setTab('access')}>
+            {t('ws.goPickSuppliers')}
+          </button>
         </div>
       )}
       {error && (
@@ -286,6 +321,7 @@ export default function TenderWorkspace() {
           access={access}
           suppliers={suppliers}
           canManage={isManager}
+          pendingSupplierIds={pendingSuppliers}
         />
       )}
       {tab === 'questions' && (

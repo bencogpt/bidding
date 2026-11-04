@@ -8,6 +8,7 @@ import type {
   RecommendationsInput,
   RecommendationsResult,
   GrantAccessInput,
+  SetPendingSuppliersInput,
   AskQuestionInput,
   AnswerQuestionsInput,
   TransitionTenderInput,
@@ -56,6 +57,7 @@ import type {
   ResearchDraftInput,
   ResearchDraftResult,
   ResearchStatus,
+  ExternalSearchStatus,
 } from '@obms/shared';
 
 // The Firebase client gives up after 70 s by default and reports an error — while the server keeps
@@ -107,6 +109,7 @@ export const api = {
   generateSkillTips: call<GenerateSkillTipsInput, SkillTipsRun>('generateSkillTips'),
   getSkillsCatalog: call<Record<string, never>, SkillsCatalog>('getSkillsCatalog'),
   grantAccess: call<GrantAccessInput, { ok: true; docsSkipped: string[] }>('grantAccess'),
+  setPendingSuppliers: call<SetPendingSuppliersInput, { ok: true; supplierIds: string[] }>('setPendingSuppliers'),
   getTenderDocument: call<
     { tenderId: string },
     { kind: 'html'; content: string; title: string } | { kind: 'none'; title: string }
@@ -154,6 +157,7 @@ export const api = {
     {
       registered: { supplierId: string; name: string; isIsraeli: boolean; matchedTags: string[] }[];
       external: ExternalSupplierSuggestion[];
+      externalStatus: ExternalSearchStatus;
     }
   >('searchSuppliers'),
   createInternalUser: call<CreateInternalUserInput, { email: string; tempPassword: string | null }>(
