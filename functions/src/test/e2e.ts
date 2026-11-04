@@ -26,7 +26,7 @@ import {
 import { getFunctions, connectFunctionsEmulator, httpsCallable } from 'firebase/functions';
 import { SKILL_IDS } from '@obms/shared';
 import { initializeApp as initAdmin } from 'firebase-admin/app';
-import { getFirestore as adminFirestore } from 'firebase-admin/firestore';
+import { getFirestore as adminFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getStorage as adminStorage } from 'firebase-admin/storage';
 
 const app = initializeApp({ projectId: 'biding-system', apiKey: 'demo' });
@@ -282,6 +282,23 @@ async function main() {
   console.log('✓ review gate: refused with an empty slot, passes once the team is complete');
   await approveAs(bad.data.id, ['requester', 'legal', 'finance', 'security']);
   await call('transitionTender')({ tenderId: bad.data.id, to: 'ready' });
+  // A case that is "ready" without every approval (e.g. from before approvals were required) can't be
+  // published; sent back to review it keeps the approvals already given.
+  process.env.FIRESTORE_EMULATOR_HOST ??= '127.0.0.1:8080';
+  await adminFirestore(adminApp).collection('tenders').doc(bad.data.id).update({ 'approvals.legal': FieldValue.delete() });
+  let unapproved = false;
+  try {
+    await call('transitionTender')({ tenderId: bad.data.id, to: 'published' });
+  } catch (e) {
+    unapproved = /לא ניתן לפרסם — ממתין לאישור/.test((e as Error).message);
+  }
+  assert.ok(unapproved, 'publish is refused while a required role has not approved');
+  await call('transitionTender')({ tenderId: bad.data.id, to: 'internal_review' });
+  const kept = (await getDoc(doc(db, 'tenders', bad.data.id))).data()!.approvals ?? {};
+  assert.deepEqual(Object.keys(kept).sort(), ['finance', 'requester', 'security'], 'approvals already given are kept');
+  await approveAs(bad.data.id, ['legal']);
+  await call('transitionTender')({ tenderId: bad.data.id, to: 'ready' });
+  console.log('✓ approvals: publish needs every role; back to review keeps given approvals');
   let blocked = false;
   try {
     await call('transitionTender')({ tenderId: bad.data.id, to: 'published' });
