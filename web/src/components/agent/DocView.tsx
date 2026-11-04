@@ -52,8 +52,8 @@ export interface DocViewHandle {
  * run inside); the page can still scroll and mark it, so jumping to a finding scrolls only the document.
  * Suppliers keep the plain DocumentViewer.
  */
-const DocView = forwardRef<DocViewHandle, { tenderId: string; googleDocId?: string | null; internal: boolean }>(
-  function DocView({ tenderId, googleDocId, internal }, ref) {
+const DocView = forwardRef<DocViewHandle, { tenderId: string; googleDocId?: string | null; internal: boolean; locked?: boolean }>(
+  function DocView({ tenderId, googleDocId, internal, locked = false }, ref) {
     const [html, setHtml] = useState<string | null>(null);
     const [error, setError] = useState('');
     const [zoom, setZoom] = useState(1);
@@ -139,7 +139,12 @@ const DocView = forwardRef<DocViewHandle, { tenderId: string; googleDocId?: stri
           className="flex items-center justify-between gap-3 px-4 py-2.5 text-[13px]"
           style={{ background: 'var(--warn-soft)', color: 'var(--warn)' }}
         >
-          <span>ניתן להעיר ולהציע שינויים במסמך. רק מנהל המכרז מאשר שינויים.</span>
+          {/* After the final approval the document is locked (new text; the prototype shows only the first). */}
+          <span>
+            {locked
+              ? 'המסמך נעול לאחר האישור הסופי. רק מנהל המכרז יכול לפתוח אותו מחדש.'
+              : 'ניתן להעיר ולהציע שינויים במסמך. רק מנהל המכרז מאשר שינויים.'}
+          </span>
           {docUrl && (
             <a
               className="whitespace-nowrap rounded-full px-3.5 py-[5px] text-xs font-semibold"

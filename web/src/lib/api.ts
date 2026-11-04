@@ -35,6 +35,9 @@ import type {
   RefreshTenderDocumentInput,
   RunSupervisionInput,
   DecideFindingInput,
+  ReopenTenderInput,
+  GetVersionViewInput,
+  VersionView,
   SetTemplateInternalFieldsInput,
   RecomputeCaseScoreInput,
   UpdateScoringTargetsInput,
@@ -119,6 +122,10 @@ export const api = {
   runSupervision: call<RunSupervisionInput, SupervisionReport | { skipped: true }>('runSupervision'),
   // Incorporate / leave as is a warning of the latest check (plan B2).
   decideFinding: call<DecideFindingInput, { ok: true }>('decideFinding'),
+  // Reopen a locked case: a new editable copy of the document, a clean round of approvals (plan B5).
+  reopenTender: call<ReopenTenderInput, { ok: true; docsSkipped: string[] }>('reopenTender'),
+  // A stored version of the document, or its comparison with the current one (the versions tab).
+  getVersionView: call<GetVersionViewInput, VersionView>('getVersionView'),
   recomputeCaseScore: call<RecomputeCaseScoreInput, CaseScore>('recomputeCaseScore'),
   backfillCaseScores: call<Record<string, never>, { scored: number; failed: string[] }>(
     'backfillCaseScores',

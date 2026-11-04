@@ -52,9 +52,9 @@ import FindingsPanel from '../components/agent/FindingsPanel';
 import AccessPanel from '../components/AccessPanel';
 import QuestionsPanel from '../components/QuestionsPanel';
 import EvaluationPanel from '../components/EvaluationPanel';
-import QuartetCard from '../components/QuartetCard';
-import NextActionCard from '../components/NextActionCard';
-import DatesCard from '../components/DatesCard';
+import OverviewTab from '../components/overview/OverviewTab';
+import ActivityTab from '../components/activity/ActivityTab';
+import VersionsTab from '../components/activity/VersionsTab';
 import AgentReport from '../components/agent/AgentReport';
 import TenderHeader, { type HeaderButton } from '../components/TenderHeader';
 import OnBehalfDialog from '../components/agent/OnBehalfDialog';
@@ -62,10 +62,9 @@ import PublishDialog from '../components/agent/PublishDialog';
 import { markDraftSeen } from '../lib/seen';
 
 // The prototype's tabs (shared visibleTabs). "שיתוף והרשאות" and "תיק מכרז" are hidden for now (plan D9):
-// suppliers are picked in the publish dialog. פעילות and היסטוריית גרסאות join once built (plan D10); the
-// conference stage has no backend.
+// suppliers are picked in the publish dialog. The conference stage has no backend.
 type Tab = WorkspaceTabKey;
-const NOT_BUILT_YET: readonly WorkspaceTabKey[] = ['activity', 'versions', 'conference'];
+const NOT_BUILT_YET: readonly WorkspaceTabKey[] = ['conference'];
 
 export default function TenderWorkspace() {
   const { id } = useParams();
@@ -352,11 +351,13 @@ export default function TenderWorkspace() {
         ownerName={ownerName}
         button={action}
         approvals={{
-          // "פתח מחדש (שכפול)" arrives with the reopen callable (plan B5).
-          view: { ...av, actions: av.actions.filter((a) => a.kind !== 'reopen') },
+          view: av,
           busy,
           onAction: (kind) => {
             if (kind === 'withdraw') void setApproval(false);
+            else if (confirm('לפתוח מחדש? ייווצר עותק חדש של המסמך לעריכה, האישורים יתאפסו והמסמך הנעול יישמר.')) {
+              void run(() => api.reopenTender({ tenderId: tender.id })); // the agent then checks the new copy
+            }
           },
           onRowAction: (a) => {
             if (a.kind === 'approve_on_behalf') {
@@ -494,13 +495,16 @@ export default function TenderWorkspace() {
       )}
 
       {shown === 'overview' && (
-        <div className="space-y-4">
-          <div className="grid items-start gap-4 lg:grid-cols-3">
-            <NextActionCard tender={tender} action={action ?? undefined} onOpenDocument={() => setTab('document')} />
-            <QuartetCard tender={tender} />
-            <DatesCard tender={tender} template={template} />
-          </div>
-        </div>
+        <OverviewTab
+          tender={tender}
+          template={template}
+          ds={ds}
+          stageIdx={stageIdx}
+          agent={agent}
+          fv={fv}
+          rows={av.rows}
+          onTab={setTab}
+        />
       )}
       {shown === 'document' && (
         // Two columns (prototype dsplit, lines 259–266): the page, and the agent's panel beside it — sticky
@@ -524,7 +528,7 @@ export default function TenderWorkspace() {
                     </button>
                   </div>
                 )}
-                <DocView ref={docRef} tenderId={tender.id} googleDocId={tender.googleDocId} internal />
+                <DocView ref={docRef} tenderId={tender.id} googleDocId={tender.googleDocId} internal locked={stageIdx >= 2} />
               </>
             ) : (
               <>
@@ -591,6 +595,8 @@ export default function TenderWorkspace() {
           </aside>
         </div>
       )}
+      {shown === 'activity' && <ActivityTab tender={tender} template={template} />}
+      {shown === 'versions' && <VersionsTab tender={tender} />}
       {shown === 'questions' && (
         <QuestionsPanel
           tenderId={tender.id}
