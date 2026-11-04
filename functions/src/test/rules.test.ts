@@ -59,6 +59,7 @@ before(async () => {
       level: 'view',
     });
     await setDoc(doc(db, 'tenders/t1/internal/provenance'), { templateType: 'goods' });
+    await setDoc(doc(db, 'tenders/t1/internal/suppliers'), { supplierIds: ['sup_a', 'sup_b'] });
     await setDoc(doc(db, 'tenders/t1/supervision/r1'), { runId: 'r1', verdict: 'PASS' });
     await setDoc(doc(db, 'caseScores/t1'), { tenderId: 't1', total: 80 });
     await setDoc(doc(db, 'feedbackRequests/t1_publish_ul'), { uid: 'ul', tenderId: 't1', status: 'pending' });
@@ -208,6 +209,9 @@ test('supplier WITH access cannot read a tender before it is published', async (
 
 test('supplier cannot read internal provenance or supervisor reports', async () => {
   await assertFails(getDoc(doc(supplierA(), 'tenders/t1/internal/provenance')));
+  await assertFails(getDoc(doc(supplierA(), 'tenders/t1/internal/suppliers')), 'who it is published to stays internal');
+  await assertSucceeds(getDoc(doc(manager(), 'tenders/t1/internal/suppliers')));
+  await assertFails(setDoc(doc(manager(), 'tenders/t1/internal/suppliers'), { supplierIds: [] }));
   await assertFails(getDoc(doc(supplierA(), 'tenders/t1/supervision/r1')));
 });
 

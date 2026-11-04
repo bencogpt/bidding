@@ -445,6 +445,19 @@ export const internalRepo = {
     const s = await db.collection('tenders').doc(tenderId).collection('internal').doc('params').get();
     return s.exists ? (s.data() as Record<string, string | number>) : {};
   },
+  /** Suppliers picked before publication (internal; they get access when the case is published). */
+  async getPendingSuppliers(tenderId: string): Promise<string[]> {
+    const s = await db.collection('tenders').doc(tenderId).collection('internal').doc('suppliers').get();
+    return s.exists ? ((s.data()?.supplierIds as string[]) ?? []) : [];
+  },
+  async setPendingSuppliers(tenderId: string, supplierIds: string[], by: string): Promise<void> {
+    await db
+      .collection('tenders')
+      .doc(tenderId)
+      .collection('internal')
+      .doc('suppliers')
+      .set({ supplierIds, updatedAt: now(), updatedBy: by });
+  },
 };
 
 // ---- supervisor reports (append-only, one doc per run) ----

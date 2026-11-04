@@ -1,7 +1,8 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useEffect, useRef, useState } from 'react';
-import { useBidRequests, useMyFeedbackRequests } from '../lib/hooks';
+import { useBidRequests, useMyFeedbackRequests, useTenders } from '../lib/hooks';
+import { REQUIRED_ROLES_BY_TYPE, REQUIRE_APPROVALS, missingApprovals } from '@obms/shared';
 import FeedbackForm from '../components/FeedbackForm';
 import { useAuth } from '../auth/AuthProvider';
 
@@ -15,7 +16,16 @@ export default function MyDesk() {
   const { user, role } = useAuth();
   const pending = useMyFeedbackRequests(user?.uid);
   const { requests } = useBidRequests();
+  const { tenders } = useTenders();
   const isManager = role === 'tender_manager';
+  // Cases in internal review that wait for a role the signed-in user holds.
+  const toApprove = REQUIRE_APPROVALS
+    ? tenders.filter((td) => {
+        if (td.status !== 'internal_review' || !user) return false;
+        const waiting = missingApprovals(td.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[td.type], td.team, td.approvals);
+        return waiting.some((r) => td.team?.[r] === user.uid);
+      })
+    : [];
   const [open, setOpen] = useState<string | null>(null);
   // Right after "שלח לרכש" the create page brings us here: a green notice and the new request marked for a few seconds.
   const location = useLocation();
@@ -56,6 +66,27 @@ export default function MyDesk() {
               {t('req.sentToast')} <bdi>{justSent}</bdi>
             </div>
             <p className="mt-1 text-sm">{t('req.sentToastSub')}</p>
+          </div>
+        </div>
+      )}
+
+      {toApprove.length > 0 && (
+        <div className="mb-6">
+          <h2 className="mb-3 font-semibold">{t('desk.toApprove', { n: toApprove.length })}</h2>
+          <div className="card divide-y divide-paper-2">
+            {toApprove.map((td) => (
+              <div key={td.id} className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 text-sm">
+                <span>
+                  <span className="font-semibold" dir="ltr">
+                    {td.serial}
+                  </span>{' '}
+                  · {td.title}
+                </span>
+                <Link to={`/tenders/${td.id}`} className="btn btn-gold btn-sm">
+                  {t('desk.reviewAndApprove')}
+                </Link>
+              </div>
+            ))}
           </div>
         </div>
       )}

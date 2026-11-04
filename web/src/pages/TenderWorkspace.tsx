@@ -12,6 +12,7 @@ import {
   useSubmissions,
   useTemplate,
   useChat,
+  useTenderInternal,
 } from '../lib/hooks';
 import { REQUIRED_ROLES_BY_TYPE, REQUIRE_APPROVALS, missingRoles, missingApprovals, hasDocument } from '@obms/shared';
 import TeamPanel from '../components/TeamPanel';
@@ -44,6 +45,7 @@ export default function TenderWorkspace() {
   const answers = useAnswers(id);
   const submissions = useSubmissions(id);
   const template = useTemplate(tender?.type);
+  const { pendingSuppliers } = useTenderInternal(id);
   const [tab, setTab] = useState<Tab>('overview');
   const [chatOpen, setChatOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -158,10 +160,12 @@ export default function TenderWorkspace() {
       action = {
         label: busy ? t('sup.checking') : t('ws.publish'),
         onClick: () => transitionTo('published'),
-        disabled: busy || (REQUIRE_APPROVALS && waiting.length > 0),
+        disabled: busy || (REQUIRE_APPROVALS && waiting.length > 0) || pendingSuppliers.length === 0,
         title: REQUIRE_APPROVALS && waiting.length
           ? t('ws.awaitingApproval', { roles: waiting.map((r) => t(`role.${r}`)).join(', ') })
-          : undefined,
+          : pendingSuppliers.length === 0
+            ? t('ws.pickSuppliersFirst')
+            : undefined,
       };
     } else if (tender.status === 'responses' || tender.status === 'evaluated') {
       action = { label: t('ws.toEvaluation'), onClick: () => setTab('evaluation') };
@@ -210,6 +214,14 @@ export default function TenderWorkspace() {
           <span>{t('ws.readyMissingApprovals', { roles: waiting.map((r) => t(`role.${r}`)).join(', ') })}</span>
           <button className="btn btn-sm" disabled={busy} onClick={() => transitionTo('internal_review')}>
             {t('ws.backToReview')}
+          </button>
+        </div>
+      )}
+      {isManager && tender.status === 'ready' && waiting.length === 0 && pendingSuppliers.length === 0 && (
+        <div className="card mb-4 flex flex-wrap items-center justify-between gap-2 border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          <span>{t('ws.pickSuppliersFirst')}</span>
+          <button className="btn btn-sm" onClick={() => setTab('access')}>
+            {t('ws.goPickSuppliers')}
           </button>
         </div>
       )}
@@ -298,6 +310,7 @@ export default function TenderWorkspace() {
           access={access}
           suppliers={suppliers}
           canManage={isManager}
+          pendingSupplierIds={pendingSuppliers}
         />
       )}
       {tab === 'questions' && (

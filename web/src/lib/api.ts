@@ -8,6 +8,7 @@ import type {
   RecommendationsInput,
   RecommendationsResult,
   GrantAccessInput,
+  SetPendingSuppliersInput,
   AskQuestionInput,
   AnswerQuestionsInput,
   TransitionTenderInput,
@@ -107,6 +108,7 @@ export const api = {
   generateSkillTips: call<GenerateSkillTipsInput, SkillTipsRun>('generateSkillTips'),
   getSkillsCatalog: call<Record<string, never>, SkillsCatalog>('getSkillsCatalog'),
   grantAccess: call<GrantAccessInput, { ok: true; docsSkipped: string[] }>('grantAccess'),
+  setPendingSuppliers: call<SetPendingSuppliersInput, { ok: true; supplierIds: string[] }>('setPendingSuppliers'),
   getTenderDocument: call<
     { tenderId: string },
     { kind: 'html'; content: string; title: string } | { kind: 'none'; title: string }
