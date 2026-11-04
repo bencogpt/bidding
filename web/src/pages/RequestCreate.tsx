@@ -100,12 +100,12 @@ export default function RequestCreate() {
   };
   // Start a line for a missing detail at the end of the text, with the cursor after it.
   const appendStarter = (key: string) => {
-    const box = document.getElementById('rq-brief') as HTMLTextAreaElement | null;
     if (key !== 'scope' && STARTERS[key]) {
       const base = a.brief.replace(/\s+$/, '');
       a.setBrief((base ? `${base}\n` : '') + STARTERS[key]);
     }
     setTimeout(() => {
+      const box = document.getElementById('rq-brief') as HTMLTextAreaElement | null;
       box?.focus();
       box?.setSelectionRange(box.value.length, box.value.length);
     }, 0);
@@ -258,9 +258,11 @@ export default function RequestCreate() {
                       <button
                         type="button"
                         className="btn btn-sm"
-                        onClick={() =>
-                          document.getElementById(`rq-${rows.find((r) => !r.present && r.key !== 'scope')?.key}`)?.focus()
-                        }
+                        onClick={() => {
+                          const first = rows.find((r) => !r.present);
+                          a.setMode('free');
+                          appendStarter(first?.key ?? 'scope');
+                        }}
                       >
                         {t('req.chatGoTo')}
                       </button>
@@ -277,7 +279,7 @@ export default function RequestCreate() {
               </div>
 
               <div className="space-y-4">
-                <RequestPanel rows={rows} fields={a.fields} onField={a.setField} />
+                <RequestPanel rows={rows} fields={a.fields} />
                 {goAgent ? (
                   <>
                     <button

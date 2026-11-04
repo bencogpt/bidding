@@ -104,7 +104,7 @@
   "req.extrasTitle": "פרטים נוספים",
   "req.extrasHint": "לא חובה. ככל שתמלאו יותר, איש הרכש יצטרך לשאול פחות.",
   "req.chatMissing": "כמעט סיימנו. נשאר למלא בצד: {{fields}}.",
-  "req.chatGoTo": "מעבר לשדה",
+  "req.chatGoTo": "השלמה בכתיבה חופשית",
   "req.chatReady": "הכול מוכן. אפשר לשלוח את הבקשה לרכש.",
   "create.requesterDetails": "פרטים מהדורש",
   "create.internalOnly": "פנימי — לא יפורסם",
