@@ -176,17 +176,24 @@ export default function TenderCreate() {
       const named = String(answers.service_name ?? '').trim();
       // A {{PLACEHOLDER}} the draft left behind is never shown: the field stays empty (and is listed as missing).
       const draftTitle = hasPlaceholder(d.title) ? '' : d.title;
-      if (named || draftTitle) setTitle(named || draftTitle);
+      // The form stays editable while the draft is made: whatever the manager typed meanwhile wins, the draft
+      // only fills what is still empty.
+      if (named || draftTitle) setTitle((cur) => cur.trim() || named || draftTitle);
       // What the requester answered fills the fields the draft left empty (the same rule the server applies).
       // The template in this closure may still be the previous type's (the pick and the draft run together), so the
       // keys come from the draft and the answers instead; `initial_period_months` is the one derived from the years.
       const keys = new Set([...Object.keys(d.params ?? {}), ...Object.keys(answers), 'initial_period_months']);
       const clean = Object.fromEntries(Object.entries(d.params ?? {}).filter(([, v]) => !hasPlaceholder(v)));
       const filled = fillFromRequestDetails([...keys].map((key) => ({ key })), clean, request?.details);
-      setParams(Object.fromEntries(Object.entries(filled).map(([k, v]) => [k, String(v)])));
-      setDomainTags(d.domainTags ?? []);
-      setCriteria(d.evaluationCriteria ?? []);
-      if (d.submissionDeadlineDays) setDeadline(toLocalInput(Date.now() + d.submissionDeadlineDays * 86400000));
+      const drafted = Object.fromEntries(Object.entries(filled).map(([k, v]) => [k, String(v)]));
+      setParams((cur) => {
+        const typed = Object.fromEntries(Object.entries(cur).filter(([, v]) => v.trim() !== ''));
+        return { ...drafted, ...typed };
+      });
+      setDomainTags((cur) => (cur.length ? cur : (d.domainTags ?? [])));
+      setCriteria((cur) => (cur.length ? cur : (d.evaluationCriteria ?? [])));
+      const days = d.submissionDeadlineDays;
+      if (days) setDeadline((cur) => cur || toLocalInput(Date.now() + days * 86400000));
     } catch (err) {
       if (seq !== draftSeq.current) return;
       setError(err instanceof Error ? err.message : String(err));
@@ -444,34 +451,11 @@ export default function TenderCreate() {
               );
             })}
           </div>
-          {swapTo && (
-            <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-accent bg-accent-soft px-3.5 py-2.5 text-[13px]">
-              <span className="flex-1">{t('create.swapWarn', { type: t(`type.${swapTo}`) })}</span>
-              <button
-                type="button"
-                className="btn btn-gold btn-sm"
-                onClick={() => {
-                  pickType(swapTo);
-                  setSwapTo(null);
-                }}
-              >
-                {t('create.swapOk')}
-              </button>
-              <button type="button" className="btn btn-sm" onClick={() => setSwapTo(null)}>
-                {t('create.swapNo')}
-              </button>
-            </div>
-          )}
-          {!type && (
-            <div className="mt-3 rounded-lg border border-dashed border-black/10 p-3.5 text-center text-[13px] text-tx-soft">
-              {suggested ? t('create.suggestHint', { type: t(`type.${suggested}`) }) : t('create.pickHint')}
-            </div>
-          )}
           {drafting && <div className="mt-2 text-sm text-tx-soft">{t('create.drafting')}</div>}
           {draftNote && <div className="mt-2 rounded bg-amber-100 p-2 text-xs text-amber-700">{draftNote}</div>}
         </div>
         {type && (
-          <>
+          <div className="space-y-5">
         <div>
           <label className="label">{t('create.tenderTitle')}</label>
           <input
@@ -568,12 +552,12 @@ export default function TenderCreate() {
 
         {!ordered && deadlineField}
 
-          </>
+          </div>
         )}
 
         {error && <div className="text-sm text-red-600">{error}</div>}
         <button className="btn btn-gold" disabled={busy || drafting || !type || notConverted}>
-          {busy ? t('create.creating') : t('create.submit')}
+          {busy ? t('create.creating') : drafting ? t('create.draftingWait') : t('create.submit')}
         </button>
       </form>
       </SectionCard>
