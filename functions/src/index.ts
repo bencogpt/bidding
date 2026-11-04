@@ -93,6 +93,7 @@ import {
   type CaseTeam,
   type TeamRole,
   hebrewLabel,
+  stripMarkup,
 } from '@obms/shared';
 import { randomBytes } from 'node:crypto';
 import { auth, db, now } from './lib/admin.js';
@@ -442,7 +443,16 @@ function buildCaseParams(
 // Phase 1: the requester's summary becomes a request with its bid number. No AI, no document yet.
 export const createBidRequest = onCall(async (req) => {
   const caller = requireRole(req, 'requester', 'tender_manager');
-  const input = parseInput(createBidRequestInput, req.data);
+  const parsed = parseInput(createBidRequestInput, req.data);
+  // Plain text only: tags typed into the request never reach documents or prompts as markup.
+  const input = {
+    ...parsed,
+    brief: stripMarkup(parsed.brief).trim(),
+    details: Object.fromEntries(
+      Object.entries(parsed.details).map(([k, v]) => [k, typeof v === 'string' ? stripMarkup(v).trim() : v]),
+    ) as typeof parsed.details,
+  };
+  if (input.brief.length < 3) throw new HttpsError('invalid-argument', 'תיאור הבקשה קצר מדי.');
   if (input.requestId) {
     const prev = await bidRequestsRepo.byClientRequestId(caller.uid, input.requestId);
     if (prev) return { serial: prev.serial, duplicate: true };

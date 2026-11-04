@@ -1,7 +1,8 @@
 // Pure helpers that turn the (markdown-like) template body into the HTML shown in the system.
 // No Firebase imports, so they can be unit-tested without a network.
 
-const escapeHtml = (s: string): string =>
+/** Text → HTML text: user-typed values can never become markup in a rendered document. */
+export const escapeHtml = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 /**
@@ -20,7 +21,7 @@ export function bodyToHtml(body: string): string {
         const level = Math.min(h[1].length + 1, 4);
         return `<h${level} id="sec-${n}">${escapeHtml(h[2])}</h${level}>`;
       }
-      return line.trim() ? `<p>${line}</p>` : '';
+      return line.trim() ? `<p>${escapeHtml(line)}</p>` : '';
     })
     .filter(Boolean)
     .join('\n');

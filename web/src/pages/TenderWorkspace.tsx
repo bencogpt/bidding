@@ -138,8 +138,9 @@ export default function TenderWorkspace() {
         title: gate ? t(`draft.gate.${gate}`) : undefined,
       };
     } else if (tender.status === 'draft') {
+      // The manager's own approval: the case goes to the team for theirs.
       action = {
-        label: t('ws.finalApprove'),
+        label: t('ws.sendForApproval'),
         onClick: () => transitionTo('internal_review'),
         disabled: busy || missing.length > 0,
         title: missing.length
@@ -147,8 +148,13 @@ export default function TenderWorkspace() {
           : undefined,
       };
     } else if (tender.status === 'internal_review') {
+      // Says what it waits for instead of looking like a dead button.
+      const done = requiredRoles.length - waiting.length;
       action = {
-        label: t('ws.finalApprove'),
+        label:
+          REQUIRE_APPROVALS && waiting.length
+            ? t('ws.waitingTeam', { done, total: requiredRoles.length })
+            : t('ws.finalApprove'),
         onClick: () => transitionTo('ready'),
         disabled: busy || (REQUIRE_APPROVALS && waiting.length > 0),
         title: REQUIRE_APPROVALS && waiting.length
@@ -207,6 +213,11 @@ export default function TenderWorkspace() {
       {(initialCheck || (!tender.lastSupervision && isManager)) && (
         <div className="card mb-4 border-teal-200 bg-teal-soft p-3 text-sm text-teal-600">
           {t('sup.initialRunning')}
+        </div>
+      )}
+      {isManager && REQUIRE_APPROVALS && tender.status === 'internal_review' && waiting.length > 0 && (
+        <div className="card mb-4 border-teal-200 bg-teal-soft p-3 text-sm text-teal-700">
+          {t('ws.reviewWaiting', { roles: waiting.map((r) => t(`role.${r}`)).join(', ') })}
         </div>
       )}
       {isManager && REQUIRE_APPROVALS && tender.status === 'ready' && waiting.length > 0 && (

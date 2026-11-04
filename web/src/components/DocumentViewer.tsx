@@ -206,6 +206,8 @@ export default function DocumentViewer({
               ref={frameRef}
               title="tender-document"
               srcDoc={html ?? undefined}
+              // No scripts ever run inside the document (only the page reads its headings and prints it).
+              sandbox="allow-same-origin allow-modals"
               onLoad={readOutline}
               className={`mx-auto block w-full max-w-4xl border-0 bg-white shadow-card ${frameHeight}`}
             />
