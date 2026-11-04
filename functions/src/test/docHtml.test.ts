@@ -11,10 +11,10 @@ test('## and ### lines become headings with ids; the title stays the only h1', (
   assert.doesNotMatch(html, /<h1/);
 });
 
-test('heading text is escaped; other lines are left as they were', () => {
+test('headings and paragraphs are both escaped (field values are untrusted text)', () => {
   const html = bodyToHtml('## a <b> & c\nplain & <i>x</i>');
   assert.match(html, /<h3 id="sec-1">a &lt;b&gt; &amp; c<\/h3>/);
-  assert.match(html, /<p>plain & <i>x<\/i><\/p>/);
+  assert.match(html, /<p>plain &amp; &lt;i&gt;x&lt;\/i&gt;<\/p>/);
 });
 
 test('blank lines are dropped and a line of only # is a paragraph', () => {

@@ -14,7 +14,7 @@ import type { TenderDoc, TemplateDoc, UserDoc } from '@obms/shared';
 import { TENDER_TYPE_LABELS_HE, isOmittedParam } from '@obms/shared';
 import { htmlToText } from './supervisorChecks.js';
 import { docPlainText } from './docText.js';
-import { bodyToHtml, rtlifyExportedHtml } from './docHtml.js';
+import { bodyToHtml, escapeHtml, rtlifyExportedHtml } from './docHtml.js';
 import { groupSessions, sampleSessions, type RevisionMeta } from './scoreCalc.js';
 
 // drive.file = access only to files the app creates. Non-sensitive → no OAuth verification
@@ -77,7 +77,7 @@ function renderHtml(tender: TenderDoc, template: TemplateDoc): string {
 h1{font-size:24px}h2{font-size:18px;border-bottom:2px solid #d8a23a;padding-bottom:4px}
 .meta{color:#475069;font-size:13px;margin-bottom:24px}</style></head>
 <body>
-<h1>${tender.title}</h1>
+<h1>${escapeHtml(tender.title)}</h1>
 <div class="meta">${TENDER_TYPE_LABELS_HE[tender.type]} · מסמך מכרז · נוצר אוטומטית מתבנית</div>
 ${bodyToHtml(body)}
 </body></html>`;

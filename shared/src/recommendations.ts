@@ -101,6 +101,18 @@ export function replaceChosen(chosen: readonly string[], from: string, to: strin
   return out;
 }
 
+/**
+ * Request text is plain text: HTML tags are removed when a request is opened, so markup typed into it can't
+ * travel into documents, prompts or other screens as markup (links stay as plain text).
+ */
+export function stripMarkup(s: string): string {
+  return s
+    .replace(/<\s*(script|style)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
+    .replace(/<\/?[a-zA-Z!][^>]*>/g, '')
+    .replace(/<\s*\/?\s*>/g, '') // empty tags such as </>
+    .replace(/[ \t]{2,}/g, ' ');
+}
+
 // Headings composeRequestBrief and the request agent add after the requester's own description. What
 // follows them is internal working text (clarifications, chosen recommendations, notes).
 export const BRIEF_INTERNAL_HEADINGS = ['הבהרות מהדורש:', 'המלצות שנבחרו:', 'הערות נוספות:'] as const;
