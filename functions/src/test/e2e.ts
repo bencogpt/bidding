@@ -61,6 +61,19 @@ async function approveAs(tenderId: string, roles: string[]) {
   await login('manager@obms.test');
 }
 
+// The server checks by itself (plan B1): wait until the check of `basis` has finished, and return it.
+async function waitForCheck(tenderId: string, basis: 'draft' | 'document', timeoutMs = 120_000) {
+  const until = Date.now() + timeoutMs;
+  for (;;) {
+    const t = (await getDoc(doc(db, 'tenders', tenderId))).data() as
+      | { lastSupervision?: { basis?: string; runId: string }; supervisionRun?: { state: string } }
+      | undefined;
+    if (t?.lastSupervision?.basis === basis && t.supervisionRun?.state !== 'running') return t.lastSupervision;
+    if (Date.now() > until) throw new Error(`no ${basis} check of ${tenderId} within ${timeoutMs} ms`);
+    await new Promise((r) => setTimeout(r, 400));
+  }
+}
+
 // Whether the given role's approval is refused with a message matching `re`; the manager is signed back in.
 async function refusedAs(tenderId: string, role: string, re: RegExp): Promise<boolean> {
   await signOut(auth);
@@ -192,8 +205,8 @@ async function main() {
   const prov = await getDoc(doc(db, 'tenders', tenderId, 'internal', 'provenance'));
   assert.equal(prov.data()?.templateType, 'goods', 'provenance records the template used');
   assert.equal(prov.data()?.templateId, 'T-A');
-  // Creation is fast; the case page starts the first supervisor check right after.
-  await call('runSupervision')({ tenderId, initial: true });
+  // Creation is fast; the server starts the first supervisor check by itself (plan B1).
+  await waitForCheck(tenderId, 'draft');
   const createdRuns = await getDocs(collection(db, 'tenders', tenderId, 'supervision'));
   assert.equal(createdRuns.size, 1, 'initial supervisor check ran');
   const again = (await call('runSupervision')({ tenderId, initial: true })) as { data: { skipped?: boolean } };
@@ -217,6 +230,7 @@ async function main() {
   }
   assert.ok(noDocReview, 'review is refused before the document exists');
   await call('generateDocument')({ tenderId });
+  await waitForCheck(tenderId, 'document'); // the server checks the new document by itself
   const generated = (await getDoc(doc(db, 'tenders', tenderId))).data()!;
   assert.equal(generated.documentStatus, 'generated');
   assert.ok(generated.docExportPath, 'document created after the inspector passed the draft');
@@ -282,8 +296,8 @@ async function main() {
   assert.equal((await getDoc(doc(db, 'tenders', tenderId))).data()!.status, 'published');
   console.log(`✓ supervisor: provenance + G6 split + gate passed (${published.data.verdict})`);
 
-  // A document with an unfilled placeholder is blocked; an audited override lets it through.
-  // The optional "milestones" field is left empty, so {{milestones}} stays in the document.
+  // An empty field of the draft is one warning (plan D7): the document can still be created, the field
+  // printed as a blank line. The optional "milestones" field is left empty.
   const bad = (await call('createTender')({
     title: 'מכרז עם חוסר',
     bidRequestId: await newRequest(),
@@ -291,28 +305,35 @@ async function main() {
     params: { org: 'משרד הביטחון', scope: 'הקמת מערכת מצלמות', service: 'תחזוקה שנתית' },
     team: { requester: goodsTeam.requester, legal: legalUid }, // finance + security slots left empty
   })) as { data: { id: string; serial: string; verdict: string | null; missingRoles: string[] } };
-  const badCheck = (await call('runSupervision')({ tenderId: bad.data.id, initial: true })) as { data: { verdict: string } };
-  assert.equal(badCheck.data.verdict, 'BLOCK', 'supervisor flags the leftover placeholder in the draft');
-  assert.deepEqual(bad.data.missingRoles, ['finance', 'security']);
-  const refusedWith = async (re: RegExp) => {
-    try {
-      await call('generateDocument')({ tenderId: bad.data.id });
-    } catch (e) {
-      return re.test((e as Error).message);
-    }
-    return false;
+  const badLast = await waitForCheck(bad.data.id, 'draft');
+  const badCheck = {
+    data: (await getDoc(doc(db, 'tenders', bad.data.id, 'supervision', badLast.runId))).data() as {
+      verdict: string;
+      findings: { code: string; severity: string; message: string; key?: string }[];
+    },
   };
-  assert.ok(await refusedWith(/חוסמים/), 'no document while the inspector blocks the draft (no override)');
+  assert.notEqual(badCheck.data.verdict, 'BLOCK', 'an empty field of the draft does not block (D7)');
+  const emptyWarning = badCheck.data.findings.find((f) => f.code === 'MISSING_INFO' && f.severity === 'warn' && /כקו ריק/.test(f.message));
+  assert.ok(emptyWarning, 'the empty fields are one warning');
+  assert.match(emptyWarning!.key ?? '', /^draft:/, 'findings carry a stable key (B2)');
+  assert.deepEqual(bad.data.missingRoles, ['finance', 'security']);
+  // The manager marks the warning as incorporated (B2); a blocking finding can't be marked.
+  await call('decideFinding')({ tenderId: bad.data.id, keys: [emptyWarning!.key!], action: 'applied' });
+  assert.equal((await getDoc(doc(db, 'tenders', bad.data.id))).data()!.findingDecisions[emptyWarning!.key!].action, 'applied');
   const edited = (await call('updateTenderDraft')({
     tenderId: bad.data.id,
     params: { milestones: 'אבן דרך 1: תכנון; אבן דרך 2: התקנה' },
   })) as { data: { changed: string[] } };
   assert.deepEqual(edited.data.changed, ['milestones'], 'only the edited field changed');
-  assert.ok(await refusedWith(/השתנתה/), 'a check of older draft data does not open the gate');
-  const recheck = (await call('runSupervision')({ tenderId: bad.data.id })) as { data: { verdict: string } };
-  assert.notEqual(recheck.data.verdict, 'BLOCK', 'the fixed draft passes the inspector');
+  // The rules checked the edited draft at once (B3): the check is current, no manual re-run before the document.
+  const afterEdit = (await getDoc(doc(db, 'tenders', bad.data.id))).data()!;
+  assert.equal(afterEdit.lastSupervision.stage, 'edit', 'the rules re-checked the draft after the edit');
+  assert.equal(afterEdit.lastSupervision.dataHash, afterEdit.draftDataHash, 'the check covers the edited data');
+  assert.equal(afterEdit.supervisionRun.state, 'done', 'the run is shown as finished to everyone (B1)');
+  assert.equal(afterEdit.findingDecisions?.[emptyWarning!.key!], undefined, 'the field is filled: the warning is resolved');
   await call('generateDocument')({ tenderId: bad.data.id });
-  console.log('✓ draft-first: blocked draft fixed in the app, rechecked, then its document created');
+  await waitForCheck(bad.data.id, 'document');
+  console.log('✓ draft-first: empty fields warn (D7); decisions; the rules re-check each edit; document created');
   // A manual edit that leaves a placeholder in the document (dev mode keeps HTML in Storage).
   const docFile = adminStorage(adminApp).bucket('biding-system.firebasestorage.app').file(`tenders/${bad.data.id}/document.html`);
   const [html] = await docFile.download();
@@ -325,6 +346,27 @@ async function main() {
     gateRefused = /יש לשבץ/.test((e as Error).message);
   }
   assert.ok(gateRefused, 'review is refused while a required role is empty');
+  // Finance assigns its own contact from its home (plan D3): the case waits in the unit queue until then.
+  await signOut(auth);
+  await login('finance@obms.test');
+  type Queue = { data: { items: { tenderId: string; role: string; candidates: { uid: string }[] }[] } };
+  const queue = (await call('unitQueue')({})) as Queue;
+  const queued = queue.data.items.find((i) => i.tenderId === bad.data.id);
+  assert.ok(queued, 'the case waits in the finance unit queue');
+  assert.ok(queued!.candidates.some((c) => c.uid === goodsTeam.finance), 'with the unit colleagues to pick from');
+  let otherUnit = false;
+  try {
+    await call('claimTeamSlot')({ tenderId: bad.data.id, role: 'legal', uid: legalUid });
+  } catch (e) {
+    otherUnit = /היחידה שלך/.test((e as Error).message);
+  }
+  assert.ok(otherUnit, "a unit can't assign another unit's contact");
+  await call('claimTeamSlot')({ tenderId: bad.data.id, role: 'finance', uid: goodsTeam.finance });
+  const queueAfter = (await call('unitQueue')({})) as Queue;
+  assert.ok(!queueAfter.data.items.some((i) => i.tenderId === bad.data.id), 'and leaves it once assigned');
+  await signOut(auth);
+  await login('manager@obms.test');
+  console.log('✓ unit contacts: finance assigned its own contact from its queue (D3)');
   await call('assignTeamMember')({ tenderId: bad.data.id, role: 'finance', uid: goodsTeam.finance });
   await call('assignTeamMember')({ tenderId: bad.data.id, role: 'security', uid: uidOf('security') });
   await call('transitionTender')({ tenderId: bad.data.id, to: 'internal_review' });
@@ -872,13 +914,10 @@ async function main() {
   assert.ok(svc.bodyTemplate.includes("בל\"מ מס' {{tender_number}}"), '{{fields}} written into the template');
   assert.equal(svc.params.find((p) => p.key === 'tender_number')?.labelHe, 'מספר הבל"מ', 'labels kept');
   assert.equal(svc.fieldsStatus, 'ready');
-  let missingRequired = false;
-  try {
-    await call('createTender')({ title: 'שירות', bidRequestId: await newRequest(), type: 'service', params: { tender_number: '2026-01' }, team: svcTeam });
-  } catch (e) {
-    missingRequired = /שדה חובה חסר/.test((e as Error).message);
-  }
-  assert.ok(missingRequired, 'an empty required template field is rejected');
+  // An empty required template field is completed in the draft (plan D4/D7): the case is created, the
+  // supervisor lists the field and the publish gate blocks while it stays blank.
+  const blankCase = (await call('createTender')({ title: 'שירות', bidRequestId: await newRequest(), type: 'service', params: { tender_number: '2026-01' }, team: svcTeam })) as { data: { id: string } };
+  assert.ok(blankCase.data.id, 'an empty required template field no longer stops the draft');
   let placeholderRejected = false;
   try {
     await call('createTender')({
@@ -948,6 +987,7 @@ async function main() {
   assert.equal(autoTender.params.bid_guarantee_amount, '20,000', 'both guarantee fields agree');
   assert.equal(autoTender.params.bid_guarantee_amount_words, 'עשרים אלף שקלים');
   assert.equal(autoTender.params['תוקף אחריות'], '__________', 'not asked in step 2: a blank line to complete in the document');
+  await waitForCheck(autoCase.data.id, 'draft');
   const autoCheck = (await call('runSupervision')({ tenderId: autoCase.data.id })) as {
     data: { findings: { severity: string; message: string }[] };
   };
@@ -973,6 +1013,7 @@ async function main() {
   // Only hard facts block now, so this draft (legal sections missing → warnings) can get its document,
   // and a document not yet sent to review can be regenerated (back to draft-first; old doc kept).
   await call('generateDocument')({ tenderId: autoCase.data.id });
+  await waitForCheck(autoCase.data.id, 'document');
   await call('regenerateDocument')({ tenderId: autoCase.data.id });
   const regen = (await getDoc(doc(db, 'tenders', autoCase.data.id))).data()!;
   assert.equal(regen.documentStatus, 'none', 'back to a draft without a document');

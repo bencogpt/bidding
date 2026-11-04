@@ -8,7 +8,9 @@ import {
   isSystemParam,
   isFormHidden,
   BLANK_LINE,
+  REQUIRED_BLANK_RE,
   isOmittedParam,
+  type SupervisionStage,
   type SkillUse,
   type SupervisionFinding,
   type TemplateDoc,
@@ -93,6 +95,11 @@ export interface DeterministicInput {
   internalParams: Record<string, ParamValue>;
   docText: string | null;
   currentSkillHash: (id: SkillUse['id']) => string | null;
+  // What was checked: a preview of the draft data, or the document (default). Plan D7: empty fields of a
+  // draft are one warning; in the document a leftover placeholder still blocks.
+  basis?: 'draft' | 'document';
+  // The checkpoint: a required field printed as a blank line blocks at the publish gate only (plan D7).
+  stage?: SupervisionStage;
 }
 
 // ---- template ----
@@ -336,7 +343,9 @@ export function checkValues(i: DeterministicInput): Finding[] {
       continue;
     }
     if (isBlank(value)) {
-      if (p.required && !isOmittedParam(p)) {
+      // On a draft the empty fields are one warning (checkValues' leftover placeholders, plan D7) — no
+      // second warning per field.
+      if (p.required && !isOmittedParam(p) && i.basis !== 'draft') {
         out.push({
           code: 'MISSING_INFO',
           severity: 'block',
@@ -445,7 +454,26 @@ export function checkValues(i: DeterministicInput): Finding[] {
     }
 
     // Leftover placeholders / flags (G2: a document with placeholders can't pass S05).
-    const leftovers = [...new Set([...i.docText!.matchAll(PLACEHOLDER_RE)].map((m) => m[0]))];
+    let leftovers = [...new Set([...i.docText!.matchAll(PLACEHOLDER_RE)].map((m) => m[0]))];
+    if (i.basis === 'draft') {
+      // A draft's empty fields are one warning: the document prints them as blank lines (plan D7). A
+      // placeholder that is no field of the template still blocks.
+      const keyOf = (ph: string) => ph.replace(/^\{\{\s*|\s*\}\}$/g, '');
+      const fields = leftovers.filter((ph) => i.template.params.some((p) => p.key === keyOf(ph)));
+      leftovers = leftovers.filter((ph) => !fields.includes(ph));
+      if (fields.length) {
+        const labels = fields.map((ph) => i.template.params.find((p) => p.key === keyOf(ph))!.labelHe);
+        const listed = labels.slice(0, 3).join(', ') + (labels.length > 3 ? ' ועוד' : '');
+        out.push({
+          code: 'MISSING_INFO',
+          severity: 'warn',
+          location: 'נתוני הטיוטה',
+          message: `עדיין ריקים בנתוני הטיוטה: ${listed}. הם יופיעו במסמך כקו ריק.`,
+          // Lets the draft view highlight every empty field.
+          paramKey: keyOf(fields[0]),
+        });
+      }
+    }
     for (const ph of leftovers.slice(0, MAX_LISTED)) {
       out.push({
         code: 'MISSING_INFO',
@@ -500,15 +528,31 @@ export function checkBlankLines(i: DeterministicInput): Finding[] {
   const keys = Object.entries(i.tender.params)
     .filter(([, v]) => v === BLANK_LINE)
     .map(([k]) => k);
-  if (!keys.length) return [];
-  return [
-    {
+  const out: Finding[] = [];
+  if (keys.length) {
+    out.push({
       code: 'MISSING_INFO',
       severity: 'warn',
       location: 'document',
       message: `${keys.length} שדות יושלמו ידנית במסמך (מודפסים כקו ריק): ${keys.map(labelOf).join(', ')}`,
-    },
-  ];
+    });
+  }
+  // Required fields left empty when the document was created (plan D7): a reminder while writing, a
+  // blocker at the publish gate — a published document can't have them.
+  if (i.docText !== null && i.basis !== 'draft') {
+    const labels = [...new Set([...i.docText.matchAll(REQUIRED_BLANK_RE)].map((m) => m[1].trim()))];
+    if (labels.length) {
+      const gate = i.stage === 'prepublish' || i.stage === 'refresh';
+      out.push({
+        code: 'MISSING_INFO',
+        severity: gate ? 'block' : 'warn',
+        ...(gate ? { hard: true } : {}),
+        location: 'document',
+        message: `שדות חובה שטרם הושלמו במסמך: ${labels.slice(0, MAX_LISTED).join(', ')}${labels.length > MAX_LISTED ? ' ועוד' : ''}`,
+      });
+    }
+  }
+  return out;
 }
 
 export function runDeterministicChecks(i: DeterministicInput): SupervisionFinding[] {

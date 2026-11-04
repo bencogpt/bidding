@@ -34,6 +34,7 @@ import type {
   DeleteInternalUserInput,
   RefreshTenderDocumentInput,
   RunSupervisionInput,
+  DecideFindingInput,
   SetTemplateInternalFieldsInput,
   RecomputeCaseScoreInput,
   UpdateScoringTargetsInput,
@@ -45,6 +46,8 @@ import type {
   SkillTipsRun,
   SkillsCatalog,
   AssignTeamMemberInput,
+  ClaimTeamSlotInput,
+  UnitQueueItem,
   AnalyzeTemplateFieldsInput,
   ApplyTemplateConversionInput,
   ConversionRun,
@@ -98,6 +101,9 @@ export const api = {
     }
   >('createTender'),
   assignTeamMember: call<AssignTeamMemberInput, { ok: true; docsSkipped: string[] }>('assignTeamMember'),
+  // A unit's cases waiting for its contact, and assigning one (plan D3).
+  unitQueue: call<Record<string, never>, { items: UnitQueueItem[] }>('unitQueue'),
+  claimTeamSlot: call<ClaimTeamSlotInput, { ok: true; docsSkipped: string[] }>('claimTeamSlot'),
   setRequiredRoles: call<SetRequiredRolesInput, { requiredRoles: TeamRole[] }>('setRequiredRoles'),
   approveTender: call<ApproveTenderInput, { ok: true }>('approveTender'),
   backfillSerials: call<Record<string, never>, { assigned: number; total: number }>('backfillSerials'),
@@ -111,6 +117,8 @@ export const api = {
     'refreshTenderDocument',
   ),
   runSupervision: call<RunSupervisionInput, SupervisionReport | { skipped: true }>('runSupervision'),
+  // Incorporate / leave as is a warning of the latest check (plan B2).
+  decideFinding: call<DecideFindingInput, { ok: true }>('decideFinding'),
   recomputeCaseScore: call<RecomputeCaseScoreInput, CaseScore>('recomputeCaseScore'),
   backfillCaseScores: call<Record<string, never>, { scored: number; failed: string[] }>(
     'backfillCaseScores',

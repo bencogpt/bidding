@@ -23,3 +23,4 @@ export * from './injection.js';
 export * from './workspaceLabels.js';
 export * from './workspaceView.js';
 export * from './approvalRules.js';
+export * from './autoRun.js';
