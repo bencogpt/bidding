@@ -451,7 +451,25 @@ export default function TenderCreate() {
               );
             })}
           </div>
-          {drafting && <div className="mt-2 text-sm text-tx-soft">{t('create.drafting')}</div>}
+          {drafting && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="mt-4 overflow-hidden rounded-lg border border-accent/30 bg-accent-soft"
+            >
+              <div className="flex items-center gap-3 px-4 py-3">
+                <span
+                  className="h-5 w-5 flex-none animate-spin rounded-full border-2 border-accent/25 border-t-accent"
+                  aria-hidden="true"
+                />
+                <div>
+                  <div className="text-sm font-semibold text-accent">{t('create.drafting')}</div>
+                  <div className="text-xs text-tx-soft">{t('create.draftingHint')}</div>
+                </div>
+              </div>
+              <div className="h-1 w-full animate-pulse bg-accent/40" aria-hidden="true" />
+            </div>
+          )}
           {draftNote && <div className="mt-2 rounded bg-amber-100 p-2 text-xs text-amber-700">{draftNote}</div>}
         </div>
         {type && (
