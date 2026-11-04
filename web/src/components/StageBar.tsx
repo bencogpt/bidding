@@ -1,13 +1,17 @@
+import { useTranslation } from 'react-i18next';
+
 export interface Step {
   label: string;
   state: 'done' | 'cur' | 'todo';
   onClick?: () => void;
 }
 
-// The phases of creating a bid: a thin bar per step, the label underneath, a tick when done.
+// The phases of creating a bid: a thin bar per step, the label underneath, a tick when done and "כרגע" on the
+// step in progress.
 export default function StageBar({ steps }: { steps: Step[] }) {
+  const { t } = useTranslation();
   return (
-    <div className="mb-5 flex gap-2" role="list">
+    <div className="mb-5 flex gap-1.5" role="list">
       {steps.map((s, i) => (
         <button
           key={i}
@@ -15,26 +19,31 @@ export default function StageBar({ steps }: { steps: Step[] }) {
           role="listitem"
           onClick={s.onClick}
           disabled={!s.onClick}
-          className="group flex-1 text-start disabled:cursor-default"
+          className="group flex-1 pb-0.5 text-start disabled:cursor-default"
         >
           <span
             className={
-              'mb-2 block h-1 rounded ' +
+              'mb-2 block h-1 rounded transition-colors ' +
               (s.state === 'done'
-                ? 'bg-gold'
+                ? 'bg-accent'
                 : s.state === 'cur'
-                  ? 'bg-gradient-to-l from-gold from-55% to-black/10 to-55%'
+                  ? 'bg-gradient-to-l from-accent from-55% to-black/10 to-55%'
                   : 'bg-black/10')
             }
           />
           <span
             className={
-              'text-xs ' +
-              (s.state === 'cur' ? 'font-semibold text-gold-deep' : s.state === 'done' ? 'text-tx' : 'text-tx-soft')
+              'whitespace-nowrap text-xs transition-colors ' +
+              (s.state === 'cur'
+                ? 'font-semibold text-accent'
+                : s.state === 'done'
+                  ? 'text-tx'
+                  : 'text-tx-soft group-enabled:group-hover:text-tx')
             }
           >
-            {s.state === 'done' && <span className="text-emerald-600">✓ </span>}
+            {s.state === 'done' && <span className="text-green-600">✓ </span>}
             {s.label}
+            {s.state === 'cur' && <em className="ms-1.5 text-[11px] font-normal not-italic text-tx-soft">{t('req.stageNow')}</em>}
           </span>
         </button>
       ))}

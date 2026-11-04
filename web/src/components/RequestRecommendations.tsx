@@ -148,7 +148,7 @@ export default function RequestRecommendations({
       <div className="mb-1 flex items-center justify-between">
         <h4 className="text-sm font-semibold">{t('req.recTitle')}</h4>
         {active && !locked && !busy && (items !== null || failed) && (
-          <button type="button" className="text-xs text-gold-deep underline" onClick={() => void load()}>
+          <button type="button" className="text-xs text-accent underline" onClick={() => void load()}>
             {stale ? t('req.recRefreshStale') : t('req.recRefresh')}
           </button>
         )}
@@ -165,7 +165,7 @@ export default function RequestRecommendations({
             const on = chosen.includes(text);
             if (locked && !on) return null;
             const box =
-              'rounded-lg border px-4 py-3 text-sm ' + (on ? 'border-gold bg-gold-soft/40' : 'border-black/10');
+              'rounded-lg border px-4 py-3 text-sm ' + (on ? 'border-accent bg-accent-soft' : 'border-black/10');
             if (editing === r.text && !locked) {
               return (
                 <li key={r.text} className={box}>
@@ -188,7 +188,7 @@ export default function RequestRecommendations({
                       {t('req.recCancel')}
                     </button>
                     {edits[r.text] && (
-                      <button type="button" className="text-xs text-gold-deep underline" onClick={() => restore(r)}>
+                      <button type="button" className="text-xs text-accent underline" onClick={() => restore(r)}>
                         {t('req.recRestore')}
                       </button>
                     )}
@@ -212,13 +212,13 @@ export default function RequestRecommendations({
                 <span className="flex-1 leading-relaxed">
                   {text}
                   {edits[r.text] && (
-                    <em className="mr-2 rounded-full border border-gold px-2 text-xs not-italic text-gold-deep">
+                    <em className="mr-2 rounded-full border border-accent px-2 text-xs not-italic text-accent">
                       {t('req.recEdited')}
                     </em>
                   )}
                 </span>
                 {!locked && (
-                  <button type="button" className="flex-none text-xs text-gold-deep underline" onClick={() => startEdit(r)}>
+                  <button type="button" className="flex-none text-xs text-accent underline" onClick={() => startEdit(r)}>
                     {t('req.recEdit')}
                   </button>
                 )}
@@ -248,7 +248,7 @@ export default function RequestRecommendations({
                     <label
                       className={
                         'flex items-start gap-3 rounded-lg border px-4 py-3 text-sm ' +
-                        (on ? 'border-gold bg-gold-soft/40' : 'border-black/10') +
+                        (on ? 'border-accent bg-accent-soft' : 'border-black/10') +
                         (locked ? '' : ' cursor-pointer')
                       }
                     >
@@ -268,7 +268,7 @@ export default function RequestRecommendations({
                                 href={u}
                                 target="_blank"
                                 rel="noreferrer"
-                                className="text-gold-deep underline"
+                                className="text-accent underline"
                                 onClick={(e) => e.stopPropagation()}
                               >
                                 {domainOf(u)}

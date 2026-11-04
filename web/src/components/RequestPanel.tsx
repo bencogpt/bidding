@@ -21,10 +21,10 @@ export default function RequestPanel({
   const { t } = useTranslation();
   const done = rows.filter((r) => r.present).length;
   return (
-    <aside className="rounded-lg border border-black/5 bg-paper-2/60 p-4">
-      <h2 className="mb-3 flex items-center justify-between text-sm font-semibold">
+    <aside className="self-start rounded-[10px] border border-black/5 bg-paper px-4 py-3.5">
+      <h2 className="mb-2.5 flex items-center justify-between gap-2 text-[13px] font-semibold">
         {t('req.panelTitle')}
-        <span className="rounded-full bg-white px-2 py-0.5 text-xs text-tx-soft">{done}/{rows.length}</span>
+        <span className="rounded-full border border-black/10 bg-surface px-3 py-0.5 text-xs font-normal text-tx-soft">{done}/{rows.length}</span>
       </h2>
       <ul className="space-y-3">
         {rows.map((r) => (
@@ -33,8 +33,8 @@ export default function RequestPanel({
               <label htmlFor={`rq-${r.key}`}>{r.label}</label>
               <span
                 className={
-                  'rounded-full px-2 py-0.5 text-xs ' +
-                  (r.present ? 'bg-emerald-100 text-emerald-800' : 'bg-black/5 text-tx-soft')
+                  'rounded-full px-3 py-0.5 text-xs transition-colors ' +
+                  (r.present ? 'bg-green-600 text-white' : 'bg-black/[.07] text-tx-soft')
                 }
               >
                 {r.present ? t('req.found') : t('req.missing')}

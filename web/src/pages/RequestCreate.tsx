@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -16,6 +16,7 @@ import { api } from '../lib/api';
 import { useRequestAgent } from '../lib/useRequestAgent';
 import RequestPanel from '../components/RequestPanel';
 import RequestChat from '../components/RequestChat';
+import RequestGuide, { STARTERS } from '../components/RequestGuide';
 import BigEditor from '../components/BigEditor';
 import RequestSummary from '../components/RequestSummary';
 import RequestRecommendations from '../components/RequestRecommendations';
@@ -93,18 +94,48 @@ export default function RequestCreate() {
     }
   };
 
-  const modeBtn = (m: 'free' | 'chat', title: string, hint: string) => (
-    <button
-      type="button"
-      onClick={() => a.setMode(m)}
-      className={
-        'flex flex-1 flex-col rounded-lg border px-4 py-3 text-start ' +
-        (a.mode === m ? 'border-gold bg-gold-soft/40 font-semibold' : 'border-black/10 hover:border-gold')
-      }
-    >
-      <span>{title}</span>
-      <small className="font-normal text-tx-soft">{hint}</small>
-    </button>
+  const pickMode = (m: 'free' | 'chat') => {
+    a.setMode(m);
+    if (m === 'chat') setTimeout(() => goTo('rq-mode'), 0);
+  };
+  // Start a line for a missing detail at the end of the text, with the cursor after it.
+  const appendStarter = (key: string) => {
+    const box = document.getElementById('rq-brief') as HTMLTextAreaElement | null;
+    if (key !== 'scope' && STARTERS[key]) {
+      const base = a.brief.replace(/\s+$/, '');
+      a.setBrief((base ? `${base}\n` : '') + STARTERS[key]);
+    }
+    setTimeout(() => {
+      box?.focus();
+      box?.setSelectionRange(box.value.length, box.value.length);
+    }, 0);
+  };
+
+  const modeBtn = (m: 'free' | 'chat', title: string, hint: string, icon: ReactNode) => {
+    const on = a.mode === m;
+    return (
+      <button
+        type="button"
+        onClick={() => pickMode(m)}
+        className={
+          'flex items-center gap-3 rounded-[10px] border px-4 py-3 text-start transition-colors ' +
+          (on
+            ? 'border-accent bg-accent-soft shadow-[inset_0_0_0_1px_#5b3fd1]'
+            : 'border-black/10 bg-surface hover:border-accent')
+        }
+      >
+        <span className={'flex-none ' + (on ? 'text-accent' : 'text-tx-soft')}>{icon}</span>
+        <span>
+          <b className={'block text-sm font-medium ' + (on ? 'text-accent' : '')}>{title}</b>
+          <small className="mt-0.5 block text-xs font-normal text-tx-soft">{hint}</small>
+        </span>
+      </button>
+    );
+  };
+  const svg = (children: ReactNode) => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {children}
+    </svg>
   );
 
   return (
@@ -133,25 +164,45 @@ export default function RequestCreate() {
         owner={
           <>
             <span>{t('req.owner')}</span>
-            <StatusChip tone="idle">{t('req.statusDraft')}</StatusChip>
+            <StatusChip tone="wait">{t('req.statusDraft')}</StatusChip>
           </>
         }
       >
         <div id="step-a">
-            <SubHead letter="א" title={t('req.subA')} hint={t('req.pageHint')} />
+            <SubHead letter="א" title={t('req.subA')} />
             <div className="grid gap-6 md:grid-cols-[1fr_280px]">
               <div className="space-y-4">
-                <div className="flex gap-3">
-                  {modeBtn('free', t('req.modeFree'), t('req.modeFreeHint'))}
-                  {modeBtn('chat', t('req.modeAi'), t('req.modeAiHint'))}
+                <div>
+                  <h4 className="mb-1.5 text-[15px] font-medium">{t('req.modeQuestion')}</h4>
+                  <p className="text-[13px] leading-7 text-tx-soft">{t('req.modeIntro')}</p>
+                </div>
+                <div id="rq-mode" className="grid scroll-mt-4 gap-2.5 sm:grid-cols-2">
+                  {modeBtn(
+                    'free',
+                    t('req.modeFree'),
+                    t('req.modeFreeHint'),
+                    svg(
+                      <>
+                        <path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z" />
+                        <path d="M13.5 6.5l4 4" />
+                      </>,
+                    ),
+                  )}
+                  {modeBtn(
+                    'chat',
+                    t('req.modeAi'),
+                    t('req.modeAiHint'),
+                    svg(
+                      <>
+                        <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z" />
+                        <path d="M9 11h.01M12 11h.01M15 11h.01" />
+                      </>,
+                    ),
+                  )}
                 </div>
 
                 {a.mode === 'free' ? (
                   <div>
-                    <label className="label" htmlFor="rq-brief">
-                      {t('req.principalService')}
-                      <span className="text-red-600"> *</span>
-                    </label>
                     <textarea
                       id="rq-brief"
                       className="input min-h-40"
@@ -162,22 +213,18 @@ export default function RequestCreate() {
                     />
                     <div className="mt-1 flex items-center justify-between text-xs text-tx-soft">
                       <span>{a.brief.length > 0 && t('req.pagesOf', { n: pageCount(a.brief), max: 5 })}</span>
-                      <button type="button" className="text-gold-deep underline" onClick={() => setBigText(true)}>
+                      <button type="button" className="text-accent underline" onClick={() => setBigText(true)}>
                         {t('req.expand')}
                       </button>
                     </div>
-                    {missing > 0 && (
-                      <p className="mt-2 text-sm text-tx-soft">
-                        {t('req.missingHint', { n: missing })}{' '}
-                        <button
-                          type="button"
-                          className="font-semibold text-gold-deep underline"
-                          onClick={() => a.setMode('chat')}
-                        >
-                          {t('req.switchToAi')}
-                        </button>
-                      </p>
-                    )}
+                    <RequestGuide
+                      brief={a.brief}
+                      rows={rows}
+                      ready={ready}
+                      onChat={() => pickMode('chat')}
+                      onAppend={appendStarter}
+                      onSummary={() => goTo('step-b')}
+                    />
                   </div>
                 ) : (
                   <RequestChat
@@ -186,6 +233,7 @@ export default function RequestCreate() {
                     typing={a.typing}
                     disabled={a.asking === 'done'}
                     asking={a.asking}
+                    details={{ n: rows.length - missing, total: rows.length }}
                     onSay={a.say}
                     onEdit={a.edit}
                     editAsking={a.editAsking}
