@@ -7,6 +7,7 @@ import {
   MANDATORY_LEGAL_SECTIONS,
   LEGAL_CLAUSE_CHECKLIST,
   verdictOf,
+  requiredBlank,
   type TemplateDoc,
   type TenderDoc,
   type TenderProvenance,
@@ -297,4 +298,35 @@ test("the organisation's real headings are recognised (service template)", () =>
   // a long numbered body clause that mentions the winning offer is not a heading
   const body = '23. בעת בחירת ההצעה הזוכה או ההצעות הזוכות, יהיה רשאי המזמין, אך לא חייב, להתחשב גם בניסיונו של המציע.';
   assert.ok(!presentLegalSections(body).includes('winnerSelection'));
+});
+
+// ---- plan D7: empty fields in the draft, required blanks in the document ----
+
+test("plan D7: a draft's empty fields are one warning; the same text as a document still blocks", () => {
+  const partial = { org: 'משרד הביטחון' };
+  const text = fill(goods.bodyTemplate, partial);
+  const draft = runDeterministicChecks(base({ docText: text, basis: 'draft', tender: { ...tender, params: partial } }));
+  const warn = draft.find((f) => f.code === 'MISSING_INFO' && f.severity === 'warn' && /יופיעו במסמך כקו ריק/.test(f.message));
+  assert.ok(warn, 'one warning lists the empty fields');
+  assert.match(warn!.message, /תיאור הטובין, כמות/);
+  assert.ok(!draft.some((f) => f.code === 'MISSING_INFO' && f.severity === 'block' && f.evidence === '{{description}}'));
+  const doc = runDeterministicChecks(base({ docText: text, tender: { ...tender, params: partial } }));
+  assert.ok(doc.some((f) => f.code === 'MISSING_INFO' && f.severity === 'block' && f.evidence === '{{description}}'));
+});
+
+test('plan D7: a placeholder that is no field of the template still blocks the draft', () => {
+  const draft = runDeterministicChecks(base({ docText: `${cleanDoc}\n{{not_a_field}}`, basis: 'draft' }));
+  assert.ok(draft.some((f) => f.code === 'MISSING_INFO' && f.severity === 'block' && f.evidence === '{{not_a_field}}'));
+});
+
+test('plan D7: a required field printed blank is a reminder while writing and blocks at the publish gate', () => {
+  const text = `${cleanDoc}\n${requiredBlank('מועד הגשת ההצעות')}`;
+  const find = (i: DeterministicInput) => runDeterministicChecks(i).find((f) => /שדות חובה שטרם הושלמו/.test(f.message));
+  assert.equal(find(base({ docText: text, stage: 'review' }))?.severity, 'warn');
+  const gate = find(base({ docText: text, stage: 'prepublish' }));
+  assert.equal(gate?.severity, 'block');
+  assert.equal(gate?.hard, true, 'it survives the severity policy');
+  assert.match(gate!.message, /מועד הגשת ההצעות/);
+  assert.equal(find(base({ docText: cleanDoc, stage: 'prepublish' })), undefined);
+  assert.equal(find(base({ docText: text, basis: 'draft' })), undefined, 'not reported on a draft preview');
 });

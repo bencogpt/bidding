@@ -25,8 +25,7 @@ The web app is restyled to the prototype's tokens and components, and becomes a 
 **Status: DRAFT.**
 
 - D1 is decided, D1a–D1d included.
-- D2 and D9 are decided; D8 is built provisionally.
-- Blocking decisions D3–D7 (§2) must be signed off before the phases they block start.
+- D1–D7 and D9 are decided; D8 is built provisionally. No blocking decision is left open.
 - Phase A and Phase C can start now.
 
 **Progress (2026-11-04):**
@@ -73,6 +72,70 @@ The web app is restyled to the prototype's tokens and components, and becomes a 
   - The e2e ran against the developer's running emulators. Every check passed, including the new approval checks: no send step, legal after requester and finance, on behalf with a reason, blocking stops approvals, security doesn't block, manager last. The only failures were leftovers from earlier runs: an awarded tender shared with meridian, and 2 unnumbered tenders.
   - `e2e.ts` now forces the emulator hosts, so a direct run can't reach live storage.
   - A clean run needs a fresh emulator: `firebase emulators:exec`.
+- **M2, the agent in the draft (B1–B3, D5, D7, D8):**
+  - **B1:** `tender.supervisionRun` (claimed in a transaction; a person's run can't overlap another; the step is written at the real phases); the UI shows "running" to everyone and paces the steps at least 1 s each.
+  - **B2:**
+    - Every finding has a stable `key` (`withFindingKeys`), a Hebrew `fix` (`fixHe` from the AI, or `RULE_FIX_HE`) and a Hebrew location.
+    - `decideFinding` records decisions on warnings only; `reconcileDecisions` runs after each check.
+    - **Safety change:** decisions never clear a blocking finding; it goes only when a check no longer finds it. So a blocking finding offers "ערוך שדה", not "הטמע".
+  - **B3:**
+    - A draft's empty asked fields are one `MISSING_INFO` warning.
+    - `generateDocument` prints empty fields as blank lines, a required one with its label (`requiredBlank`).
+    - The rules re-check right after each draft edit (stage `edit`, AI findings carried over), so the gate is always current.
+    - A required blank blocks at `prepublish` / `refresh`.
+  - **UI:**
+    - The draft tab follows the prototype: page, banner and marks (`DraftPage`), the editor under it (D4), and `FindingsPanel` in a sticky 400px column, which also sits beside the document.
+    - Apply = decision, then the proposed value; jump-to-fix scrolls the canvas only.
+    - The document check starts after "יצירת מסמך".
+  - **Tests:** unit 257/257; the e2e passed in full on fresh emulators.
+  - **Still open:**
+    - Server-side auto-run triggers (B1): the browser still starts the first draft check and the document check.
+    - Template default values for "fill the empty fields" (gap G20).
+    - The agent tab (D9) and the document viewer restyle (D6).
+    - `DraftReview.tsx` is no longer used.
+    - ~~`DraftReview.tsx`~~ deleted (with `SupervisorPanel.tsx`, replaced by AgentReport). No visual check in the browser yet.
+- **D9, D6, F1, E1 and B7:**
+  - **D9:** `AgentReport` is the agent tab (prototype renderAgent).
+  - **D6:** `DocView` is the workspace document view (banner, toolbar with zoom, fit, page, search and print, canvas, jump inside the frame). Suppliers keep `DocumentViewer`.
+  - **F1:**
+    - The completion screen hides the field form (`FIELDS_IN_DRAFT`) and shows the prototype's team section (requester, procurement, security "לא נדרש / שלח לגוף").
+    - "אישור ויצירת טיוטה" waits for the AI draft, then creates the tender.
+    - Server: blank required fields and an empty deadline are allowed in the draft. A template with deadline-driven dates can't be published without a deadline.
+  - **B7:** `unitRequests` on the case, `unitQueue` and `claimTeamSlot` callables; `setTeamSlot` is shared with `assignTeamMember`.
+  - **E1:** "לטיפולך" on the home (`PendingList` + `pendingItems`). Approvals, unit assignment with a select, `?tab=` deep links; the requester's draft "seen" mark is kept in the browser.
+  - **Verification:** unit 257/257; **e2e passed in full on a fresh emulator** (`emulators:exec`), including the unit-contact check.
+  - **Deviations:**
+    - Every "לטיפולך" row button is the soft pill: the prototype's final CSS overrides the first row's filled button.
+    - "בקשת משתתף נוסף מגוף" is hidden (no backend).
+    - The security unit's text "גוף אבטחת המידע" is new.
+- **B1 auto-run (decided 2026-11-04: on the server):**
+  - The Firestore triggers `superviseOnTenderCreated` (first draft check) and `superviseOnDocumentReady` (document check once `documentStatus` becomes `generated`) call `superviseTender` as the system, stage `created`. A run someone already started makes them skip.
+  - The browser no longer starts checks: the sessionStorage auto-run and the run after "יצירת מסמך" are removed. It shows the agent as starting for up to `AUTO_RUN_GRACE_MS` (45 s, `autoRunPending`) until the server claims the run.
+  - Conditions live in `shared/src/autoRun.ts` (3 tests).
+  - The e2e waits for the automatic checks (`waitForCheck`); unit 260/260; e2e passed in full on a fresh emulator.
+- **First browser walkthrough (headless Chrome over the DevTools protocol, emulators, app next to the prototype):**
+  - **Found and fixed:**
+    - the sticky tender header let the content slide ~15 px under it (the page now starts below it);
+    - a draft showed the empty-field warning twice (one per field plus the aggregate; only the aggregate remains);
+    - a unit's colleague select was empty (the item's target didn't carry the case);
+    - "עו״ד יעל" gave the first name "עו״ד" (titles are skipped);
+    - the finding location "supervisor" was shown in English;
+    - the regenerate hint still said "המסמך טרם נשלח לבדיקה" (there is no send step any more).
+  - **Looks right against the prototype:**
+    - the header (title, number, type, owner, the one filled button, approvals indicator and card with אושר / ממתין);
+    - the stage bar with "ללא כנס ספקים בבל"מ זה";
+    - the draft page (yellow banner with status, violet fields, "חסר – ממלא רכש");
+    - the findings panel and the agent tab;
+    - the completion screen's chain and request summary;
+    - "לטיפולך" (stage chips, row, select, pill button).
+  - **Differences that remain, by design or not yet built:**
+    - the prototype's tabs פעילות and היסטוריית גרסאות;
+    - the prototype's demo bar at the bottom (not part of the product);
+    - the draft page shows the real template body (the prototype's mock sections);
+    - on a case entered without an AI draft the agent tab marks the skills ✗ (the real state; the prototype always shows ✓);
+    - the overview tab is still the old design (D4).
+  - **Not yet checked visually:** the approve-on-behalf and publish dialogs, the jump animation, and a narrow window (< 1000 px).
+  - Unit 261/261; the e2e passed in full on a fresh emulator after these fixes.
 
 ---
 
@@ -207,11 +270,11 @@ Each decision has a recommendation, which the plan assumes if it is not changed.
 | D1d | **Approval on behalf — DECIDED (user, 2026-11-04):** the tender manager can approve on behalf of another participant when needed. The prototype has no such feature. | Control bypass: it needs a trail | Safeguards:<br>- A reason is **required** (at least 10 characters, like today's publish override) — **DECIDED (user, 2026-11-04).**<br>- The slot must be assigned — **DECIDED (user, 2026-11-04).** Approving on behalf of an empty slot means assigning someone first (team edit, D9).<br>- It is audited as `approve_on_behalf` and shown in the approvals card and the activity tab.<br>- It follows the same order (legal after requester and finance) and the same blocking guard.<br>- The holder or the manager can withdraw it until the lock.<br>The UI comes from the approvals card (A4) and needs a UX mock. | A4, B4, B6 |
 | D1c | **DECIDED (user, 2026-11-04):** the manager's button is "אישור סופי של המכרז" (today's `ws.finalApprove`), replacing the prototype's "פרסום לרביע" | — | The other roles keep the prototype's labels | A3, A4 |
 | D2 | **DECIDED (user, 2026-11-04): information security does not block.** It is assigned and may approve, as an extra participant, but the final approval and publication don't wait for it. | — | `blockingApproverRoles()` (`shared/src/team.ts`) drops `security` from the approvals the server waits for; the UI uses the same roles | B4 |
-| D3 | **Who assigns legal and finance.** In the prototype, procurement assigns no one but itself ("אין צורך לשייך אנשים לתפקידים אחרים", line 1557). Each unit assigns its own contact from its home screen ("שיוך איש קשר", lines 1944–1951). Today the manager assigns every slot at creation, and creation requires a complete team. | Workflow change | Adopt the prototype. New callable `claimTeamSlot` (a legal or finance user assigns a holder for that role); `createTender` accepts empty legal and finance slots. Team edits by the manager stay possible (D9). | B7, E-1, F-1 |
-| D4 | **Where template fields are entered.** The prototype hides the fields on the completion screen ("את שדות התבנית ממלאים בטיוטה", line 3049) but shows **no field editor** in the draft. The only way to fill fields is "הטמע" on the missing-info finding, which fills defaults. | Prototype gap | (A) Click a field mark in the draft page to edit it in a small popover. **Needs a UX mock.** Until then, (B) keep today's DraftPanel editor under the page, restyled. Do not keep the fields on the completion screen. | D-5, F-1 |
-| D5 | **What "הטמע" does** when there is no field fix (most AI findings), and in the document stage. In the prototype, document findings only jump; nothing changes (spec §7.5). | Real change needs Docs API editing | Draft finding with `paramKey` + `suggestion`: write the value. Any other finding, or any document finding: **mark as applied and jump**; the user edits in Google Docs, and the next run verifies. Later, optionally, replace text via the Docs API (`replaceAllText` from `evidence` to a model `replacement`). | B2, D-7 |
-| D6 | **Thinking steps:** the prototype runs a fixed 1 s per step (6 steps). Real runs are one call of roughly 20–90 s. | No real steps today | The server writes `supervisionRun.step` at real phase boundaries mapped to the 6 labels. The client advances at least 1 s per step and holds on the step the server reached. | B1, C-3 |
-| D7 | **Empty fields in the draft.** In the prototype, empty fields are **one warning** ("…הם יופיעו במסמך כקו ריק"), and the document can still be created. Today every empty asked field leaves `{{key}}`, which is a **hard block** (`functions/src/services/supervisorChecks.ts:447-466`). | Contradicts the current gate | On draft basis, roll the empty asked fields into one `MISSING_INFO` warning. At `generateDocument`, print remaining empty fields as blank lines (`BLANK_LINE`, like unasked fields). **Plus:** the `prepublish` gate blocks a blank line in a *required* field (dates, guarantee). The prototype has no publish action, so this does not contradict it. | B3 |
+| D3 | **DECIDED (user, 2026-11-04): each unit assigns its own contact.**  **Who assigns legal and finance.** In the prototype, procurement assigns no one but itself ("אין צורך לשייך אנשים לתפקידים אחרים", line 1557). Each unit assigns its own contact from its home screen ("שיוך איש קשר", lines 1944–1951). Today the manager assigns every slot at creation, and creation requires a complete team. | Workflow change | Adopt the prototype. New callable `claimTeamSlot` (a legal or finance user assigns a holder for that role); `createTender` accepts empty legal and finance slots. Team edits by the manager stay possible (D9). | B7, E-1, F-1 |
+| D4 | **DECIDED (user, 2026-11-04): option B — the field editor under the draft page, restyled.**  **Where template fields are entered.** The prototype hides the fields on the completion screen ("את שדות התבנית ממלאים בטיוטה", line 3049) but shows **no field editor** in the draft. The only way to fill fields is "הטמע" on the missing-info finding, which fills defaults. | Prototype gap | (A) Click a field mark in the draft page to edit it in a small popover. **Needs a UX mock.** Until then, (B) keep today's DraftPanel editor under the page, restyled. Do not keep the fields on the completion screen. | D-5, F-1 |
+| D5 | **DECIDED (user, 2026-11-04): mark as handled and jump; a draft finding with a suggested value still writes it.**  **What "הטמע" does** when there is no field fix (most AI findings), and in the document stage. In the prototype, document findings only jump; nothing changes (spec §7.5). | Real change needs Docs API editing | Draft finding with `paramKey` + `suggestion`: write the value. Any other finding, or any document finding: **mark as applied and jump**; the user edits in Google Docs, and the next run verifies. Later, optionally, replace text via the Docs API (`replaceAllText` from `evidence` to a model `replacement`). | B2, D-7 |
+| D6 | **DECIDED (user, 2026-11-04): the recommendation (server steps, at least 1 s each).**  **Thinking steps:** the prototype runs a fixed 1 s per step (6 steps). Real runs are one call of roughly 20–90 s. | No real steps today | The server writes `supervisionRun.step` at real phase boundaries mapped to the 6 labels. The client advances at least 1 s per step and holds on the step the server reached. | B1, C-3 |
+| D7 | **DECIDED (user, 2026-11-04): one warning, blank lines, and the prepublish gate blocks blank required fields.**  **Empty fields in the draft.** In the prototype, empty fields are **one warning** ("…הם יופיעו במסמך כקו ריק"), and the document can still be created. Today every empty asked field leaves `{{key}}`, which is a **hard block** (`functions/src/services/supervisorChecks.ts:447-466`). | Contradicts the current gate | On draft basis, roll the empty asked fields into one `MISSING_INFO` warning. At `generateDocument`, print remaining empty fields as blank lines (`BLANK_LINE`, like unasked fields). **Plus:** the `prepublish` gate blocks a blank line in a *required* field (dates, guarantee). The prototype has no publish action, so this does not contradict it. | B3 |
 | D8 | **Publishing.** In the prototype, the button at stage פרסום ("אישור סופי ופרסום לספקים ←") only opens the document tab, and there is no supplier picker anywhere. | Prototype gap; built provisionally because D9 hides the access tab | **Provisional, built:** procurement's button opens a "פרסום לספקים" dialog holding today's supplier picker, and the dialog's button publishes. A gate block shows today's audited override. Other roles open the document tab. **Needs a UX mock.** | D-10 |
 | D9 | **DECIDED (user, 2026-11-04): hide "שיתוף והרשאות" and "תיק מכרז" for now**, without moving their content. | — | The tab set follows the prototype. Suppliers are picked in the publish dialog (D8). **Until relocated there is no UI for:** changing team members after creation, granting more suppliers after publication, the case summary / ScoreCard / feedback / submission files, and the audit list. | D-3, D-9 |
 

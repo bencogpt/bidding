@@ -230,6 +230,31 @@ body {
   }
 }
 
+/* Fields in the draft page (prototype lines 693–694): filled = soft violet, missing = yellow. */
+.mark-fld {
+  background: rgba(124, 77, 214, 0.14);
+  color: inherit;
+  padding: 0 3px;
+}
+.mark-miss {
+  background: #fff3b0;
+  color: #8a5a00;
+  padding: 0 4px;
+}
+/* Jump to a fix (lines 308–309, 733): a field pulses twice, a section flashes yellow for about 2 seconds. */
+.mark-pulse {
+  animation: mark-pulse 1.2s 2;
+}
+@keyframes mark-pulse {
+  50% {
+    outline: 3px solid var(--accent);
+  }
+}
+.sec-flash {
+  background: #fff3b0 !important;
+  transition: background 0.3s;
+}
+
 /* The agent's halo while it checks (line 293). */
 @keyframes agent-halo {
   50% {

@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react';
+import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type {
@@ -56,9 +56,28 @@ export default function TenderHeader({
   children?: ReactNode;
 }) {
   const { t } = useTranslation();
+  // Its height as --tender-header-h, so sticky side panels sit just under it (the prototype's top:16px let
+  // them slide under the header).
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const root = document.documentElement;
+    const set = () => root.style.setProperty('--tender-header-h', `${el.offsetHeight}px`);
+    set();
+    const ro = new ResizeObserver(set);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      root.style.removeProperty('--tender-header-h');
+    };
+  }, []);
   return (
     <div
-      className="sticky top-0 z-20 -mx-8 -mt-8 mb-4 px-8 pt-4"
+      ref={ref}
+      // Sticks at the scroll area's top edge: sticky positions count from inside the area's 32px padding, so
+      // top:-32px (with the same negative margin) keeps it from sliding over the content below.
+      className="sticky -top-8 z-20 -mx-8 -mt-8 mb-4 px-8 pt-4"
       style={{ background: 'var(--bg)', borderBottom: '1px solid var(--line)' }}
     >
       <div className="border px-[18px] pb-3 pt-3.5" style={{ background: 'var(--panel)', borderColor: 'var(--line)' }}>

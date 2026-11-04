@@ -1,7 +1,13 @@
 import { z } from 'zod';
 import { TENDER_STATUSES } from './tender.js';
 import { SYSTEM_FORMULAS } from './templates.js';
-import type { SupervisionSummary, ValueSource, BidDraftRecord } from './supervision.js';
+import type {
+  SupervisionSummary,
+  ValueSource,
+  BidDraftRecord,
+  SupervisionRunState,
+  FindingDecisionRecord,
+} from './supervision.js';
 import { requesterDetailsSchema, requesterDetailsInputSchema } from './requesterFields.js';
 import { createTenderTeamFields, type CaseApprovals, type CaseTeam, type TeamRole } from './team.js';
 import type { DocumentStatus, ResearchSummary } from './draft.js';
@@ -142,6 +148,12 @@ export type TenderDoc = z.infer<typeof tenderDocSchema> & {
   memberUids?: string[]; // owner + team: the only internal users (besides managers) who see the case
   approvals?: CaseApprovals; // role → sign-off on the document; cleared when a review starts or the document is reset
   lockedAt?: number | null; // the manager's final approval (→ "ready"): the document is locked
+  // The supervising agent's current run, shared by everyone viewing the case (plan B1).
+  supervisionRun?: SupervisionRunState;
+  // Units asked to assign their own contact (plan D3): their home lists the case until the slot is filled.
+  unitRequests?: ('legal' | 'finance' | 'security')[];
+  // The manager's decisions on findings of the latest check, by finding key (plan B2; warnings only).
+  findingDecisions?: Record<string, FindingDecisionRecord>;
   // Draft-first: the document is created only after the inspector passes (see draft.ts).
   documentStatus?: DocumentStatus;
   documentGeneratedAt?: number;
@@ -484,6 +496,14 @@ export const refreshTenderDocumentInput = z.object({
   overrideReason: z.string().trim().min(10).optional(),
 });
 export type RefreshTenderDocumentInput = z.infer<typeof refreshTenderDocumentInput>;
+
+/** The manager decides on findings of the latest check: incorporate, or leave as is (warnings only). */
+export const decideFindingInput = z.object({
+  tenderId: z.string(),
+  keys: z.array(z.string().min(1).max(80)).min(1).max(60),
+  action: z.enum(['applied', 'skipped']),
+});
+export type DecideFindingInput = z.infer<typeof decideFindingInput>;
 
 export const runSupervisionInput = z.object({
   tenderId: z.string(),

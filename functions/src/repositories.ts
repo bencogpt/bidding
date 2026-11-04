@@ -4,8 +4,8 @@ import { HttpsError } from 'firebase-functions/v2/https';
 import { FieldValue } from 'firebase-admin/firestore';
 import { db, now } from './lib/admin.js';
 import { nextUsage, type UsageWindow } from './lib/rateWindow.js';
-import { isInternalRole, formatSerial, withBuiltinFills } from '@obms/shared';
-import type { TeamRole, TeamApproval } from '@obms/shared';
+import { isInternalRole, formatSerial, withBuiltinFills, SUPERVISION_RUN_STALE_MS } from '@obms/shared';
+import type { TeamRole, TeamApproval, SupervisionRunState, FindingDecisionRecord } from '@obms/shared';
 import type {
   TenderDoc,
   AccessDoc,
@@ -55,6 +55,11 @@ export const usersRepo = {
     return q.empty ? null : (q.docs[0].data() as UserDoc);
   },
   /** All internal (non-supplier) users. Small collection — filtered in memory, no index needed. */
+  /** Users holding one role (a unit's colleagues, for its contact assignment). */
+  async listByRole(role: string): Promise<UserDoc[]> {
+    const q = await db.collection('users').where('role', '==', role).get();
+    return q.docs.map((d) => d.data() as UserDoc);
+  },
   async listInternal(): Promise<UserDoc[]> {
     const q = await db.collection('users').get();
     return q.docs.map((d) => d.data() as UserDoc).filter((u) => isInternalRole(u.role));
@@ -277,10 +282,44 @@ export const tendersRepo = {
       return true;
     });
   },
+  /**
+   * Start the agent's run on the case (plan B1). With `exclusive`, refuses (returns false) while another run
+   * is still going — two people pressing "הרץ בדיקה" don't start two runs. A run older than
+   * SUPERVISION_RUN_STALE_MS is treated as dead. Checkpoints (approvals, publish) run regardless.
+   */
+  async claimSupervisionRun(id: string, run: SupervisionRunState, exclusive: boolean): Promise<boolean> {
+    const ref = db.collection('tenders').doc(id);
+    return db.runTransaction(async (tx) => {
+      const t = (await tx.get(ref)).data() as TenderDoc | undefined;
+      if (!t) return false;
+      const cur = t.supervisionRun;
+      if (exclusive && cur?.state === 'running' && run.startedAt - cur.startedAt < SUPERVISION_RUN_STALE_MS) return false;
+      tx.update(ref, { supervisionRun: run });
+      return true;
+    });
+  },
+  /** Move the run's thinking step forward, or close it — only if it is still the same run. */
+  async updateSupervisionRun(id: string, runId: string, patch: Partial<Pick<SupervisionRunState, 'step' | 'state'>>): Promise<void> {
+    const ref = db.collection('tenders').doc(id);
+    await db.runTransaction(async (tx) => {
+      const t = (await tx.get(ref)).data() as TenderDoc | undefined;
+      if (t?.supervisionRun?.runId !== runId) return;
+      tx.update(ref, Object.fromEntries(Object.entries(patch).map(([k, v]) => [`supervisionRun.${k}`, v])));
+    });
+  },
+  /** Replace the decisions on findings outright (resolved ones disappear — a merge would keep them). */
+  async setFindingDecisions(id: string, decisions: Record<string, FindingDecisionRecord>): Promise<void> {
+    await db.collection('tenders').doc(id).update({ findingDecisions: decisions });
+  },
   /** Replace draft data fields outright (params is a full map — a cleared value must disappear). */
   async replaceDraftData(id: string, patch: Partial<TenderDoc>): Promise<void> {
     const clean = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
     await db.collection('tenders').doc(id).update({ ...clean, updatedAt: now() });
+  },
+  /** Cases that asked a unit to assign its contact (plan D3); the caller filters those already assigned. */
+  async listUnitRequests(role: string): Promise<TenderDoc[]> {
+    const q = await db.collection('tenders').where('unitRequests', 'array-contains', role).get();
+    return q.docs.map((d) => d.data() as TenderDoc);
   },
   async listAll(): Promise<TenderDoc[]> {
     const q = await db.collection('tenders').get();
@@ -503,6 +542,10 @@ export const supervisionRepo = {
   async list(tenderId: string): Promise<SupervisionReport[]> {
     const q = await db.collection('tenders').doc(tenderId).collection('supervision').get();
     return q.docs.map((d) => d.data() as SupervisionReport);
+  },
+  async get(tenderId: string, runId: string): Promise<SupervisionReport | null> {
+    const s = await db.collection('tenders').doc(tenderId).collection('supervision').doc(runId).get();
+    return s.exists ? (s.data() as SupervisionReport) : null;
   },
 };
 

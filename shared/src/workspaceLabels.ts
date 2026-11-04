@@ -56,6 +56,7 @@ export const STAGE_APPROVERS: Record<number, readonly ApprovalRole[]> = {
 export const ROLE_UNIT_HE: Partial<Record<TeamRole, string>> = {
   legal: 'היחידה המשפטית',
   finance: 'גוף הכספים',
+  security: 'גוף אבטחת המידע', // new — the prototype asks only legal and finance
 };
 
 /** Finding type labels. The first six are the prototype's (line 2519); the rest are proposals (plan §9, D12). */
@@ -90,6 +91,38 @@ export const FINDING_TYPE_HE: Record<FindingCode, string> = {
 };
 
 export const SEVERITY_HE = { block: 'חוסם', warn: 'אזהרה' } as const;
+
+/**
+ * "הצעת הסוכן" for findings of the rules layer, which have no proposal of their own (the AI writes its own).
+ * New texts — pending UX review.
+ */
+export const RULE_FIX_HE: Partial<Record<FindingCode, string>> = {
+  MISSING_INFO: 'להשלים את השדות בנתוני הטיוטה, או להשאיר אותם כקו ריק להשלמה במסמך.',
+  CONFIDENTIAL_LEAK: 'להסיר את הערך החסוי (אומדן או תקציב) ולהשאיר ניסוח כללי.',
+  TEMPLATE_MISMATCH: 'ליצור את המסמך מהתבנית של סוג הבל"מ.',
+  TEMPLATE_CHANGED: 'לבדוק את המסמך מול הנוסח העדכני של התבנית.',
+  TEMPLATE_DOC_CHANGED: 'לבדוק את המסמך מול הנוסח העדכני של התבנית.',
+  TEMPLATE_STRUCTURE_MISSING: 'להחזיר את המבנה כפי שהוא בתבנית.',
+  WRONG_TEMPLATE_SECTION: 'להסיר את הסעיף שאינו שייך לסוג הבל"מ.',
+  SKILL_MISSING: 'להפיק מחדש את טיוטת ה-AI כדי שתכלול את המיומנות.',
+  SKILL_VERSION_CHANGED: 'להפיק מחדש את טיוטת ה-AI לפי הגרסה העדכנית של המיומנות.',
+  NO_AI_DRAFT: 'להפיק את טיוטת ה-AI לפני יצירת המסמך.',
+  AI_DRAFT_FAILED: 'להפיק מחדש את טיוטת ה-AI.',
+  PARAM_INVALID: 'לתקן את הערך בשדה.',
+  PARAM_NOT_IN_DOC: 'לוודא שהערך מופיע במסמך.',
+  UNSOURCED_PARAM: 'לעדכן את הערך מנתוני הבקשה או לציין את מקורו.',
+  UNSOURCED_VALUE: 'לעדכן את הערך מנתוני הבקשה או לציין את מקורו.',
+  CONTRADICTION: 'ליישר את הערכים כך שיתאימו זה לזה.',
+  CRITERIA_WEIGHTS: 'לעדכן את משקלי ההערכה כך שיסתכמו ל-100.',
+  MISSING_MANDATORY_SECTION: 'להוסיף את הסעיף מנוסח התבנית.',
+  LEGAL_SECTION_MISSING: 'להוסיף את הסעיף המשפטי מנוסח התבנית.',
+  LEGAL_SECTION_ALTERED: 'להחזיר את הנוסח המשפטי כלשונו מהתבנית.',
+  LEGAL_ELEMENT_MISSING: 'להוסיף את הרכיב המשפטי מנוסח התבנית.',
+  UNFAIR_REQUIREMENT: 'לשקול ניסוח רחב יותר של הדרישה.',
+  DOC_UNREADABLE: 'לבדוק את הגישה למסמך ולהריץ את הבדיקה שוב.',
+  AI_REVIEW_SKIPPED: 'להריץ את הבדיקה שוב.',
+  SUPERVISOR_UNAVAILABLE: 'להריץ את הבדיקה שוב.',
+};
 
 /** The agent's thinking steps (prototype AG_STEPS, line 2512). The server reports which one it reached. */
 export const AGENT_STEPS_HE = [

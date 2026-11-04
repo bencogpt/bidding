@@ -85,6 +85,10 @@ const TAGS_ORDER = 15;
 const YES = 'כן';
 const NO = 'לא';
 
+// Plan D4: the template's fields are completed in the draft, not on this screen (the old form stays behind
+// the flag). The AI still drafts them in the background once a type is picked.
+const FIELDS_IN_DRAFT = true;
+
 export default function TenderCreate() {
   const { t } = useTranslation();
   const nav = useNavigate();
@@ -110,6 +114,11 @@ export default function TenderCreate() {
   const [swapTo, setSwapTo] = useState<TenderType | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // Security as an extra participant: its unit assigns the contact (plan D3).
+  const [securityUnit, setSecurityUnit] = useState(false);
+  // "אישור ויצירת טיוטה" pressed while the AI still drafts: the case is created once the draft is ready.
+  const [pendingCreate, setPendingCreate] = useState(false);
+  const createRef = useRef<(() => Promise<void>) | null>(null);
   const template = useTemplate(type || undefined);
   // One id per form: if a submission's answer is lost and the user retries, the server returns the
   // case it already created instead of making a copy.
@@ -118,6 +127,11 @@ export default function TenderCreate() {
   // Case team: one user per required role (type defaults + roles the manager adds).
   const [team, setTeam] = useState<CaseTeam>({});
   const [extraRoles, setExtraRoles] = useState<TeamRole[]>([]);
+  useEffect(() => {
+    if (!pendingCreate || drafting) return;
+    setPendingCreate(false);
+    void createRef.current?.();
+  }, [pendingCreate, drafting]);
   // The person who opened the request is the default case requester (never overrides a manager's pick).
   const openerUid = request?.requesterUid;
   const openerIsRequester = users.some((u) => u.uid === openerUid && u.role === 'requester');
@@ -239,9 +253,53 @@ export default function TenderCreate() {
       ? t('create.draftMissing', { fields: draftMissing.map(labelOf).join(', ') })
       : '';
 
+  // "אישור ויצירת טיוטה" (prototype wizApprove → genDraft): if the AI is still drafting, wait for it, then
+  // create the case and open its draft. The fields are completed in the draft (plan D4): an AI placeholder is
+  // never sent, the field stays empty.
+  const doCreate = async () => {
+    if (!type || !serial) return;
+    setBusy(true);
+    setError('');
+    try {
+      const numericParams: Record<string, string | number> = {};
+      for (const p of asked) {
+        const raw = valueOf(p);
+        const clean = hasPlaceholder(raw) ? '' : raw;
+        numericParams[p.key] =
+          p.type === 'number' ? (clean !== '' && Number.isFinite(Number(clean)) ? Number(clean) : '') : clean;
+      }
+      const { id } = await api.createTender({
+        title: hasPlaceholder(title) ? '' : title,
+        bidRequestId: serial,
+        type,
+        params: numericParams,
+        submissionDeadline: deadline ? new Date(deadline).getTime() : null,
+        domainTags,
+        evaluationCriteria: criteria,
+        // Omit the key when there is no AI draft: the callable client turns undefined into null,
+        // which the optional string field on the server rejects.
+        ...(draftId ? { draftId } : {}),
+        requestId: requestId.current,
+        team: team.requester ? { requester: team.requester } : {},
+        unitRequests: securityUnit ? ['security'] : [],
+      });
+      // The draft opens at once; the supervisor agent starts checking it while the manager reads.
+      nav(`/tenders/${id}?tab=document`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(false);
+    }
+  };
+  createRef.current = doCreate;
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!type || !serial) return;
+    if (FIELDS_IN_DRAFT) {
+      if (drafting) setPendingCreate(true);
+      else await doCreate();
+      return;
+    }
     if (unfilled.length) {
       setError(t('create.fillPlaceholders', { fields: unfilled.map((p) => p.labelHe).join(', ') }));
       document.getElementById(`param-${unfilled[0].key}`)?.focus();
@@ -473,7 +531,7 @@ export default function TenderCreate() {
               </button>
             </div>
           )}
-          {drafting && (
+          {drafting && (pendingCreate || !FIELDS_IN_DRAFT) && (
             <div
               role="status"
               aria-live="polite"
@@ -492,9 +550,48 @@ export default function TenderCreate() {
               <div className="h-1 w-full animate-pulse bg-accent/40" aria-hidden="true" />
             </div>
           )}
-          {draftNote && <div className="mt-2 rounded bg-amber-100 p-2 text-xs text-amber-700">{draftNote}</div>}
+          {!FIELDS_IN_DRAFT && draftNote && <div className="mt-2 rounded bg-amber-100 p-2 text-xs text-amber-700">{draftNote}</div>}
         </div>
-        {type && (
+        {type && FIELDS_IN_DRAFT && (
+          <div className="space-y-5">
+            <p className="text-sm" style={{ color: 'var(--muted)' }}>
+              התבנית נבחרה אוטומטית: {template?.title ?? t(`type.${type}`)}. את שדות התבנית ממלאים בטיוטה.
+            </p>
+            {/* The team (prototype lines 1556–1563): the requester comes from the request; legal and finance
+                assign their own contact from their home (plan D3). */}
+            <div>
+              <h4 className="mb-1 text-sm font-semibold">צוות המכרז</h4>
+              <p className="mb-3 text-xs" style={{ color: 'var(--muted)' }}>
+                הדורש נקבע לפי הבקשה. אין צורך לשייך אנשים לתפקידים אחרים.
+              </p>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div>
+                  <span className="label">דורש</span>
+                  <div className="text-sm">{request.requesterName} · לפי הבקשה</div>
+                </div>
+                <div>
+                  <span className="label">רכש</span>
+                  <div className="text-sm">{meName}</div>
+                </div>
+                <div>
+                  <label className="label" htmlFor="security-unit">
+                    אבטחת מידע (משתתף נוסף)
+                  </label>
+                  <select
+                    id="security-unit"
+                    className="input"
+                    value={securityUnit ? 'unit' : ''}
+                    onChange={(e) => setSecurityUnit(e.target.value === 'unit')}
+                  >
+                    <option value="">לא נדרש</option>
+                    <option value="unit">שלח לגוף אבטחת מידע</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        {type && !FIELDS_IN_DRAFT && (
           <div className="space-y-5">
         <div>
           <label className="label">{t('create.tenderTitle')}</label>
@@ -596,9 +693,18 @@ export default function TenderCreate() {
         )}
 
         {error && <div className="text-sm text-red-600">{error}</div>}
-        <button className="btn btn-gold" disabled={busy || drafting || !type || notConverted}>
-          {busy ? t('create.creating') : drafting ? t('create.draftingWait') : t('create.submit')}
-        </button>
+        {FIELDS_IN_DRAFT ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <button className="btn btn-gold" disabled={busy || pendingCreate || !type || notConverted}>
+              {busy || pendingCreate ? 'ה-AI מכין את הטיוטה…' : 'אישור ויצירת טיוטה'}
+            </button>
+            {!type && <span className="text-sm" style={{ color: 'var(--muted)' }}>בחרו סוג בל"מ.</span>}
+          </div>
+        ) : (
+          <button className="btn btn-gold" disabled={busy || drafting || !type || notConverted}>
+            {busy ? t('create.creating') : drafting ? t('create.draftingWait') : t('create.submit')}
+          </button>
+        )}
       </form>
       </SectionCard>
     </div>

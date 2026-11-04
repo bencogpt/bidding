@@ -119,7 +119,39 @@ export type SetRequiredRolesInput = z.infer<typeof setRequiredRolesInput>;
 export const createTenderTeamFields = {
   team: teamSchema.optional(),
   extraRoles: z.array(z.enum(TEAM_ROLES)).optional(),
+  // Roles whose unit assigns its own contact (plan D3): legal and finance always when their slot is empty;
+  // security when procurement chose "שלח לגוף אבטחת מידע".
+  unitRequests: z.array(z.enum(['legal', 'finance', 'security'])).optional(),
 };
+
+/** Roles whose unit assigns the case contact itself (plan D3) — the unit queue on their home. */
+export const UNIT_ROLES = ['legal', 'finance', 'security'] as const;
+export type UnitRole = (typeof UNIT_ROLES)[number];
+export const isUnitRole = (r: string | undefined): r is UnitRole => !!r && (UNIT_ROLES as readonly string[]).includes(r);
+
+/** The unit roles to ask on a new case: legal and finance with an empty slot, plus security if asked for. */
+export function unitRequestsFor(team: CaseTeam, asked: readonly UnitRole[] = []): UnitRole[] {
+  return UNIT_ROLES.filter((r) => !team[r] && (r !== 'security' || asked.includes('security')));
+}
+
+/** A unit contact assigns (or reassigns to a colleague) its own slot on a case (plan D3, B7). */
+export const claimTeamSlotInput = z.object({
+  tenderId: z.string(),
+  role: z.enum(UNIT_ROLES),
+  uid: z.string().min(1),
+});
+export type ClaimTeamSlotInput = z.infer<typeof claimTeamSlotInput>;
+
+/** One case waiting for a contact from the caller's unit, with the colleagues who can take it. */
+export interface UnitQueueItem {
+  tenderId: string;
+  ref: string;
+  name: string;
+  ownerName: string;
+  createdAt: number;
+  role: UnitRole;
+  candidates: { uid: string; name: string }[];
+}
 
 /** tenders/{id}/chat/{msgId} — immutable internal chat message. */
 export interface ChatMessage {

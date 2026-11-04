@@ -8,12 +8,13 @@
 // server and are tested without either.
 import type { TenderStatus } from './tender.js';
 import type { DocumentStatus } from './draft.js';
-import type { SupervisionFinding } from './supervision.js';
+import type { FindingDecisionRecord, SupervisionFinding, SupervisionStage } from './supervision.js';
 import type { TeamRole } from './team.js';
 import {
   CONFERENCE_STAGE_IDX,
   FINDING_TYPE_HE,
   NEXT_ACTION_HE,
+  RULE_FIX_HE,
   NO_CONFERENCE_NOTE_HE,
   QUARTET_ROLES,
   ROLE_HE,
@@ -38,7 +39,13 @@ export function fmtStamp(ms: number): string {
   return `${pad(d.getDate())}.${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-export const firstName = (name: string) => name.trim().split(/\s+/)[0] ?? '';
+// Titles before a name are not the first name ("עו״ד יעל לוי" → "יעל").
+const NAME_TITLES = new Set(['עו"ד', 'עו״ד', 'ד"ר', 'ד״ר', 'רו"ח', 'רו״ח', "פרופ'", 'פרופ׳', 'מר', "גב'", 'גב׳', 'הרב']);
+
+export const firstName = (name: string) => {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  return words.find((w) => !NAME_TITLES.has(w)) ?? words[0] ?? '';
+};
 
 const rolesHe = (roles: readonly ApprovalRole[]) => roles.map((r) => ROLE_HE[r]).join(', ');
 
@@ -245,6 +252,33 @@ export function findingKey(f: FindingInput, basis: CheckBasis): string {
   return `${prefix}:${fnv1a([f.code, f.paramKey ?? '', norm(f.location), norm(f.evidence)].join('|'))}`;
 }
 
+/**
+ * Gives each finding its stable key (keeps one the server stored). Two findings about the same thing get
+ * "~2", "~3" so each still has a key of its own. The server stores these keys (plan B2); the browser uses the
+ * same function for older reports.
+ */
+export function withFindingKeys<F extends FindingInput>(findings: readonly F[], basis: CheckBasis): (F & { key: string })[] {
+  const seen = new Map<string, number>();
+  return findings.map((f) => {
+    let key = findingKey(f, basis);
+    const n = (seen.get(key) ?? 0) + 1;
+    seen.set(key, n);
+    if (n > 1) key = `${key}~${n}`;
+    return { ...f, key };
+  });
+}
+
+/** A rule finding's technical location in Hebrew ("params.x" → the field's label); the AI's are Hebrew already. */
+export function humanLocation(location: string, labelOf: (paramKey: string) => string | undefined): string {
+  const m = /^params\.(.+)$/.exec(location);
+  if (m) return `נתוני הטיוטה · ${labelOf(m[1]) ?? m[1]}`;
+  if (location === 'document') return 'המסמך';
+  if (location === 'evaluationCriteria') return 'קריטריוני הערכה';
+  if (location === 'template') return 'התבנית';
+  if (location === 'supervisor') return 'הסוכן המפקח';
+  return location;
+}
+
 export interface FindingsView {
   /** Blocking and warning findings of the run, blocking first (info findings are kept apart). */
   all: FindingView[];
@@ -264,30 +298,24 @@ export function findingsView(
   decisions: Record<string, FindingDecision> = {},
 ): FindingsView {
   const basis = run?.basis ?? 'draft';
-  const seen = new Map<string, number>();
-  const views = (run?.findings ?? []).map((f): FindingView => {
-    // Two findings about the same thing get "~2", "~3" so each still has a key of its own.
-    let key = findingKey(f, basis);
-    const n = (seen.get(key) ?? 0) + 1;
-    seen.set(key, n);
-    if (n > 1) key = `${key}~${n}`;
-    const d = decisions[key];
-    // A blocking finding can't be left as is: a stray "skipped" on it is ignored.
-    const skipped = d?.action === 'skipped' && f.severity !== 'block';
+  const views = withFindingKeys(run?.findings ?? [], basis).map((f): FindingView => {
+    // Decisions are for warnings: a blocking finding goes away only when a check no longer finds it, never
+    // because it was marked (a decision on one is ignored).
+    const d = f.severity === 'block' ? undefined : decisions[f.key];
     return {
-      key,
+      key: f.key,
       code: f.code,
       severity: f.severity,
       typeHe: FINDING_TYPE_HE[f.code] ?? f.code,
       location: f.location,
       message: f.message,
       ...(f.evidence ? { evidence: f.evidence } : {}),
-      fix: f.fix ?? '',
+      fix: f.fix ?? RULE_FIX_HE[f.code] ?? '',
       ...(f.paramKey ? { paramKey: f.paramKey } : {}),
       ...(f.suggestion ? { suggestion: f.suggestion } : {}),
       source: f.source,
       applied: d?.action === 'applied',
-      skipped,
+      skipped: d?.action === 'skipped',
     };
   });
   const rank = (v: FindingView) => (v.severity === 'block' ? 0 : 1);
@@ -302,6 +330,31 @@ export function findingsView(
     warnings: open.filter((v) => v.severity === 'warn'),
     info: views.filter((v) => v.severity === 'info'),
   };
+}
+
+/**
+ * The manager's decisions after a new check (plan B2). A finding no longer found is resolved: its decision
+ * goes. One marked as incorporated that the check found again (its layer ran again) is open again. Left as
+ * is stays. Decisions about the other basis (draft vs document) and on blocking findings are dropped.
+ */
+export function reconcileDecisions(
+  prev: Record<string, FindingDecisionRecord>,
+  findings: readonly SupervisionFinding[],
+  basis: 'draft' | 'document',
+  stage: SupervisionStage,
+): Record<string, FindingDecisionRecord> {
+  const prefix = basis === 'draft' ? 'draft:' : 'doc:';
+  const byKey = new Map(findings.map((f) => [f.key, f]));
+  const next: Record<string, FindingDecisionRecord> = {};
+  for (const [key, d] of Object.entries(prev)) {
+    if (!key.startsWith(prefix)) continue;
+    const f = byKey.get(key);
+    if (!f || f.severity === 'block') continue;
+    const reevaluated = f.source === 'rules' || stage !== 'edit';
+    if (d.action === 'applied' && reevaluated) continue;
+    next[key] = d;
+  }
+  return next;
 }
 
 /** The agent's state as the workspace shows it. */
@@ -820,8 +873,8 @@ export function pendingItems(c: PendingCtx): PendingItem[] {
   // Legal / finance: their unit's contact is still missing (line 1944).
   if (c.unitRole && ROLE_UNIT_HE[c.unitRole])
     for (const t of c.unassigned ?? [])
-      out.push(
-        tenderItem(t, `assign:${c.unitRole}`, {
+      out.push({
+        ...tenderItem(t, `assign:${c.unitRole}`, {
           tone: 'w',
           bold: 'שיוך איש קשר:',
           text: `בל"מ חדש ממתין לאיש קשר מטעם ${ROLE_UNIT_HE[c.unitRole]}`,
@@ -830,7 +883,9 @@ export function pendingItems(c: PendingCtx): PendingItem[] {
           meta: approvedMeta(t),
           select: { role: c.unitRole },
         }),
-      );
+        // The button assigns the picked colleague (the unit can't open the case before it has a contact).
+        target: { kind: 'assign', tenderId: t.id, role: c.unitRole },
+      });
 
   // Approvals due from the signed-in team member (their turn has come, nothing blocks).
   for (const t of c.tenders) {

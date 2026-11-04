@@ -10,6 +10,7 @@ import {
   findingKey,
   findingsView,
   fmtStamp,
+  firstName,
   headerAction,
   isApproved,
   missingTeamApprovals,
@@ -20,6 +21,9 @@ import {
   stageBar,
   stageIndexOf,
   stagePopover,
+  withFindingKeys,
+  humanLocation,
+  reconcileDecisions,
   visibleTabs,
   type ApprovalsCtx,
   type Approvals,
@@ -474,6 +478,9 @@ test('A5 legal / finance: assign the unit contact, then approve in turn', () => 
   assert.equal(assign[0].text, 'בל"מ חדש ממתין לאיש קשר מטעם היחידה המשפטית');
   assert.equal(assign[0].button, 'שייך');
   assert.deepEqual(assign[0].select, { role: 'legal' });
+  // the colleague select is keyed by the case, so the item's target names the case and the role
+  assert.deepEqual(assign[0].target, { kind: 'assign', tenderId: 't1', role: 'legal' });
+  assert.deepEqual(assign[0].target, { kind: 'assign', tenderId: 't1', role: 'legal' }, 'the button assigns, it does not open the case');
   const doc = tender({ ds: 'doc' });
   assert.deepEqual(lines(pctx({ uid: 'u-leg', isManager: false, tenders: [doc] })), []); // not legal's turn
   assert.deepEqual(lines(pctx({ uid: 'u-leg', isManager: false, tenders: [{ ...doc, approvals: approvals('requester', 'finance') }] })), [
@@ -535,4 +542,62 @@ test('approval helpers: current holder only; security is not a team approver', (
   assert.equal(isApproved(H, approvals('legal'), 'legal'), true);
   assert.equal(isApproved({ ...H, legal: { uid: 'new', name: 'x' } }, approvals('legal'), 'legal'), false);
   assert.deepEqual(missingTeamApprovals(H, approvals('security')), ['requester', 'legal', 'finance']);
+});
+
+// ───────── B2: decisions, keys, fix texts ─────────
+
+test('B2 decisions are for warnings: a mark on a blocking finding is ignored', () => {
+  const findings = [F({ severity: 'block', evidence: 'x' }), F({ code: 'CONTRADICTION', evidence: 'y' })];
+  const keys = findingsView({ basis: 'draft', findings }).all.map((f) => f.key);
+  const v = findingsView({ basis: 'draft', findings }, { [keys[0]]: { action: 'applied' }, [keys[1]]: { action: 'applied' } });
+  assert.equal(v.blocking.length, 1, 'still blocking');
+  assert.deepEqual(v.applied.map((f) => f.code), ['CONTRADICTION']);
+});
+
+test('B2 fix text: the finding\'s own, else the fixed text of its rule code', () => {
+  const v = findingsView({ basis: 'draft', findings: [F({ code: 'CRITERIA_WEIGHTS' }), F({ code: 'CONTRADICTION', fix: 'ליישר את התאריכים.', evidence: 'z' })] });
+  assert.equal(v.all.find((f) => f.code === 'CRITERIA_WEIGHTS')!.fix, 'לעדכן את משקלי ההערכה כך שיסתכמו ל-100.');
+  assert.equal(v.all.find((f) => f.code === 'CONTRADICTION')!.fix, 'ליישר את התאריכים.');
+});
+
+test('B2 withFindingKeys keeps a stored key and numbers duplicates', () => {
+  const keyed = withFindingKeys([F({ key: 'doc:abc' }), F({}), F({})], 'document');
+  assert.equal(keyed[0].key, 'doc:abc');
+  assert.match(keyed[1].key, /^doc:/);
+  assert.equal(keyed[2].key, `${keyed[1].key}~2`);
+});
+
+test('B2 humanLocation: rule locations in Hebrew', () => {
+  const label = (k: string) => (k === 'deadline' ? 'מועד הגשה' : undefined);
+  assert.equal(humanLocation('params.deadline', label), 'נתוני הטיוטה · מועד הגשה');
+  assert.equal(humanLocation('params.other', label), 'נתוני הטיוטה · other');
+  assert.equal(humanLocation('document', label), 'המסמך');
+  assert.equal(humanLocation('סעיף 3 · תיאור השירות', label), 'סעיף 3 · תיאור השירות');
+});
+
+test('B2 reconcileDecisions after a new check', () => {
+  const d = (action: 'applied' | 'skipped') => ({ action, by: 'u', byName: 'n', at: 1 });
+  const found = (key: string, source: 'rules' | 'ai', severity: 'warn' | 'block' = 'warn') =>
+    ({ key, code: 'CONTRADICTION', severity, location: 'l', message: 'm', source }) as const;
+  const prev = {
+    'draft:gone': d('applied'), // no longer found: resolved
+    'draft:ai-applied': d('applied'), // AI finding still found
+    'draft:rule-applied': d('applied'), // rules finding still found
+    'draft:skipped': d('skipped'), // left as is: stays
+    'draft:block': d('skipped'), // blocking: never held by a decision
+    'doc:other-basis': d('skipped'), // about the document, not this draft check
+  };
+  const findings = [found('draft:ai-applied', 'ai'), found('draft:rule-applied', 'rules'), found('draft:skipped', 'rules'), found('draft:block', 'rules', 'block')];
+  // a full check re-evaluates both layers: what was incorporated and still found is open again
+  assert.deepEqual(Object.keys(reconcileDecisions(prev, findings, 'draft', 'manual')), ['draft:skipped']);
+  // right after an edit only the rules ran: the AI finding carried over keeps its decision
+  assert.deepEqual(Object.keys(reconcileDecisions(prev, findings, 'draft', 'edit')).sort(), ['draft:ai-applied', 'draft:skipped']);
+});
+
+test('firstName skips a title before the name', () => {
+  assert.equal(firstName('עו״ד יעל לוי'), 'יעל');
+  assert.equal(firstName('ד"ר אורי מזרחי'), 'אורי');
+  assert.equal(firstName('  דני   כהן '), 'דני');
+  assert.equal(firstName('עו״ד'), 'עו״ד', 'a title alone stays');
+  assert.equal(humanLocation('supervisor', () => undefined), 'הסוכן המפקח');
 });

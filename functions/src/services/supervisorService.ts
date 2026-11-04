@@ -12,6 +12,10 @@ import {
   TENDER_TYPE_LABELS_HE,
   BLANK_LINE,
   applySeverityPolicy,
+  withFindingKeys,
+  reconcileDecisions,
+  humanLocation,
+  RULE_FIX_HE,
   askedParams,
   resolveParam,
   hasDocument,
@@ -75,7 +79,14 @@ interface AiFinding {
   evidence: string;
   paramKey?: string;
   suggestedValue?: string;
+  fixHe?: string;
 }
+
+/** The model's proposed fix as one line of Hebrew ("הצעת הסוכן"), capped and without placeholders. */
+const aiFixText = (f: AiFinding): { fix?: string } => {
+  const t = f.fixHe?.trim();
+  return t && !t.includes('{{') ? { fix: t.slice(0, 300) } : {};
+};
 
 /**
  * The fix the model proposed, kept only when it is safe to offer as a one-click change: it names a
@@ -245,6 +256,12 @@ export async function aiReview(
                         'OPTIONAL, only with paramKey. The complete corrected value for that parameter, in ' +
                         'Hebrew, using ONLY facts from the sources above. Omit it if no safe fix exists.',
                     },
+                    fixHe: {
+                      type: 'string',
+                      description:
+                        'One short Hebrew sentence: the proposed fix, as an instruction (e.g. "להגדיר 36 חודשי ' +
+                        'בסיס ועוד שתי תקופות אופציה של 12 חודשים כל אחת."). Only facts from the sources above.',
+                    },
                   },
                   required: ['code', 'severity', 'location', 'messageHe', 'evidence'],
                 },
@@ -325,6 +342,7 @@ export async function aiReview(
           message: `${f.messageHe} (נדרש: ${el.he})`,
           evidence: el.id,
           source: 'ai',
+          ...aiFixText(f),
         });
         continue;
       }
@@ -341,6 +359,7 @@ export async function aiReview(
         evidence: f.evidence,
         source: 'ai',
         ...aiFix(f, tender, template),
+        ...aiFixText(f),
       });
     }
     return { model: SUPERVISOR_MODEL, findings };
@@ -404,115 +423,173 @@ export function currentDraftDataHash(
   });
 }
 
+/** A run someone started while another one is still going (plan B1): refused, not queued. */
+export class SupervisionBusyError extends Error {
+  constructor() {
+    super('הסוכן המפקח כבר בודק את המכרז.');
+  }
+}
+
+// Runs people start themselves can't overlap; checkpoints (approvals, publish) run regardless.
+const INTERACTIVE_STAGES: SupervisionStage[] = ['created', 'manual'];
+
 /** Run the supervisor for a tender at a checkpoint, persist the report and audit it. */
 export async function superviseTender(
   caller: Pick<Caller, 'uid' | 'name'>,
   tenderId: string,
   stage: SupervisionStage,
 ): Promise<SupervisionReport> {
-  const tender = await tendersRepo.get(tenderId);
-  if (!tender) throw new Error(`tender ${tenderId} not found`);
-  const [allTemplates, provenance, internalParams] = await Promise.all([
-    Promise.all(TENDER_TYPES.map((t) => templatesRepo.getForCase(t))),
-    internalRepo.getProvenance(tenderId),
-    internalRepo.getParams(tenderId),
-  ]);
-  const template = allTemplates.find((t) => t?.type === tender.type);
-  if (!template) throw new Error(`no template for type ${tender.type}`);
-
+  const tender0 = await tendersRepo.get(tenderId);
+  if (!tender0) throw new Error(`tender ${tenderId} not found`);
   // Draft-first: a case without its document is checked on a preview rendered from the draft data
   // (template + values, in memory). The report then fingerprints exactly the data it checked.
-  const isDraft = !hasDocument(tender);
-  let docText: string | null = null;
-  if (isDraft) {
-    docText = renderDraftText(tender, template);
-  } else {
-    try {
-      docText = await readTenderDocText(tender);
-    } catch (err) {
-      console.error('supervisor: document unreadable', err);
+  const isDraft = !hasDocument(tender0);
+  const basis: 'draft' | 'document' = isDraft ? 'draft' : 'document';
+
+  // Everyone viewing the case sees the run and the thinking step it reached (plan B1).
+  const runId = supervisionRepo.newId(tenderId);
+  const claimed = await tendersRepo.claimSupervisionRun(
+    tenderId,
+    { runId, state: 'running', basis, step: 0, startedAt: now(), by: caller.uid },
+    INTERACTIVE_STAGES.includes(stage),
+  );
+  if (!claimed) throw new SupervisionBusyError();
+  const step = (n: number) => tendersRepo.updateSupervisionRun(tenderId, runId, { step: n });
+
+  try {
+    const tender = (await tendersRepo.get(tenderId)) ?? tender0;
+    const [allTemplates, provenance, internalParams] = await Promise.all([
+      Promise.all(TENDER_TYPES.map((t) => templatesRepo.getForCase(t))),
+      internalRepo.getProvenance(tenderId),
+      internalRepo.getParams(tenderId),
+    ]);
+    const template = allTemplates.find((t) => t?.type === tender.type);
+    if (!template) throw new Error(`no template for type ${tender.type}`);
+
+    let docText: string | null = null;
+    if (isDraft) {
+      docText = renderDraftText(tender, template);
+    } else {
+      try {
+        docText = await readTenderDocText(tender);
+      } catch (err) {
+        console.error('supervisor: document unreadable', err);
+      }
     }
-  }
-  const dataHash = isDraft ? currentDraftDataHash(tender, template, internalParams) : null;
+    const dataHash = isDraft ? currentDraftDataHash(tender, template, internalParams) : null;
 
-  const rules = runDeterministicChecks({
-    tender,
-    template,
-    otherTemplates: allTemplates.filter((t): t is TemplateDoc => !!t && t.type !== tender.type),
-    provenance,
-    internalParams,
-    docText,
-    currentSkillHash,
-  });
-
-  // Versions track the real document; a draft's preview is not a version.
-  if (docText !== null && !isDraft) await recordVersion(tender, docText, docHash(docText), stage);
-
-  let aiModel: string | null = null;
-  let aiFindings: SupervisionFinding[] = [];
-  if (!RULES_ONLY.includes(stage) && docText !== null) {
-    const request = tender.serial ? await bidRequestsRepo.get(tender.serial) : null;
-    const ai = await aiReview({
+    await step(1); // the template of the tender's type
+    const rules = runDeterministicChecks({
       tender,
       template,
+      otherTemplates: allTemplates.filter((t): t is TemplateDoc => !!t && t.type !== tender.type),
       provenance,
       internalParams,
       docText,
-      requestAnswers: publicDetails(request?.details),
-    });
-    aiModel = ai.model;
-    aiFindings = ai.findings;
-  }
-  // A rule finding about "params.<key>" names the field it concerns (the draft view jumps to it).
-  const taggedRules = rules.map((f) => {
-    const m = /^params\.(.+)$/.exec(f.location);
-    return m && !f.paramKey ? { ...f, paramKey: m[1] } : f;
-  });
-  // Only hard facts block; everything else is a warning for the manager to weigh.
-  const findings = applySeverityPolicy([...taggedRules, ...aiFindings]);
-
-  const report: SupervisionReport = {
-    runId: supervisionRepo.newId(tenderId),
-    tenderId,
-    stage,
-    verdict: verdictOf(findings),
-    findings,
-    docHash: docText !== null ? docHash(docText) : null,
-    templateType: tender.type,
-    requiredSkills: REQUIRED_SKILLS[tender.type],
-    skillsUsed: provenance?.skillsUsed ?? [],
-    aiModel,
-    runBy: caller.uid,
-    at: now(),
-    basis: isDraft ? 'draft' : 'document',
-    dataHash,
-  };
-  await supervisionRepo.add(report);
-  const blockers = findings.filter((f) => f.severity === 'block').length;
-  await tendersRepo.update(tenderId, {
-    lastSupervision: {
-      runId: report.runId,
-      verdict: report.verdict,
+      currentSkillHash,
+      basis,
       stage,
-      blockers,
-      at: report.at,
-      basis: report.basis,
+    });
+    await step(3); // skills, missing fields and values done
+
+    // Versions track the real document; a draft's preview is not a version.
+    if (docText !== null && !isDraft) await recordVersion(tender, docText, docHash(docText), stage);
+
+    let aiModel: string | null = null;
+    let aiFindings: SupervisionFinding[] = [];
+    if (stage === 'edit') {
+      // Right after a draft edit only the rules run again; the last AI review's findings carry over until
+      // the next full check verifies them.
+      const prev = tender.lastSupervision ? await supervisionRepo.get(tenderId, tender.lastSupervision.runId) : null;
+      if (prev && (prev.basis ?? 'document') === basis) {
+        aiFindings = prev.findings.filter((f) => f.source === 'ai');
+        aiModel = prev.aiModel;
+      }
+    } else if (!RULES_ONLY.includes(stage) && docText !== null) {
+      await step(4); // contradictions and requirements that limit competition (the AI review)
+      const request = tender.serial ? await bidRequestsRepo.get(tender.serial) : null;
+      const ai = await aiReview({
+        tender,
+        template,
+        provenance,
+        internalParams,
+        docText,
+        requestAnswers: publicDetails(request?.details),
+      });
+      aiModel = ai.model;
+      aiFindings = ai.findings;
+    }
+    await step(5); // proposing fixes
+    // A rule finding about "params.<key>" names the field it concerns (the draft view jumps to it).
+    const taggedRules = rules.map((f) => {
+      const m = /^params\.(.+)$/.exec(f.location);
+      return m && !f.paramKey ? { ...f, paramKey: m[1] } : f;
+    });
+    // Only hard facts block; everything else is a warning for the manager to weigh. Each finding gets a
+    // Hebrew location, its "הצעת הסוכן" and a stable key (plan B2).
+    const labelOf = (k: string) => template.params.find((p) => p.key === k)?.labelHe;
+    const findings: SupervisionFinding[] = withFindingKeys(
+      applySeverityPolicy([...taggedRules, ...aiFindings]).map((f) => ({
+        ...f,
+        location: f.source === 'rules' ? humanLocation(f.location, labelOf) : f.location,
+        fix: f.fix ?? RULE_FIX_HE[f.code] ?? '',
+      })),
+      basis,
+    );
+
+    const report: SupervisionReport = {
+      runId,
+      tenderId,
+      stage,
+      verdict: verdictOf(findings),
+      findings,
+      docHash: docText !== null ? docHash(docText) : null,
+      templateType: tender.type,
+      requiredSkills: REQUIRED_SKILLS[tender.type],
+      skillsUsed: provenance?.skillsUsed ?? [],
+      aiModel,
+      runBy: caller.uid,
+      at: now(),
+      basis,
       dataHash,
-    },
-  });
-  await auditRepo.append({
-    entityType: 'tender',
-    entityId: tenderId,
-    tenderId,
-    actorUid: caller.uid,
-    actorName: caller.name,
-    action: 'supervision',
-    prevState: stage,
-    newState: report.verdict,
-    detail: `${blockers} חוסמים · ${findings.length} ממצאים · run ${report.runId}`,
-  });
-  return report;
+    };
+    await supervisionRepo.add(report);
+    const blockers = findings.filter((f) => f.severity === 'block').length;
+    await tendersRepo.update(tenderId, {
+      lastSupervision: {
+        runId: report.runId,
+        verdict: report.verdict,
+        stage,
+        blockers,
+        at: report.at,
+        basis: report.basis,
+        dataHash,
+      },
+    });
+    const prevDecisions = tender.findingDecisions ?? {};
+    const nextDecisions = reconcileDecisions(prevDecisions, findings, basis, stage);
+    if (JSON.stringify(nextDecisions) !== JSON.stringify(prevDecisions)) {
+      await tendersRepo.setFindingDecisions(tenderId, nextDecisions);
+    }
+    await auditRepo.append({
+      entityType: 'tender',
+      entityId: tenderId,
+      tenderId,
+      actorUid: caller.uid,
+      actorName: caller.name,
+      action: 'supervision',
+      prevState: stage,
+      newState: report.verdict,
+      detail: `${blockers} חוסמים · ${findings.length} ממצאים · run ${report.runId}`,
+    });
+    await tendersRepo.updateSupervisionRun(tenderId, runId, { state: 'done' });
+    return report;
+  } catch (err) {
+    await tendersRepo.updateSupervisionRun(tenderId, runId, { state: 'failed' }).catch(() => undefined);
+    throw err;
+  }
 }
+
 
 /** Confidential (G6) params of a template — never written into the supplier-visible tender. */
 export function splitConfidential(

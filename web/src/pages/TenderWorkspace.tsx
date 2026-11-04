@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/AuthProvider';
@@ -29,6 +29,10 @@ import {
   approvalsView,
   stageBar,
   stagePopover,
+  SUPERVISION_RUN_STALE_MS,
+  AUTO_RUN_GRACE_MS,
+  autoRunPending,
+  type FindingView,
   visibleTabs,
   resolveTab,
   blockingApproverRoles,
@@ -41,19 +45,21 @@ import {
 } from '@obms/shared';
 import ChatPanel from '../components/ChatPanel';
 import { api } from '../lib/api';
-import DocumentViewer from '../components/DocumentViewer';
+import DocView, { type DocViewHandle } from '../components/agent/DocView';
 import DraftPanel from '../components/DraftPanel';
-import DraftReview from '../components/DraftReview';
+import DraftPage from '../components/agent/DraftPage';
+import FindingsPanel from '../components/agent/FindingsPanel';
 import AccessPanel from '../components/AccessPanel';
 import QuestionsPanel from '../components/QuestionsPanel';
 import EvaluationPanel from '../components/EvaluationPanel';
 import QuartetCard from '../components/QuartetCard';
 import NextActionCard from '../components/NextActionCard';
 import DatesCard from '../components/DatesCard';
-import SupervisorPanel from '../components/SupervisorPanel';
+import AgentReport from '../components/agent/AgentReport';
 import TenderHeader, { type HeaderButton } from '../components/TenderHeader';
 import OnBehalfDialog from '../components/agent/OnBehalfDialog';
 import PublishDialog from '../components/agent/PublishDialog';
+import { markDraftSeen } from '../lib/seen';
 
 // The prototype's tabs (shared visibleTabs). "שיתוף והרשאות" and "תיק מכרז" are hidden for now (plan D9):
 // suppliers are picked in the publish dialog. פעילות and היסטוריית גרסאות join once built (plan D10); the
@@ -77,15 +83,18 @@ export default function TenderWorkspace() {
   const { pendingSuppliers } = useTenderInternal(id);
   // A new case opens on its draft (?tab=document), where the supervisor's check is already running.
   const [searchParams] = useSearchParams();
-  const [tab, setTab] = useState<Tab>(searchParams.get('tab') === 'document' ? 'document' : 'overview');
+  // ?tab= opens a tab from the home list (any tab; one that hasn't joined yet falls back to the overview).
+  const [tab, setTab] = useState<Tab>((searchParams.get('tab') as Tab | null) ?? 'overview');
   const [focusField, setFocusField] = useState<{ key: string; n: number } | null>(null);
+  // The draft page's canvas: jumping to a fix scrolls only it (spec §6.3).
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const docRef = useRef<DocViewHandle>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   // Set when the supervisor blocked publication — offers the audited manager override.
   const [blocked, setBlocked] = useState(false);
   const [overrideReason, setOverrideReason] = useState('');
-  const [initialCheck, setInitialCheck] = useState(false);
   const reports = useSupervision(id);
   // A check this browser started (until the server reports runs itself — plan B1).
   const [agentBusy, setAgentBusy] = useState(false);
@@ -94,18 +103,21 @@ export default function TenderWorkspace() {
   const [onBehalfError, setOnBehalfError] = useState('');
   const [publishOpen, setPublishOpen] = useState(false);
 
-  // A new case is created in seconds; its first supervisor check starts here, once per case.
+  // The server starts the agent by itself (plan B1). Until it claims the run, the agent shows as starting;
+  // when that grace period ends the page re-renders, so a failed automatic run leaves "הרץ סוכן מפקח".
+  const [, setGraceTick] = useState(0);
   useEffect(() => {
-    if (!tender || role !== 'tender_manager' || tender.lastSupervision) return;
-    const key = `initial-supervision:${tender.id}`;
-    if (sessionStorage.getItem(key)) return;
-    sessionStorage.setItem(key, '1');
-    setInitialCheck(true);
-    api
-      .runSupervision({ tenderId: tender.id, initial: true })
-      .catch((e) => console.error('initial supervision failed', e))
-      .finally(() => setInitialCheck(false));
-  }, [tender?.id, tender?.lastSupervision, role]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!tender || !autoRunPending(tender, Date.now())) return;
+    const since = tender.documentGeneratedAt && hasDocument(tender) ? tender.documentGeneratedAt : tender.createdAt;
+    const left = Math.max(0, since + AUTO_RUN_GRACE_MS - Date.now()) + 50;
+    const timer = setTimeout(() => setGraceTick((n) => n + 1), left);
+    return () => clearTimeout(timer);
+  }, [tender?.id, tender?.lastSupervision?.at, tender?.supervisionRun?.state, tender?.documentGeneratedAt]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The requester opened the draft: "הטיוטה מוכנה" leaves their home list (plan A5).
+  useEffect(() => {
+    if (tender && user && tab === 'document' && draftStateOf(tender) !== 'doc') markDraftSeen(tender.id, user.uid);
+  }, [tender?.id, tender?.documentStatus, tab, user?.uid]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) return <div className="text-tx-soft">{t('common.loading')}</div>;
   if (!tender) return <div className="text-tx-soft">{denied ? t('team.notAssigned') : '404'}</div>;
@@ -163,8 +175,12 @@ export default function TenderWorkspace() {
   const fresh =
     !!latest &&
     (ds === 'doc' ? latest.basis !== 'draft' : latest.basis === 'draft' && latest.dataHash === tender.draftDataHash);
-  const fv = findingsView(fresh ? { findings: latest.findings, basis: latest.basis ?? 'document' } : null);
-  const agent: AgentRunState = agentBusy || initialCheck ? 'running' : fresh ? 'done' : 'none';
+  const fv = findingsView(fresh ? { findings: latest.findings, basis: latest.basis ?? 'document' } : null, tender.findingDecisions);
+  // The run everyone sees (plan B1); a run this browser just asked for counts until the server reports it.
+  const serverRun = tender.supervisionRun;
+  const serverRunning = serverRun?.state === 'running' && Date.now() - serverRun.startedAt < SUPERVISION_RUN_STALE_MS;
+  const agent: AgentRunState =
+    agentBusy || serverRunning || autoRunPending(tender, Date.now()) ? 'running' : fresh ? 'done' : 'none';
   const nameOf = (uid: string) =>
     users.find((u) => u.uid === uid)?.displayName ??
     access.find((a) => a.principalId === uid)?.displayName ??
@@ -215,20 +231,91 @@ export default function TenderWorkspace() {
       setBusy(false);
     }
   };
+  const runAgent = () => {
+    setAgentBusy(true);
+    setError('');
+    api
+      .runSupervision({ tenderId: tender.id })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setAgentBusy(false));
+  };
+
+  // Jump to where a finding is incorporated (prototype jumpFix, line 2589): empty fields pulse, a field
+  // pulses, a quoted text or a section flashes. Only the draft page's canvas scrolls.
+  const jumpTo = (f: FindingView) => {
+    if (ds === 'doc') {
+      docRef.current?.jumpTo(f); // inside the document frame only
+      return;
+    }
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const all = <T extends Element>(sel: string) => [...canvas.querySelectorAll<T>(sel)];
+    let marks: HTMLElement[] = [];
+    if (f.code === 'MISSING_INFO') marks = all<HTMLElement>('mark[data-miss]');
+    if (!marks.length && f.paramKey) marks = all<HTMLElement>(`mark[data-k="${CSS.escape(f.paramKey)}"]`);
+    let section: HTMLElement | undefined;
+    if (!marks.length) {
+      const blocks = all<HTMLElement>('p, b[data-sec]');
+      const norm = (x: string) => x.replace(/\s+/g, ' ').trim();
+      const quote = f.evidence ? norm(f.evidence) : '';
+      section =
+        (quote ? blocks.find((el) => norm(el.textContent ?? '').includes(quote)) : undefined) ??
+        blocks.find((el) => !!el.dataset.heading && f.location.includes(norm(el.dataset.heading)));
+    }
+    const target = marks[0] ?? section;
+    if (!target) return;
+    const cr = canvas.getBoundingClientRect();
+    const er = target.getBoundingClientRect();
+    canvas.scrollTo({
+      top: Math.max(0, canvas.scrollTop + (er.top - cr.top) - canvas.clientHeight / 2 + er.height / 2),
+      behavior: 'smooth',
+    });
+    for (const m of marks) {
+      m.classList.remove('mark-pulse');
+      void m.offsetWidth; // restart the animation
+      m.classList.add('mark-pulse');
+    }
+    if (section) {
+      const el = section;
+      el.classList.add('sec-flash');
+      setTimeout(() => el.classList.remove('sec-flash'), 2200);
+    }
+  };
+
+  // "הטמע": the decision first (on the current check), then the proposed value — the rules then check again.
+  const applyFindings = async (list: FindingView[], jump: boolean) => {
+    const warnings = list.filter((f) => f.severity !== 'block');
+    const writes = ds !== 'doc' ? list.filter((f) => f.paramKey && f.suggestion) : [];
+    await run(async () => {
+      if (warnings.length) {
+        await api.decideFinding({ tenderId: tender.id, keys: warnings.map((f) => f.key), action: 'applied' });
+      }
+      if (writes.length) {
+        const params: Record<string, string | number> = {};
+        for (const f of writes) {
+          const isNumber = template?.params.find((p) => p.key === f.paramKey)?.type === 'number';
+          const plain = f.suggestion!.replace(/,/g, '');
+          params[f.paramKey!] = isNumber && plain.trim() !== '' && Number.isFinite(Number(plain)) ? Number(plain) : f.suggestion!;
+        }
+        await api.updateTenderDraft({ tenderId: tender.id, params });
+      }
+    });
+    if (jump && list.length === 1) {
+      if (shown !== 'document') setTab('document');
+      setTimeout(() => jumpTo(list[0]), 350); // once the tab and the new value are on screen
+    }
+  };
+
   const onHeader = () => {
     if (!hv) return;
     switch (hv.kind) {
       case 'run_agent':
-        setAgentBusy(true);
-        setError('');
-        api
-          .runSupervision({ tenderId: tender.id })
-          .catch((e) => setError(e instanceof Error ? e.message : String(e)))
-          .finally(() => setAgentBusy(false));
+        runAgent();
         return;
       case 'create_document':
         void run(async () => {
           await api.generateDocument({ tenderId: tender.id });
+          // The server checks the new document by itself (prototype agentCreateDoc; plan B1 trigger).
           setTab('document');
         });
         return;
@@ -362,11 +449,6 @@ export default function TenderWorkspace() {
         />
       )}
 
-      {(initialCheck || (!tender.lastSupervision && isManager)) && (
-        <div className="card mb-4 border-teal-200 bg-teal-soft p-3 text-sm text-teal-600">
-          {t('sup.initialRunning')}
-        </div>
-      )}
       {isManager && REQUIRE_APPROVALS && tender.status === 'internal_review' && waiting.length > 0 && (
         <div className="card mb-4 border-teal-200 bg-teal-soft p-3 text-sm text-teal-700">
           {t('ws.reviewWaiting', { roles: waiting.map((r) => t(`role.${r}`)).join(', ') })}
@@ -421,52 +503,92 @@ export default function TenderWorkspace() {
         </div>
       )}
       {shown === 'document' && (
-        <div>
-          {hasDocument(tender) ? (
-            <div className="space-y-3">
-              {isManager && tender.status === 'draft' && (
-                <div className="card flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
-                  <span className="text-tx-soft">{t('draft.regenerateHint')}</span>
-                  <button
-                    className="btn btn-sm"
-                    disabled={busy}
-                    onClick={async () => {
-                      if (!confirm(t('draft.regenerateConfirm'))) return;
-                      setBusy(true);
-                      setError('');
-                      try {
-                        await api.regenerateDocument({ tenderId: tender.id });
-                      } catch (e) {
-                        setError(e instanceof Error ? e.message : String(e));
-                      } finally {
-                        setBusy(false);
-                      }
-                    }}
-                  >
-                    {t('draft.regenerate')}
-                  </button>
-                </div>
-              )}
-              <DocumentViewer tenderId={tender.id} googleDocId={tender.googleDocId} />
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <DraftReview
-                tender={tender}
-                template={template}
-                canManage={isManager}
-                checking={initialCheck}
-                onEditField={(key) => setFocusField((f) => ({ key, n: (f?.n ?? 0) + 1 }))}
-              />
-              <DraftPanel
-                tender={tender}
-                template={template}
-                canManage={isManager}
-                onOpenInspector={() => setTab('agent')}
-                focusField={focusField}
-              />
-            </div>
-          )}
+        // Two columns (prototype dsplit, lines 259–266): the page, and the agent's panel beside it — sticky
+        // under the tender header, one column below 1000px.
+        <div className="grid items-start gap-[18px] min-[1000px]:grid-cols-[minmax(0,1fr)_400px]">
+          <div className="min-w-0 space-y-4">
+            {hasDocument(tender) ? (
+              <>
+                {isManager && tender.status === 'draft' && (
+                  <div className="card flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
+                    <span className="text-tx-soft">{t('draft.regenerateHint')}</span>
+                    <button
+                      className="btn btn-sm"
+                      disabled={busy}
+                      onClick={async () => {
+                        if (!confirm(t('draft.regenerateConfirm'))) return;
+                        await run(() => api.regenerateDocument({ tenderId: tender.id }));
+                      }}
+                    >
+                      {t('draft.regenerate')}
+                    </button>
+                  </div>
+                )}
+                <DocView ref={docRef} tenderId={tender.id} googleDocId={tender.googleDocId} internal />
+              </>
+            ) : (
+              <>
+                <DraftPage
+                  ref={canvasRef}
+                  tender={tender}
+                  template={template}
+                  status={
+                    ds === 'creating' ? (
+                      'יוצר את המסמך…'
+                    ) : agent === 'running' ? (
+                      <>
+                        <span className="typing-dots" aria-hidden="true">
+                          <i />
+                          <i />
+                          <i />
+                        </span>
+                        הסוכן המפקח בודק את הטיוטה…
+                      </>
+                    ) : agent === 'none' ? (
+                      'הסוכן המפקח טרם בדק'
+                    ) : fv.open.length ? (
+                      `הסוכן המפקח מצא ${fv.open.length} ממצאים לבדיקתך`
+                    ) : (
+                      'הסוכן המפקח בדק ואין ממצאים פתוחים'
+                    )
+                  }
+                />
+                {/* Field values are typed here, under the page (plan D4). */}
+                <DraftPanel
+                  tender={tender}
+                  template={template}
+                  canManage={isManager}
+                  onOpenInspector={() => setTab('agent')}
+                  focusField={focusField}
+                  editorOnly
+                />
+              </>
+            )}
+          </div>
+          <aside
+            className="min-[1000px]:sticky"
+            style={{
+              // 16px under the stuck header; sticky offsets count from inside the scroll area's 32px padding.
+              top: 'calc(var(--tender-header-h, 0px) - 16px)',
+              maxHeight: 'calc(100vh - var(--tender-header-h, 0px) - 92px)',
+            }}
+          >
+            <FindingsPanel
+              agent={agent}
+              serverStep={serverRunning ? serverRun?.step : null}
+              on={ds === 'doc' ? 'document' : 'draft'}
+              creating={ds === 'creating'}
+              view={fv}
+              canManage={isManager}
+              busy={busy}
+              onRun={runAgent}
+              onApply={(f) => void applyFindings([f], true)}
+              onApplyAll={() => void applyFindings(fv.open, false)}
+              onEditField={(key) => setFocusField((f) => ({ key, n: (f?.n ?? 0) + 1 }))}
+              onFocus={jumpTo}
+              onShowAll={() => setTab('agent')}
+            />
+          </aside>
         </div>
       )}
       {shown === 'questions' && (
@@ -479,7 +601,28 @@ export default function TenderWorkspace() {
         />
       )}
       {shown === 'bids' && <EvaluationPanel tender={tender} submissions={submissions} />}
-      {shown === 'agent' && <SupervisorPanel tender={tender} template={template} />}
+      {shown === 'agent' && (
+        <AgentReport
+          tender={tender}
+          template={template}
+          view={fv}
+          agent={agent}
+          serverStep={serverRunning ? serverRun?.step : null}
+          on={ds === 'doc' ? 'document' : 'draft'}
+          creating={ds === 'creating'}
+          lastAt={fresh ? latest.at : null}
+          canManage={isManager}
+          busy={busy}
+          onRun={runAgent}
+          onApply={(f) => void applyFindings([f], true)}
+          onApplyAll={() => void applyFindings(fv.warnings, false)}
+          onSkip={(f) => void run(() => api.decideFinding({ tenderId: tender.id, keys: [f.key], action: 'skipped' }))}
+          onEditField={(key) => {
+            setTab('document');
+            setFocusField((f) => ({ key, n: (f?.n ?? 0) + 1 }));
+          }}
+        />
+      )}
 
       {/* Case team chat: floats over every tab; the button shows the unread count while it is closed. */}
       {chatOpen && (

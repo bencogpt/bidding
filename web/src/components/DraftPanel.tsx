@@ -35,6 +35,7 @@ export default function DraftPanel({
   canManage,
   onOpenInspector,
   focusField,
+  editorOnly = false,
 }: {
   tender: TenderDoc;
   template: TemplateDoc | null;
@@ -42,6 +43,9 @@ export default function DraftPanel({
   onOpenInspector: () => void;
   // Set by the draft view when a finding's "edit the field" is clicked; `n` makes repeat clicks count.
   focusField?: { key: string; n: number } | null;
+  // Only the field editor: the header and the agent's side panel run the check and create the document
+  // (plan D5 — no second run button or status box on the draft tab).
+  editorOnly?: boolean;
 }) {
   const { t } = useTranslation();
   const { params: internalParams } = useTenderInternal(tender.id);
@@ -114,6 +118,7 @@ export default function DraftPanel({
 
   return (
     <div className="space-y-4">
+      {!editorOnly && (
       <div className="card space-y-3 p-5">
         <h3 className="font-display text-xl font-semibold">{t('draft.title')}</h3>
         <p className="text-sm text-tx-soft">{t('draft.hint')}</p>
@@ -145,6 +150,8 @@ export default function DraftPanel({
           )}
         </div>
       </div>
+      )}
+      {editorOnly && error && <div className="text-sm text-red-600">{error}</div>}
 
       {canManage && (
         <div className="card space-y-3 p-5">

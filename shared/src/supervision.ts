@@ -159,7 +159,8 @@ export interface TenderProvenance {
 
 export type FindingSeverity = 'block' | 'warn' | 'info';
 export type SupervisionVerdict = 'PASS' | 'WARN' | 'BLOCK';
-export type SupervisionStage = 'created' | 'review' | 'ready' | 'prepublish' | 'refresh' | 'manual';
+// 'edit': the rules re-checked right after a draft edit (no AI; the last AI findings carry over).
+export type SupervisionStage = 'created' | 'review' | 'ready' | 'prepublish' | 'refresh' | 'manual' | 'edit';
 
 export type FindingCode =
   // template
@@ -206,6 +207,10 @@ export interface SupervisionFinding {
   // The agent's proposed replacement for that field's value (Hebrew text or a number). With it the
   // manager can apply the fix in one click (updateTenderDraft); without it only "edit the field".
   suggestion?: string;
+  // Stable key ('draft:…' / 'doc:…', see findingKey) — decisions and jumps refer to it (plan B2).
+  key?: string;
+  // "הצעת הסוכן": the proposed fix in one Hebrew sentence (the AI's, or a fixed text per rule code).
+  fix?: string;
 }
 
 export interface SupervisionReport {
@@ -225,6 +230,30 @@ export interface SupervisionReport {
   // fingerprints exactly the data that was checked.
   basis?: 'draft' | 'document';
   dataHash?: string | null;
+}
+
+/**
+ * The agent's current run, on the tender doc so everyone viewing the case sees it (plan B1). step is the
+ * index of the thinking step reached (AGENT_STEPS_HE, 0–5).
+ */
+export interface SupervisionRunState {
+  runId: string;
+  state: 'running' | 'done' | 'failed';
+  basis: 'draft' | 'document';
+  step: number;
+  startedAt: number;
+  by: string;
+}
+
+/** A run older than this while "running" is treated as dead (a crashed function never finished it). */
+export const SUPERVISION_RUN_STALE_MS = 10 * 60 * 1000;
+
+/** The manager's decision on one finding (plan B2): incorporated, or left as is. Warnings only. */
+export interface FindingDecisionRecord {
+  action: 'applied' | 'skipped';
+  by: string;
+  byName: string;
+  at: number;
 }
 
 /** Small summary kept on the tender doc so lists/headers can show the latest verdict. */

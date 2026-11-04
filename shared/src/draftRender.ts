@@ -1,6 +1,26 @@
 // Rendering a draft's text from the template and the draft values — the same rule on the server (the
 // inspector's preview, the generated document) and in the browser (the draft view).
-import { isOmittedParam } from './procurementForm.js';
+import { BLANK_LINE, isOmittedParam, requiredBlank } from './procurementForm.js';
+import { isConfidentialParam } from './templates.js';
+
+/**
+ * The values the document is created with (plan D7): a field still empty is printed as a blank line to
+ * complete by hand — with its label when it is required, so the publish gate can tell it is still open.
+ * Confidential fields are never printed; tags removed from the system print nothing (fillTemplate).
+ */
+export function withEmptyFieldsPrinted(
+  params: Record<string, string | number>,
+  templateParams: readonly { key: string; labelHe: string; required: boolean; internal?: boolean }[],
+): Record<string, string | number> {
+  const out = { ...params };
+  for (const p of templateParams) {
+    if (isConfidentialParam(p) || isOmittedParam(p)) continue;
+    const v = out[p.key];
+    if (v !== undefined && String(v).trim() !== '') continue;
+    out[p.key] = p.required ? requiredBlank(p.labelHe) : BLANK_LINE;
+  }
+  return out;
+}
 
 // Unfilled placeholders stay visible as {{key}} (matching real Docs mode) so the supervisor and
 // the manager see the gap — never silently papered over.
