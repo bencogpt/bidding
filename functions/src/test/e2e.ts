@@ -495,6 +495,15 @@ async function main() {
   // ---- manager: define a new supplier + create its login ----
   await signOut(auth);
   await login('manager@obms.test');
+  // Adding a suggested supplier: the form used to send id: undefined → null, which is rejected; a new
+  // supplier is sent without an id (as below).
+  let nullIdRejected = false;
+  try {
+    await call('upsertSupplier')({ id: null, name: 'x', country: 'IL', isIsraeli: true, status: 'active' });
+  } catch (e) {
+    nullIdRejected = /Expected string, received null/.test((e as Error).message);
+  }
+  assert.ok(nullIdRejected, 'the bug: a null id is rejected');
   const sup = (await call('upsertSupplier')({
     name: 'ספק בדיקה',
     contactEmail: 'newsup@obms.test',
