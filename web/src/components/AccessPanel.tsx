@@ -184,7 +184,7 @@ export default function AccessPanel({
               <div className="text-sm text-tx-mute">{t(`ws.externalStatus.${externalStatus ?? 'none'}`)}</div>
             ) : searching ? null : (
               <ul className="space-y-2 text-sm">
-                {external.map((c, i) => (
+                {(external ?? []).map((c, i) => (
                   <li key={i} className="rounded border border-paper-2 p-2">
                     <div className="flex items-center gap-2">
                       <span className="font-medium">{c.name}</span>

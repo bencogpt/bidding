@@ -103,7 +103,7 @@ export default function MyDesk() {
                   <tr>
                   <th className="px-5 py-3 text-start font-medium">{t('dashboard.col.serial')}</th>
                   <th className="px-5 py-3 text-start font-medium">{t('req.col.opened')}</th>
-                  <th className="px-5 py-3 text-start font-medium">{t('req.col.brief')}</th>
+                  <th className="px-5 py-3 text-start font-medium">{t('req.col.name')}</th>
                   <th className="px-5 py-3 text-start font-medium">{t('req.requestedBy')}</th>
                     <th className="px-5 py-3" />
                   </tr>
@@ -123,7 +123,7 @@ export default function MyDesk() {
                         <span dir="ltr">{r.serial}</span>
                       </td>
                       <td className="whitespace-nowrap px-5 py-3 text-xs text-tx-mute">{fmtDate(r.createdAt)}</td>
-                      <td className="max-w-md truncate px-5 py-3">{r.brief}</td>
+                      <td className="max-w-md truncate px-5 py-3" title={r.brief}>{String((r.details as Record<string, unknown> | undefined)?.service_name ?? '').trim() || r.brief}</td>
                       <td className="whitespace-nowrap px-5 py-3 text-tx-soft">{r.requesterName}</td>
                       <td className="whitespace-nowrap px-5 py-3 text-end">
                         {isManager ? (

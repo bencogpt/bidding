@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/AuthProvider';
 import { useSupplierTenders } from '../lib/hooks';
 import StatusBadge from '../components/StatusBadge';
+import type { TenderStatus } from '@obms/shared';
 
 export default function SupplierPortal() {
   const { t } = useTranslation();
@@ -31,7 +32,7 @@ export default function SupplierPortal() {
                 {tn.serial && <div className="text-xs text-tx-mute" dir="ltr">{tn.serial}</div>}
                 <div className="mt-1 flex items-center gap-2">
                   <span className="chip">{t(`type.${tn.type}`)}</span>
-                  <StatusBadge status={tn.status} />
+                  <StatusBadge status={tn.status as TenderStatus} />
                 </div>
               </div>
               <Link to={`/portal/${tn.id}`} className="btn btn-gold">

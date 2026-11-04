@@ -27,11 +27,49 @@ import {
 import { useBidRequest, useTemplate, useUsers } from '../lib/hooks';
 import { api } from '../lib/api';
 import TagsInput from '../components/TagsInput';
-import RequesterDetails from '../components/RequesterDetails';
-import StageBar from '../components/StageBar';
+import RequestSnapshot from '../components/RequestSnapshot';
+import Avatar from '../components/Avatar';
+import ChainBar from '../components/ChainBar';
 import SectionCard, { StatusChip } from '../components/SectionCard';
+import { useAuth } from '../auth/AuthProvider';
 
 type Criterion = { name: string; weight: number };
+
+// The type the request reads like (the manager still chooses): the one whose key words appear most.
+const TYPE_HINTS: [TenderType, RegExp][] = [
+  ['service', /נותני שירות|כוח אדם|צוות|תחזוק|פיתוח|שירותים|SLA/g],
+  ['goods', /טובין|רכישת|אספקת|ציוד|מדפסות|ריהוט|חומרה|שרתים|מסכים/g],
+  ['project', /פרויקט|תוצרים|אבני דרך|אבן דרך|בינוי|שיפוץ/g],
+];
+function suggestType(text: string): TenderType | '' {
+  let best: TenderType | '' = '';
+  let score = 0;
+  for (const [type, re] of TYPE_HINTS) {
+    const n = text.match(re)?.length ?? 0;
+    if (n > score) {
+      score = n;
+      best = type;
+    }
+  }
+  return best;
+}
+
+/** dd.mm hh:mm in Israel time. */
+function fmtSent(ms: number): string {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Jerusalem',
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })
+      .formatToParts(ms)
+      .map((x) => [x.type, x.value]),
+  );
+  return `${p.day}.${p.month} ${p.hour}:${p.minute}`;
+}
 
 function toLocalInput(ms: number): string {
   const d = new Date(ms);
@@ -44,24 +82,6 @@ function toLocalInput(ms: number): string {
 const DEADLINE_ORDER = 9;
 const TEAM_ORDER = 11;
 const TAGS_ORDER = 15;
-// The agent's recommendation from the request text: the type whose keywords appear most. The choice stays with procurement.
-const TYPE_HINTS: [TenderType, RegExp][] = [
-  [TENDER_TYPES.service, /נותני שירות|כוח אדם|צוות|תחזוקה|פיתוח|שירותים|SLA/g],
-  [TENDER_TYPES.goods, /טובין|רכישת|אספקת|ציוד|מדפסות|ריהוט|חומרה|שרתים|מסכים/g],
-  [TENDER_TYPES.project, /פרויקט|תוצרים|אבני דרך|אבן דרך|בינוי|שיפוץ/g],
-];
-function suggestType(text: string): TenderType | '' {
-  let best: TenderType | '' = '';
-  let score = 0;
-  for (const [type, re] of TYPE_HINTS) {
-    const n = (text.match(re) ?? []).length;
-    if (n > score) {
-      score = n;
-      best = type;
-    }
-  }
-  return best;
-}
 const YES = 'כן';
 const NO = 'לא';
 
@@ -70,6 +90,7 @@ export default function TenderCreate() {
   const nav = useNavigate();
   const { serial } = useParams();
   const { request } = useBidRequest(serial);
+  const { user } = useAuth();
   const brief = request?.brief ?? '';
   const [title, setTitle] = useState('');
   const [type, setType] = useState<TenderType | ''>('');
@@ -333,6 +354,9 @@ export default function TenderCreate() {
     </div>
   );
 
+  const sentAt = request ? fmtSent(request.createdAt) : '';
+  const meName = user?.displayName || user?.email || '';
+
   if (request === undefined) return <div className="p-6 text-tx-soft">{t('common.loading')}</div>;
   if (request === null) return <div className="p-6 text-red-600">{t('req.notFound')}</div>;
   if (request.status === 'converted')
@@ -349,34 +373,23 @@ export default function TenderCreate() {
 
   return (
     <div className="mx-auto max-w-5xl">
-      <h1 className="mb-2 font-display text-2xl font-bold">{t('req.phase2Title')}</h1>
-      <p className="mb-5 text-sm text-tx-soft">{t('req.phase2Hint')}</p>
-      <StageBar
+      <h1 className="mb-2 font-display text-2xl font-bold">
+        {t('nav.newRequest')} · <bdi>{request.serial}</bdi>
+      </h1>
+      <p className="mb-5 text-sm text-tx-soft">{t('req.phase2Sub', { name: request.requesterName })}</p>
+      <ChainBar
+        caption={t('req.chainCaption')}
         steps={[
-          { label: `1 · ${t('req.sectionTitle')}`, state: 'done' },
-          { label: `2 · ${t('req.procSection')}`, state: 'cur' },
+          {
+            title: t('req.chainReceived'),
+            sub: `${request.requesterName} · ${sentAt}`,
+            state: 'done',
+            onClick: () => document.getElementById('req-snapshot')?.scrollIntoView({ behavior: 'smooth' }),
+          },
+          { title: t('req.chainProc'), sub: t('req.chainProcSub'), state: 'cur', nowLabel: t('req.chainNow') },
+          { title: t('req.chainDraft'), sub: t('req.chainDraftSub'), state: 'todo' },
         ]}
       />
-      <SectionCard
-        n={1}
-        title={t('req.sectionTitle')}
-        owner={
-          <>
-            <span>{t('req.owner')} · {request.requesterName}</span>
-            <StatusChip tone="ok">{t('req.statusSent')}</StatusChip>
-          </>
-        }
-      >
-        <div className="mb-3 text-sm">
-          <span className="text-tx-soft">{t('req.bidNumber')}: </span>
-          <span className="font-semibold">{request.serial}</span>
-        </div>
-        <div className="whitespace-pre-wrap rounded bg-paper-2 p-3 text-sm">{request.brief}</div>
-        <div className="mt-4">
-          <RequesterDetails details={request.details} />
-        </div>
-      </SectionCard>
-
       {notConverted && (
         <div className="card mb-5 border-amber-300 bg-amber-50 p-4 text-sm text-amber-800">
           {t('conv.createBlocked', { n: templateStatus!.unresolved })}
@@ -384,15 +397,26 @@ export default function TenderCreate() {
       )}
       <SectionCard
         n={2}
-        title={t('req.procSection')}
-        owner={<StatusChip tone="wait">{t('req.statusInProgress')}</StatusChip>}
+        collapsible
+        title={t('req.completeTitle')}
+        subtitle={t('req.completeSub')}
+        owner={
+          <>
+            {meName && <Avatar name={meName} size={24} />}
+            <span>{meName} · {t('req.procRole')}</span>
+            <StatusChip tone="wait">{t('req.statusInProgress')}</StatusChip>
+          </>
+        }
       >
+      <RequestSnapshot id="req-snapshot" request={request} sentAt={sentAt} />
       <form onSubmit={submit} className="space-y-5">
         <div>
-          <label className="label">{t('create.type')}</label>
-          <div className="grid gap-3 sm:grid-cols-3" role="radiogroup" aria-label={t('create.type')}>
+          <h3 className="mb-1 font-semibold">{t('req.typeHeading')}</h3>
+          <p className="mb-3 text-sm text-tx-soft">{t('req.typeIntro')}</p>
+          <div className="grid gap-3 sm:grid-cols-3" role="radiogroup" aria-label={t('req.typeHeading')}>
             {(['service', 'goods', 'project'] as const).map((tt) => {
               const on = type === tt;
+              const hint = !type && suggested === tt;
               return (
                 <button
                   key={tt}
@@ -401,16 +425,20 @@ export default function TenderCreate() {
                   aria-checked={on}
                   onClick={() => requestType(tt)}
                   className={
-                    'rounded-lg border px-4 py-3 text-start transition ' +
-                    (on ? 'border-gold bg-gold-soft/40 ring-1 ring-gold' : 'border-black/10 hover:border-gold')
+                    'relative rounded-lg border px-4 py-3 text-start transition ' +
+                    (on
+                      ? 'border-accent bg-accent-soft ring-1 ring-accent'
+                      : hint
+                        ? 'border-dashed border-accent hover:bg-accent-soft/50'
+                        : 'border-black/10 hover:border-accent')
                   }
                 >
-                  {suggested === tt && (
-                    <em className="mb-1 inline-block rounded-full bg-accent-soft px-2 text-[10px] not-italic leading-4 text-accent">
-                      {t('create.suggested')}
+                  {hint && (
+                    <em className="absolute end-3 top-2.5 rounded-full bg-accent-soft px-2 text-[10px] not-italic leading-4 text-accent">
+                      {t('req.suggested')}
                     </em>
                   )}
-                  <b className={'mb-1 block text-sm ' + (on ? 'text-gold-deep' : '')}>{t(`type.${tt}`)}</b>
+                  <b className={'mb-1 block text-sm ' + (on ? 'text-accent' : '')}>{t(`type.${tt}`)}</b>
                   <span className="text-xs leading-relaxed text-tx-soft">{t(`type.desc.${tt}`)}</span>
                 </button>
               );
