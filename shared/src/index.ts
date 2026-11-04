@@ -24,3 +24,4 @@ export * from './workspaceLabels.js';
 export * from './workspaceView.js';
 export * from './approvalRules.js';
 export * from './autoRun.js';
+export * from './activityFeed.js';

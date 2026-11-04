@@ -276,6 +276,40 @@ async function main() {
   assert.equal(locked.status, 'ready', "the manager's final approval goes straight from the draft to ready");
   assert.ok(locked.lockedAt, 'and locks the case');
   console.log('✓ approvals: team first (legal after requester and finance), on behalf with a reason, manager last');
+  // Reopen a locked case (plan B5): a new editable copy, clean approvals, the locked original kept.
+  await signOut(auth);
+  await login('requester@obms.test');
+  let reopenDenied = false;
+  try {
+    await call('reopenTender')({ tenderId });
+  } catch {
+    reopenDenied = true;
+  }
+  assert.ok(reopenDenied, 'only the tender manager can reopen');
+  await signOut(auth);
+  await login('manager@obms.test');
+  await call('reopenTender')({ tenderId });
+  const reopened = (await getDoc(doc(db, 'tenders', tenderId))).data()!;
+  assert.equal(reopened.status, 'internal_review', 'reopened: back to writing');
+  assert.equal(reopened.lockedAt, null, 'unlocked');
+  assert.deepEqual(Object.keys(reopened.approvals ?? {}), [], 'a clean round of approvals');
+  assert.equal(reopened.lockedDocuments?.length, 1, 'the locked original is kept');
+  assert.notEqual(reopened.docExportPath, reopened.lockedDocuments[0].docExportPath, 'with a new document to edit');
+  assert.equal(reopened.lockedDocuments[0].approvals.legal.uid, goodsTeam.legal, 'and the approvals it was locked with');
+  const reopenedCheck = await waitForCheck(tenderId, 'document');
+  assert.ok(reopenedCheck, 'the agent checked the new document');
+  let reopenTwice = false;
+  try {
+    await call('reopenTender')({ tenderId });
+  } catch {
+    reopenTwice = true;
+  }
+  assert.ok(reopenTwice, 'only a locked document can be reopened');
+  // …approved and locked again, ready to publish.
+  await approveAs(tenderId, ['requester', 'finance', 'legal']);
+  await call('transitionTender')({ tenderId, to: 'ready' });
+  assert.equal((await getDoc(doc(db, 'tenders', tenderId))).data()!.status, 'ready', 'locked again');
+  console.log('✓ reopen: new copy, clean approvals, locked original kept, locked again');
   // Publishing goes to the suppliers the manager picked beforehand — at least one.
   let noSuppliers = false;
   try {
@@ -293,7 +327,9 @@ async function main() {
     data: { verdict: string };
   };
   assert.notEqual(published.data.verdict, 'BLOCK', 'clean tender passes the supervisor gate');
-  assert.equal((await getDoc(doc(db, 'tenders', tenderId))).data()!.status, 'published');
+  const publishedDoc = (await getDoc(doc(db, 'tenders', tenderId))).data()!;
+  assert.equal(publishedDoc.status, 'published');
+  assert.ok(publishedDoc.publishedAt, 'the publication date is recorded (overview: פרסום לספקים)');
   console.log(`✓ supervisor: provenance + G6 split + gate passed (${published.data.verdict})`);
 
   // An empty field of the draft is one warning (plan D7): the document can still be created, the field
@@ -380,6 +416,32 @@ async function main() {
   const clearCheck = (await call('runSupervision')({ tenderId: bad.data.id })) as { data: { verdict: string } };
   assert.notEqual(clearCheck.data.verdict, 'BLOCK', 'the cleaned document passes again');
   console.log('✓ approvals: refused while the document has a blocking finding');
+  // The versions tab (plan B6): each observed edit is a version with a summary; a version can be viewed and compared.
+  const verDoc = await getDoc(doc(db, 'tenders', bad.data.id, 'internal', 'versions'));
+  const verList = (verDoc.data()?.list ?? []) as { n: number; summary?: string; changes?: number; by?: string }[];
+  assert.ok(verList.length >= 3, 'the document, the edit with the placeholder, and the cleaned document are versions');
+  assert.equal(verList[0].summary, 'המסמך נוצר מהטיוטה', 'version 1 is the document as created');
+  assert.equal(verList[0].by, 'דנה מנהלת', 'and records who created it');
+  assert.ok((verList[1].changes ?? 0) >= 1 && /שונתה|שונו/.test(verList[1].summary ?? ''), 'the edit is summarised');
+  const seen = (await call('getVersionView')({ tenderId: bad.data.id, n: 1 })) as { data: { text: string } };
+  assert.ok(seen.data.text.length > 100, 'a version can be viewed');
+  const versionCmp = (await call('getVersionView')({ tenderId: bad.data.id, n: 2, compare: true })) as {
+    data: { currentN: number; rows: { kind: string; text: string }[] };
+  };
+  assert.equal(versionCmp.data.currentN, verList.length, 'compared with the current version');
+  assert.ok(versionCmp.data.rows.some((r) => r.kind === 'del' && r.text.includes('milestones_appendix')), 'the removed text is shown');
+  await signOut(auth);
+  await login('a@aegis.test');
+  let supplierDenied = false;
+  try {
+    await call('getVersionView')({ tenderId: bad.data.id, n: 1 });
+  } catch {
+    supplierDenied = true;
+  }
+  assert.ok(supplierDenied, 'suppliers cannot read versions');
+  await signOut(auth);
+  await login('manager@obms.test');
+  console.log('✓ versions: summaries, who, view and compare; internal case members only');
   // Security is assigned but doesn't block: the final approval goes ahead without it (plan D2).
   await approveAs(bad.data.id, ['requester', 'finance', 'legal']);
   await call('transitionTender')({ tenderId: bad.data.id, to: 'ready' });

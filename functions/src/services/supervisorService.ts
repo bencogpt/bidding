@@ -45,7 +45,8 @@ import {
   versionsRepo,
 } from '../repositories.js';
 import { COMPARE_MODEL, getClient, toolInput } from './aiService.js';
-import { readTenderDocText, readVersionSnapshot, renderDraftText, saveVersionSnapshot } from './docsService.js';
+import { lastEditorName, readTenderDocText, readVersionSnapshot, renderDraftText, saveVersionSnapshot } from './docsService.js';
+import { summarizeChange } from './versionDiff.js';
 import { draftDataHash } from './draftCalc.js';
 import { changeRatio } from './scoreCalc.js';
 import { SUPERVISOR_SKILLS, currentSkillHash, loadGlobalRules, loadSkill } from './skillsRegistry.js';
@@ -385,7 +386,13 @@ export async function aiReview(
  * supervision checkpoint reads the live document, so this captures each version that reached a
  * checkpoint (v1 = the generated document at creation). Best-effort: never fails supervision.
  */
-export async function recordVersion(tender: TenderDoc, text: string, hash: string, stage: SupervisionStage) {
+export async function recordVersion(
+  tender: TenderDoc,
+  text: string,
+  hash: string,
+  stage: SupervisionStage,
+  by?: string, // who made it, when known (the creator of version 1); otherwise the Doc's last editor
+) {
   try {
     const list = await versionsRepo.list(tender.id);
     const prev = list[list.length - 1];
@@ -393,6 +400,8 @@ export async function recordVersion(tender: TenderDoc, text: string, hash: strin
     const n = list.length + 1;
     const path = await saveVersionSnapshot(tender.id, `${n}-${hash.slice(0, 12)}`, text);
     const prevText = prev ? await readVersionSnapshot(prev.path) : null;
+    const change = summarizeChange(prevText, text);
+    const editor = by ?? (await lastEditorName(tender));
     list.push({
       n,
       hash,
@@ -401,6 +410,9 @@ export async function recordVersion(tender: TenderDoc, text: string, hash: strin
       at: now(),
       path,
       changeRatio: prevText === null ? null : changeRatio(prevText, text),
+      ...(editor ? { by: editor } : {}),
+      summary: change.summary,
+      changes: change.changes,
     });
     await versionsRepo.set(tender.id, list);
   } catch (err) {

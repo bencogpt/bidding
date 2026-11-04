@@ -136,6 +136,34 @@ The web app is restyled to the prototype's tokens and components, and becomes a 
     - the overview tab is still the old design (D4).
   - **Not yet checked visually:** the approve-on-behalf and publish dialogs, the jump animation, and a narrow window (< 1000 px).
   - Unit 261/261; the e2e passed in full on a fresh emulator after these fixes.
+- **D4, the overview tab, done** (`components/overview/OverviewTab.tsx`; checked next to the prototype in both stages, draft and document):
+  - the agent's one-line state (the draft strip with "למסמך", or the agent strip with "לדוח הסוכן") and the three cards — "הפעולה הבאה" with the progress pie, "הרביעייה" with the approval tags (incl. "אושר בשם" and the non-blocking security row), and "תאריכים";
+  - replaces `NextActionCard` and `QuartetCard` (deleted);
+  - the dates card now shows the real publication date (`publishedAt`, new, recorded when the case is published) instead of the creation date, and "לא מתקיים בבל"מ זה" for the conference;
+  - role labels follow the prototype ("כספים", "אבטחת מידע").
+  - e2e: asserts `publishedAt` (now verified, see below).
+- **Rest of B4 and B5 — the lock and "פתח מחדש (שכפול)" done:**
+  - **Lock:** the final approval (`→ ready`) also calls `lockDocument`: every user, group and domain permission on the Google Doc that can write or comment drops to reader (the manager included); the owner (the system account) keeps full access. The decision is `permissionsToLock` (3 tests). The document view says "המסמך נעול לאחר האישור הסופי. רק מנהל המכרז יכול לפתוח אותו מחדש."
+  - **Reopen:** `reopenTender` (manager only, status `ready` only):
+    - copies the document (a Drive copy; in dev mode a copy of the stored HTML);
+    - moves the case `ready → internal_review` (audited `tender_reopened`: "נוצרה גרסה חדשה מקושרת. המקור נשאר נעול");
+    - clears the approvals and the lock;
+    - keeps the locked original and its approvals in `lockedDocuments`;
+    - shares the new copy like a new document, and the agent checks it.
+  - The approvals card's "פתח מחדש (שכפול)" asks for confirmation and calls it.
+  - The permission block of `generateDocument` is now a shared helper (`grantCaseDocPermissions`).
+  - **Verification:** unit 264/264; e2e passed in full — reopen denied to the requester and to an unlocked case, the new copy and the kept original, re-approval and a second lock.
+  - **Not verifiable here:** `lockDocument` and the Drive copy run only against real Google Docs (dev mode returns before them), so they have not been exercised. First check on a real case after deploy: after the final approval, the manager's access to the Doc is read-only; after reopening, the new Doc is editable and the old one is still read-only.
+- **D10 and B6 — the פעילות and היסטוריית גרסאות tabs done** (checked next to the prototype):
+  - **פעילות** (`ActivityTab`): the case's audit log as Hebrew sentences, newest first (`shared/src/activityFeed.ts`): approvals, approval on behalf with the reason, the lock, reopen, publication, draft edits (field labels), the agent's checks, findings handled, team changes. Technical entries are left out, so no raw action code shows; the agent's rules re-checks after each draft edit are left out as noise. A unit assigning its own contact reads "שיוך לתפקיד …: <name>". No row links into the document (the audit log does not record a section).
+  - **היסטוריית גרסאות** (`VersionsTab`): a table of version, date, who edited, what changed, number of changed paragraphs; "צפה" shows the text, "השווה לנוכחית" shows the changes against the current version with unchanged text collapsed. Each version now records:
+    - who edited it (the Doc's last editor from Drive; the creator for version 1; "—" in dev mode and for older versions);
+    - a one-line summary ("שונו 2 פסקאות · תנאי סף, ערבויות");
+    - the changed-paragraph count (`versionDiff.ts`).
+  - New callable `getVersionView` (internal case members only; suppliers are refused).
+  - **"שחזר" is not offered** (writing an old text back into a live Google Doc has no safe backend yet).
+  - **Limits:** versions are recorded when the agent checks the document, so edits made in Google Docs between two checks appear as one version; a reopened document starts with the same text as the locked one, so it adds no version until it is edited.
+  - **Verification:** unit 272/272; e2e: version summaries, creator, view, compare and the supplier refusal passed; the run then failed only on the known late leftover-data assertion (the dev emulator already held an awarded tender from the previous run). **A full clean e2e has not been run since B6** — run it on a fresh emulator (`emulators:exec`).
 
 ---
 

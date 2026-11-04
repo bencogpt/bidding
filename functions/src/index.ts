@@ -84,6 +84,9 @@ import {
   hasDocument,
   updateTenderDraftInput,
   generateDocumentInput,
+  reopenTenderInput,
+  getVersionViewInput,
+  type VersionView,
   rerunRequestResearchInput,
   researchDraftInput,
   RESEARCH_DRAFT_MAX_AGE_MS,
@@ -128,6 +131,7 @@ import {
   auditRepo,
   usersRepo,
   supervisionRepo,
+  versionsRepo,
   suppliersRepo,
   submissionsRepo,
   bidDraftsRepo,
@@ -153,6 +157,9 @@ import {
   removeDocumentPermission,
   discardGeneratedDocument,
   readTenderDocText,
+  lockDocument,
+  copyTenderDocument,
+  readVersionSnapshot,
   type GeneratedDoc,
 } from './services/docsService.js';
 import {
@@ -174,6 +181,7 @@ import {
   recordVersion,
 } from './services/supervisorService.js';
 import { documentGate, DOCUMENT_GATE_MESSAGE_HE } from './services/draftCalc.js';
+import { contextDiff } from './services/versionDiff.js';
 import { runDraftResearch, runRequestResearch } from './services/requestResearch.js';
 import { publicServiceSummary } from './services/publicSummary.js';
 import { docHash } from './services/supervisorChecks.js';
@@ -923,6 +931,36 @@ async function applyDraftData(
   return { draftDataHash, changed };
 }
 
+/**
+ * Share a case's Google Doc: the owner writes, the rest of the case team comments or writes by role. Best-effort —
+ * a bad address must not fail the action. Returns the team members without a Google account (skipped).
+ */
+async function grantCaseDocPermissions(
+  tender: TenderDoc,
+  googleDocId: string | null,
+  caller: Pick<Caller, 'uid' | 'email'>,
+): Promise<string[]> {
+  try {
+    const owner = await usersRepo.get(tender.ownerUid);
+    const ownerAddress = googleIdentityOf(owner ?? {}) ?? (caller.uid === tender.ownerUid ? caller.email : undefined);
+    if (ownerAddress) await setDocumentPermissions(googleDocId, { writerEmails: [ownerAddress] });
+    const teamUsers = (await Promise.all(Object.values(tender.team ?? {}).map((uid) => usersRepo.get(uid!)))).filter(
+      (u): u is UserDoc => !!u,
+    );
+    const recipients = splitDocsRecipients(teamUsers);
+    if (recipients.writerEmails.length || recipients.commenterEmails.length) {
+      await setDocumentPermissions(googleDocId, {
+        writerEmails: recipients.writerEmails,
+        commenterEmails: recipients.commenterEmails,
+      });
+    }
+    return recipients.skipped;
+  } catch (err) {
+    console.error(`Docs permissions failed for ${tender.serial}`, err);
+    return [];
+  }
+}
+
 // Draft-first: create the case's document — manager only, and only when the latest inspector check
 // covered exactly the current draft data with no blocking finding (no override).
 export const generateDocument = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 }, async (req) => {
@@ -967,29 +1005,11 @@ export const generateDocument = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 
   const withDoc: TenderDoc = { ...toPrint, googleDocId: gen.googleDocId, docExportPath: gen.exportPath, documentStatus: 'generated' };
 
   // Docs permissions: owner (writer) + the case team (writer/commenter by role). Best-effort.
-  let skipped: string[] = [];
-  try {
-    const owner = await usersRepo.get(tender.ownerUid);
-    const ownerAddress = googleIdentityOf(owner ?? {}) ?? (caller.uid === tender.ownerUid ? caller.email : undefined);
-    if (ownerAddress) await setDocumentPermissions(gen.googleDocId, { writerEmails: [ownerAddress] });
-    const teamUsers = (await Promise.all(Object.values(tender.team ?? {}).map((uid) => usersRepo.get(uid!)))).filter(
-      (u): u is UserDoc => !!u,
-    );
-    const recipients = splitDocsRecipients(teamUsers);
-    skipped = recipients.skipped;
-    if (recipients.writerEmails.length || recipients.commenterEmails.length) {
-      await setDocumentPermissions(gen.googleDocId, {
-        writerEmails: recipients.writerEmails,
-        commenterEmails: recipients.commenterEmails,
-      });
-    }
-  } catch (err) {
-    console.error(`generateDocument ${tender.serial}: Docs permissions failed`, err);
-  }
+  const skipped = await grantCaseDocPermissions(tender, gen.googleDocId, caller);
   // Version 1 = the document as created (the baseline for document-change scoring).
   try {
     const text = await readTenderDocText(withDoc);
-    await recordVersion(withDoc, text, docHash(text), 'created');
+    await recordVersion(withDoc, text, docHash(text), 'created', caller.name);
   } catch (err) {
     console.error(`generateDocument ${tender.serial}: version 1 not recorded`, err);
   }
@@ -1123,8 +1143,13 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
   const from = current.status;
   await transition(caller, input.tenderId, input.to);
   // Locked by the final approval; sent back to writing, it is open again.
-  if (input.to === 'ready' && from !== 'ready') await tendersRepo.update(input.tenderId, { lockedAt: now() });
+  if (input.to === 'ready' && from !== 'ready') {
+    await tendersRepo.update(input.tenderId, { lockedAt: now() });
+    // The Google Doc is locked with the case: from now on everyone, the manager included, can only read it.
+    await lockDocument(current.googleDocId);
+  }
   if (input.to === 'internal_review' && from === 'ready') await tendersRepo.update(input.tenderId, { lockedAt: null });
+  if (input.to === 'published' && from !== 'published') await tendersRepo.update(input.tenderId, { publishedAt: now() });
 
   if (input.to === 'published' && gate) {
     // Cache the exported HTML at publish so suppliers load it fast (no live Google export).
@@ -1928,6 +1953,78 @@ export const runSupervision = onCall(SUPERVISED, async (req) => {
   }
   await refreshCaseScore(SYSTEM, input.tenderId);
   return report;
+});
+
+// A stored version of the document: its text ("צפה"), or its comparison with the current version
+// ("השווה לנוכחית") — internal case members only (plan B6).
+export const getVersionView = onCall(async (req) => {
+  const caller = requireInternal(req);
+  const input = parseInput(getVersionViewInput, req.data);
+  const tender = await tendersRepo.get(input.tenderId);
+  if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  requireCaseAccess(caller, tender);
+  const list = await versionsRepo.list(tender.id);
+  const version = list.find((v) => v.n === input.n);
+  if (!version) throw new HttpsError('not-found', 'הגרסה לא נמצאה.');
+  const text = await readVersionSnapshot(version.path);
+  if (!input.compare) return { n: version.n, at: version.at, text } satisfies VersionView;
+  const current = list[list.length - 1];
+  const currentText = current.n === version.n ? text : await readVersionSnapshot(current.path);
+  return { n: version.n, currentN: current.n, rows: contextDiff(text, currentText) } satisfies VersionView;
+});
+
+// Reopen a locked case (plan B5): a new, editable copy of its document and a clean round of approvals. The
+// locked original stays as approved (listed in `lockedDocuments`). Only the case owner, and only before
+// publication — a published document is amended, not reopened.
+export const reopenTender = onCall({ ...SUPERVISED, secrets: [...DOCS_SECRETS, 'ANTHROPIC_API_KEY'] }, async (req) => {
+  const caller = requireManager(req);
+  const input = parseInput(reopenTenderInput, req.data);
+  const tender = await tendersRepo.get(input.tenderId);
+  if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  if (tender.status !== 'ready') {
+    throw new HttpsError('failed-precondition', 'ניתן לפתוח מחדש רק מסמך נעול, לפני הפרסום לספקים.');
+  }
+  const copy = await copyTenderDocument(tender);
+  try {
+    await transition(caller, tender.id, 'internal_review'); // ready → internal_review (audited)
+    await tendersRepo.clearApprovals(tender.id);
+    await tendersRepo.update(tender.id, {
+      googleDocId: copy.googleDocId,
+      docExportPath: copy.exportPath,
+      documentGeneratedAt: now(),
+      documentGeneratedBy: caller.uid,
+      lockedAt: null,
+      lockedDocuments: [
+        ...(tender.lockedDocuments ?? []),
+        {
+          googleDocId: tender.googleDocId,
+          docExportPath: tender.docExportPath,
+          lockedAt: tender.lockedAt ?? null,
+          reopenedAt: now(),
+          reopenedBy: caller.uid,
+          approvals: tender.approvals ?? {},
+        },
+      ],
+    });
+  } catch (err) {
+    await discardGeneratedDocument(tender.id, copy); // the copy is not used: undo it, the case stays locked
+    throw err;
+  }
+  const reopened = (await tendersRepo.get(tender.id)) ?? tender;
+  const skipped = await grantCaseDocPermissions(reopened, copy.googleDocId, caller);
+  await auditRepo.append({
+    entityType: 'tender',
+    entityId: tender.id,
+    tenderId: tender.id,
+    actorUid: caller.uid,
+    actorName: caller.name,
+    action: 'tender_reopened',
+    prevState: 'ready',
+    newState: 'internal_review',
+    detail: 'נוצרה גרסה חדשה מקושרת. המקור נשאר נעול',
+  });
+  await autoSupervise(tender.id); // the agent checks the new document right away
+  return { ok: true as const, docsSkipped: skipped };
 });
 
 // The supervising agent starts by itself (plan B1): the first check of a new draft, and the check of its
