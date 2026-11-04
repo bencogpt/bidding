@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
   AccessDoc,
@@ -19,6 +19,7 @@ export default function AccessPanel({
   access,
   suppliers,
   canManage,
+  pendingSupplierIds = [],
 }: {
   tenderId: string;
   tenderType: TenderType;
@@ -27,13 +28,23 @@ export default function AccessPanel({
   access: AccessDoc[];
   suppliers: SupplierDoc[];
   canManage: boolean;
+  pendingSupplierIds?: string[];
 }) {
   const { t } = useTranslation();
   const [selSuppliers, setSelSuppliers] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  // Suppliers may only see a document the supervisor passed, i.e. after publication.
-  const canShareSuppliers = isSupplierVisible(tenderStatus);
+  // Suppliers may only see a document the supervisor passed, i.e. after publication. Before that (in
+  // review / once ready) the manager picks who it will be published to; they get access on publish.
+  const published = isSupplierVisible(tenderStatus);
+  const prePublish = tenderStatus === 'internal_review' || tenderStatus === 'ready';
+  const canShareSuppliers = published || prePublish;
+  const pendingKey = pendingSupplierIds.join(',');
+  useEffect(() => {
+    if (prePublish) setSelSuppliers(new Set(pendingSupplierIds));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingKey, prePublish]);
+  const [saved, setSaved] = useState(false);
   const [external, setExternal] = useState<ExternalSupplierSuggestion[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [prefill, setPrefill] = useState<{
@@ -65,7 +76,13 @@ export default function AccessPanel({
   const grant = async () => {
     setBusy(true);
     setError('');
+    setSaved(false);
     try {
+      if (prePublish) {
+        await api.setPendingSuppliers({ tenderId, supplierIds: [...selSuppliers] });
+        setSaved(true);
+        return;
+      }
       // Internal users join through the case team (TeamPanel), never ad hoc.
       await api.grantAccess({ tenderId, supplierIds: [...selSuppliers], internalUids: [] });
       setSelSuppliers(new Set());
@@ -97,7 +114,10 @@ export default function AccessPanel({
             </div>
           )}
           {!canShareSuppliers && (
-            <div className="mb-2 rounded bg-amber-100 p-2 text-xs text-amber-700">{t('ws.shareAfterPublish')}</div>
+            <div className="mb-2 rounded bg-amber-100 p-2 text-xs text-amber-700">{t('ws.shareAfterReview')}</div>
+          )}
+          {prePublish && (
+            <div className="mb-2 rounded bg-teal-soft p-2 text-xs text-teal-600">{t('ws.pickBeforePublish')}</div>
           )}
           <div className="space-y-2">
             {ranked.map(({ s, matched }) => (
@@ -120,11 +140,12 @@ export default function AccessPanel({
 
           <button
             className="btn btn-gold mt-5"
-            disabled={busy || selSuppliers.size === 0}
+            disabled={busy || !canShareSuppliers || (!prePublish && selSuppliers.size === 0)}
             onClick={grant}
           >
-            {t('ws.grant')}
+            {prePublish ? t('ws.savePublishSuppliers', { n: selSuppliers.size }) : t('ws.grant')}
           </button>
+          {saved && <div className="mt-2 text-sm text-green-700">{t('ws.publishSuppliersSaved')}</div>}
           {error && <div className="mt-2 text-sm text-red-600">{error}</div>}
         </div>
       )}

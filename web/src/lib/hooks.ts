@@ -408,8 +408,15 @@ export function useSupervision(tenderId: string | undefined) {
 export function useTenderInternal(tenderId: string | undefined) {
   const [provenance, setProvenance] = useState<TenderProvenance | null>(null);
   const [params, setParams] = useState<Record<string, string | number>>({});
+  const [pendingSuppliers, setPendingSuppliers] = useState<string[]>([]);
   useEffect(() => {
     if (!tenderId) return;
+    // Suppliers picked for publication (internal until the case is published).
+    const unsubS = onSnapshot(
+      doc(db, 'tenders', tenderId, 'internal', 'suppliers'),
+      (d) => setPendingSuppliers(d.exists() ? ((d.data().supplierIds as string[]) ?? []) : []),
+      () => setPendingSuppliers([]),
+    );
     const unsubP = onSnapshot(
       doc(db, 'tenders', tenderId, 'internal', 'provenance'),
       (d) => setProvenance(d.exists() ? (d.data() as TenderProvenance) : null),
@@ -423,9 +430,10 @@ export function useTenderInternal(tenderId: string | undefined) {
     return () => {
       unsubP();
       unsubI();
+      unsubS();
     };
   }, [tenderId]);
-  return { provenance, params };
+  return { provenance, params, pendingSuppliers };
 }
 
 // Success score of one bid case (internal-only by rules).

@@ -289,6 +289,13 @@ export const grantAccessInput = z.object({
 });
 export type GrantAccessInput = z.infer<typeof grantAccessInput>;
 
+/** The suppliers the case will be published to (picked before publication; internal until then). */
+export const setPendingSuppliersInput = z.object({
+  tenderId: z.string(),
+  supplierIds: z.array(z.string()).max(200),
+});
+export type SetPendingSuppliersInput = z.infer<typeof setPendingSuppliersInput>;
+
 export const askQuestionInput = z.object({
   tenderId: z.string(),
   text: z.string().min(3),

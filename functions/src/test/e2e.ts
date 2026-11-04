@@ -225,6 +225,19 @@ async function main() {
   const approved = (await getDoc(doc(db, 'tenders', tenderId))).data()!.approvals ?? {};
   assert.deepEqual(Object.keys(approved).sort(), ['finance', 'legal', 'requester'], 'each role recorded its approval');
   await call('transitionTender')({ tenderId, to: 'ready' });
+  // Publishing goes to the suppliers the manager picked beforehand — at least one.
+  let noSuppliers = false;
+  try {
+    await call('transitionTender')({ tenderId, to: 'published' });
+  } catch (e) {
+    noSuppliers = /לפחות ספק אחד/.test((e as Error).message);
+  }
+  assert.ok(noSuppliers, 'publish is refused until a supplier is picked');
+  await call('setPendingSuppliers')({ tenderId, supplierIds: ['sup_aegis'] });
+  const pick = await getDoc(doc(db, 'tenders', tenderId, 'internal', 'suppliers'));
+  assert.deepEqual(pick.data()?.supplierIds, ['sup_aegis'], 'the pick is kept internally');
+  const preAccess = await getDocs(collection(db, 'tenders', tenderId, 'access'));
+  assert.ok(!preAccess.docs.some((d) => d.id === 'sup_aegis'), 'no supplier access before publication');
   const published = (await call('transitionTender')({ tenderId, to: 'published' })) as {
     data: { verdict: string };
   };
@@ -299,6 +312,7 @@ async function main() {
   await approveAs(bad.data.id, ['legal']);
   await call('transitionTender')({ tenderId: bad.data.id, to: 'ready' });
   console.log('✓ approvals: publish needs every role; back to review keeps given approvals');
+  await call('setPendingSuppliers')({ tenderId: bad.data.id, supplierIds: ['sup_globex'] });
   let blocked = false;
   try {
     await call('transitionTender')({ tenderId: bad.data.id, to: 'published' });
@@ -373,8 +387,10 @@ async function main() {
     adHocRefused = true;
   }
   assert.ok(adHocRefused, 'ad-hoc internal grants are refused');
-  await call('grantAccess')({ tenderId, supplierIds: ['sup_aegis'], internalUids: [] });
-  console.log('✓ manager published tender + shared with aegis');
+  const postAccess = await getDocs(collection(db, 'tenders', tenderId, 'access'));
+  assert.ok(postAccess.docs.some((d) => d.id === 'sup_aegis'), 'the picked supplier got access on publish');
+  assert.ok(!postAccess.docs.some((d) => d.id === 'sup_meridian'), 'only the picked suppliers');
+  console.log('✓ manager picked aegis before publishing; aegis got access on publish');
 
   // Removing legal from a case revokes their access to it.
   await call('assignTeamMember')({ tenderId: bad.data.id, role: 'legal', uid: null });

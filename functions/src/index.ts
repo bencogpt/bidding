@@ -87,6 +87,7 @@ import {
   type UserDoc,
   type TemplateDoc,
   type UpdateTenderDraftInput,
+  setPendingSuppliersInput,
   type TenderProvenance,
   type SupervisionReport,
   type CaseTeam,
@@ -1046,6 +1047,15 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
     }
   }
 
+  // Publishing goes to the suppliers picked beforehand (at least one).
+  let pendingSuppliers: string[] = [];
+  if (input.to === 'published' && canTransition(current.status, 'published')) {
+    pendingSuppliers = await internalRepo.getPendingSuppliers(input.tenderId);
+    if (!pendingSuppliers.length) {
+      throw new HttpsError('failed-precondition', 'יש לבחור לפחות ספק אחד לפני הפרסום (לשונית הגישה).');
+    }
+  }
+
   // Publish gate: the supervisor inspects the live document before suppliers can see it.
   let gate: SupervisionReport | null = null;
   if (input.to === 'published' && canTransition(current.status, 'published')) {
@@ -1061,6 +1071,9 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
       ...(path ? { docExportPath: path } : {}),
       publishedDocHash: gate.docHash,
     });
+    // The picked suppliers get access now that the document is public to them.
+    await grantSupplierAccess(caller, input.tenderId, pendingSuppliers);
+    await internalRepo.setPendingSuppliers(input.tenderId, [], caller.uid);
     // Ask every internal participant how the drafting/review went.
     await requestFeedback(caller, input.tenderId, 'publish');
   }
@@ -1101,6 +1114,64 @@ export const refreshTenderDocument = onCall(SUPERVISED, async (req) => {
 });
 
 // ---- Access & sharing ----
+/** Suppliers → view access (in-system only, no Google Docs permission), one audit entry each. */
+async function grantSupplierAccess(caller: Caller, tenderId: string, supplierIds: readonly string[]): Promise<string[]> {
+  const granted: string[] = [];
+  for (const supplierId of supplierIds) {
+    const supplier = await suppliersRepo.get(supplierId);
+    if (!supplier) continue;
+    const a: AccessDoc = {
+      principalId: supplierId,
+      kind: 'supplier',
+      level: 'view',
+      displayName: supplier.name,
+      grantedBy: caller.uid,
+      grantedAt: now(),
+    };
+    await accessRepo.grant(tenderId, a);
+    await auditRepo.append({
+      entityType: 'tender',
+      entityId: tenderId,
+      tenderId,
+      actorUid: caller.uid,
+      actorName: caller.name,
+      action: 'share_supplier',
+      prevState: null,
+      newState: supplier.name,
+    });
+    granted.push(supplier.name);
+  }
+  return granted;
+}
+
+// The suppliers the case will be published to. Picked in review / once ready, kept internal (suppliers
+// can't see it or each other); "פרסם לספקים" gives exactly these access.
+export const setPendingSuppliers = onCall(async (req) => {
+  const caller = requireManager(req);
+  const input = parseInput(setPendingSuppliersInput, req.data);
+  const tender = await tendersRepo.get(input.tenderId);
+  if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  if (tender.status !== 'internal_review' && tender.status !== 'ready') {
+    throw new HttpsError('failed-precondition', 'ניתן לבחור ספקים לפרסום בבדיקה פנימית או כשהמכרז מוכן לפרסום.');
+  }
+  const ids = [...new Set(input.supplierIds)];
+  const known = (await Promise.all(ids.map((id) => suppliersRepo.get(id)))).filter((s): s is SupplierDoc => !!s);
+  if (known.length !== ids.length) throw new HttpsError('invalid-argument', 'ספק לא מוכר ברשימה.');
+  await internalRepo.setPendingSuppliers(tender.id, ids, caller.uid);
+  await auditRepo.append({
+    entityType: 'tender',
+    entityId: tender.id,
+    tenderId: tender.id,
+    actorUid: caller.uid,
+    actorName: caller.name,
+    action: 'suppliers_selected',
+    prevState: null,
+    newState: `${ids.length} ספקים`,
+    detail: known.map((s) => s.name).join(', ') || undefined,
+  });
+  return { ok: true, supplierIds: ids };
+});
+
 export const grantAccess = onCall({ secrets: DOCS_SECRETS }, async (req) => {
   const caller = requireManager(req);
   const input = parseInput(grantAccessInput, req.data);
@@ -1118,30 +1189,7 @@ export const grantAccess = onCall({ secrets: DOCS_SECRETS }, async (req) => {
     );
   }
 
-  // Suppliers -> view access (in-system only, no Google Docs permission).
-  for (const supplierId of input.supplierIds ?? []) {
-    const supplier = await suppliersRepo.get(supplierId);
-    if (!supplier) continue;
-    const a: AccessDoc = {
-      principalId: supplierId,
-      kind: 'supplier',
-      level: 'view',
-      displayName: supplier.name,
-      grantedBy: caller.uid,
-      grantedAt: now(),
-    };
-    await accessRepo.grant(input.tenderId, a);
-    await auditRepo.append({
-      entityType: 'tender',
-      entityId: input.tenderId,
-      tenderId: input.tenderId,
-      actorUid: caller.uid,
-      actorName: caller.name,
-      action: 'share_supplier',
-      prevState: null,
-      newState: supplier.name,
-    });
-  }
+  await grantSupplierAccess(caller, input.tenderId, input.supplierIds ?? []);
 
   return { ok: true, docsSkipped: [] as string[] };
 });
