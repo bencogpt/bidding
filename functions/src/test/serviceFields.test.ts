@@ -311,6 +311,8 @@ test('bid manager details come from the user record under any name; option month
     { key: 'tender_manager_email', labelHe: 'tender_manager_email', type: 'text', required: true },
     { key: 'שם מנהל המכרז', labelHe: 'שם מנהל המכרז', type: 'text', required: true },
     { key: 'טלפון נייד של מנהל הבל"מ', labelHe: 'טלפון נייד של מנהל הבל"מ', type: 'text', required: true },
+    { key: "מס' הטלפון של נציג הרכש כפי שמוגדר", labelHe: "מס' הטלפון של נציג הרכש כפי שמוגדר", type: 'text', required: true },
+    { key: 'דוא"ל נציג הרכש', labelHe: 'דוא"ל נציג הרכש', type: 'text', required: true },
     { key: 'option_periods_count', labelHe: 'מספר תקופות אופציה', type: 'number', required: true },
     { key: 'תפקיד ראש צוות', labelHe: 'תפקיד ראש צוות', type: 'text', required: true },
   ];
@@ -322,6 +324,8 @@ test('bid manager details come from the user record under any name; option month
   assert.equal(out.tender_manager_email, 'manager@obms.test');
   assert.equal(out['שם מנהל המכרז'], 'דנה מנהלת');
   assert.equal(out['טלפון נייד של מנהל הבל"מ'], '050-0000002');
+  assert.equal(out["מס' הטלפון של נציג הרכש כפי שמוגדר"], '050-0000002', 'the procurement representative = the bid manager');
+  assert.equal(out['דוא"ל נציג הרכש'], 'manager@obms.test');
   assert.equal(out.option_periods_count, 24, '"ועד לסך מצטבר של 24 חודשים נוספים": 2 periods × 12 months');
   assert.equal(out['תפקיד ראש צוות'], 'ארכיטקט אבטחה', "the requester's answer reaches the template's wording");
 });

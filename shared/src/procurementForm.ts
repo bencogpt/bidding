@@ -180,7 +180,8 @@ export const OPTION_MONTHS_PER_PERIOD = 12;
 // The bid manager's details always come from the creating user's internal-user record, under any field
 // name: BID_MANAGER_NAME, tender_manager_email, "טלפון מנהל המכרז", "שם מנהל הבל"מ", …
 const MANAGER_KEY_RE = /(?:^|_)(?:bid|tender)_?(?:manager|lead)_?(name|email|mail|phone|tel)(?:$|_)/i;
-const MANAGER_LABEL_RE = /מנהל\s+(?:ה)?(?:מכרז|בל["״]?[מם])/;
+// "מנהל המכרז / מנהל הבל"מ", "נציג הרכש", or "… כפי שמוגדר" (as defined in the system) — all the bid manager.
+const MANAGER_LABEL_RE = /מנהל\s+(?:ה)?(?:מכרז|בל["״]?[מם])|נציג(?:\/ת)?\s+(?:ה)?רכש|כפי\s+שמוגדר/;
 export function managerDetailKind(p: Named): 'manager_name' | 'manager_email' | 'manager_phone' | null {
   const k = p.key.trim().match(MANAGER_KEY_RE)?.[1]?.toLowerCase();
   if (k) return k === 'name' ? 'manager_name' : k === 'phone' || k === 'tel' ? 'manager_phone' : 'manager_email';
