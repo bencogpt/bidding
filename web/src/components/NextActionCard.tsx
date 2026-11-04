@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { TENDER_STATUSES } from '@obms/shared';
 import type { TenderDoc } from '@obms/shared';
-import type { HeaderAction } from './TenderHeader';
+import type { HeaderButton as HeaderAction } from './TenderHeader';
 
 // The overview's "next action": the step the header button performs, a shortcut to the document,
 // and how far the case is along its stages.

@@ -18,6 +18,17 @@ export const REQUIRED_ROLES_BY_TYPE: Record<TenderType, TeamRole[]> = {
 
 export const isTeamRole = (r: string | undefined): r is TeamRole => !!r && (TEAM_ROLES as readonly string[]).includes(r);
 
+/**
+ * Roles that approve as extra participants: they are assigned and may approve, but the final approval and
+ * publication don't wait for them (plan D2, decided 2026-11-04: information security does not block).
+ */
+export const NON_BLOCKING_APPROVER_ROLES: readonly TeamRole[] = ['security'];
+
+/** The required roles whose approval the final approval and publication wait for. */
+export function blockingApproverRoles(required: readonly TeamRole[]): TeamRole[] {
+  return required.filter((r) => !NON_BLOCKING_APPROVER_ROLES.includes(r));
+}
+
 /** BID-2026-0042 */
 export function formatSerial(year: number, n: number): string {
   return `BID-${year}-${String(n).padStart(4, '0')}`;
@@ -51,9 +62,14 @@ export const REQUIRE_APPROVALS = true;
 
 /** One team role's sign-off on the tender during internal review. */
 export interface TeamApproval {
-  uid: string;
+  uid: string; // the slot holder the approval stands for (also when given on their behalf)
   name: string;
   at: number; // epoch ms
+  // Given by the tender manager on the holder's behalf (plan D1d), with a reason.
+  onBehalf?: boolean;
+  byUid?: string;
+  byName?: string;
+  reason?: string;
 }
 export type CaseApprovals = Partial<Record<TeamRole, TeamApproval>>;
 
@@ -69,6 +85,9 @@ export function missingApprovals(
 export const approveTenderInput = z.object({
   tenderId: z.string(),
   approve: z.boolean(), // false withdraws the caller's approval
+  // The case owner approving (or withdrawing) on behalf of this role's holder; the reason is required to approve.
+  onBehalfOf: z.enum(TEAM_ROLES).optional(),
+  reason: z.string().max(500).optional(),
 });
 export type ApproveTenderInput = z.infer<typeof approveTenderInput>;
 

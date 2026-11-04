@@ -35,11 +35,18 @@ import {
   assignTeamMemberInput,
   setRequiredRolesInput,
   approveTenderInput,
+  planApproval,
+  APPROVAL_DENIAL_HE,
+  APPROVAL_PERMISSION_DENIALS,
+  finalApprovalDenial,
+  FINAL_APPROVAL_DENIAL_HE,
+  documentBlockers,
   REQUIRE_APPROVALS,
   requiredRolesFor,
   TENDER_TYPE_LABELS_HE,
   missingRoles,
   missingApprovals,
+  blockingApproverRoles,
   memberUidsOf,
   REQUIRED_ROLES_BY_TYPE,
   TEAM_ROLES,
@@ -1010,6 +1017,8 @@ export const regenerateDocument = onCall(
       docExportPath: null,
       replacedDocuments: [...(tender.replacedDocuments ?? []), ...(old ? [old] : [])],
     });
+    // Approvals were given on the old document; the new one starts without them.
+    await tendersRepo.clearApprovals(tender.id);
     await auditRepo.append({
       entityType: 'tender',
       entityId: tender.id,
@@ -1046,10 +1055,18 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
     }
   }
 
+  // The manager's final approval (plan D1): the document exists and nothing blocks; it locks the case.
+  if (input.to === 'ready' && canTransition(current.status, 'ready')) {
+    const doc = hasDocument(current);
+    const denial = finalApprovalDenial({ hasDocument: doc, blockers: documentBlockers({ hasDocument: doc, lastSupervision: current.lastSupervision }) });
+    if (denial) throw new HttpsError('failed-precondition', FINAL_APPROVAL_DENIAL_HE[denial]);
+  }
+
   // Final approval and publishing: every required role has signed off in this review round.
   if (REQUIRE_APPROVALS && (input.to === 'ready' || input.to === 'published') && canTransition(current.status, input.to)) {
+    // Information security approves as an extra participant; it doesn't block (plan D2).
     const waiting = missingApprovals(
-      current.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[current.type],
+      blockingApproverRoles(current.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[current.type]),
       current.team,
       current.approvals,
     );
@@ -1075,7 +1092,11 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
   if (input.to === 'published' && canTransition(current.status, 'published')) {
     gate = await supervisorGate(caller, input.tenderId, 'prepublish', input.overrideReason);
   }
+  const from = current.status;
   await transition(caller, input.tenderId, input.to);
+  // Locked by the final approval; sent back to writing, it is open again.
+  if (input.to === 'ready' && from !== 'ready') await tendersRepo.update(input.tenderId, { lockedAt: now() });
+  if (input.to === 'internal_review' && from === 'ready') await tendersRepo.update(input.tenderId, { lockedAt: null });
 
   if (input.to === 'published' && gate) {
     // Cache the exported HTML at publish so suppliers load it fast (no live Google export).
@@ -1279,29 +1300,51 @@ export const approveTender = onCall(async (req) => {
   const input = parseInput(approveTenderInput, req.data);
   const tender = await tendersRepo.get(input.tenderId);
   if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
-  if (tender.status !== 'internal_review') {
-    throw new HttpsError('failed-precondition', 'ניתן לאשר רק בזמן בדיקה פנימית.');
-  }
-  const required = tender.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[tender.type];
-  const roles = required.filter((r) => tender.team?.[r] === caller.uid);
-  if (!roles.length) {
-    throw new HttpsError('permission-denied', 'אינך משובץ בתפקיד שנדרש לאשר את המכרז.');
-  }
-  for (const role of roles) {
-    await tendersRepo.setApproval(
-      tender.id,
-      role,
-      input.approve ? { uid: caller.uid, name: caller.name, at: now() } : null,
+  // The rules (order, on-behalf, blocking) live in shared/approvalRules.ts — plan B4, decisions D1/D1a/D1d.
+  const doc = hasDocument(tender);
+  const holderUid = input.onBehalfOf ? tender.team?.[input.onBehalfOf] : undefined;
+  const holderName = holderUid ? (await usersRepo.get(holderUid))?.displayName : undefined;
+  const plan = planApproval(
+    {
+      status: tender.status,
+      hasDocument: doc,
+      ownerUid: tender.ownerUid,
+      team: tender.team,
+      approvals: tender.approvals,
+      requiredRoles: tender.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[tender.type],
+      blockers: documentBlockers({ hasDocument: doc, lastSupervision: tender.lastSupervision }),
+    },
+    {
+      uid: caller.uid,
+      name: caller.name,
+      approve: input.approve,
+      ...(input.onBehalfOf ? { onBehalfOf: input.onBehalfOf } : {}),
+      ...(input.reason !== undefined ? { reason: input.reason } : {}),
+      ...(holderName ? { holderName } : {}),
+    },
+    now(),
+  );
+  if (!plan.ok) {
+    throw new HttpsError(
+      APPROVAL_PERMISSION_DENIALS.includes(plan.denial) ? 'permission-denied' : 'failed-precondition',
+      APPROVAL_DENIAL_HE[plan.denial],
     );
+  }
+  for (const w of plan.writes) {
+    await tendersRepo.setApproval(tender.id, w.role, w.approval);
     await auditRepo.append({
       entityType: 'tender',
       entityId: tender.id,
       tenderId: tender.id,
       actorUid: caller.uid,
       actorName: caller.name,
-      action: input.approve ? 'approve_tender' : 'withdraw_approval',
+      action: plan.audit,
       prevState: null,
-      newState: role,
+      newState: w.role,
+      // On behalf: whose approval it stands for and why (shown in the activity tab).
+      ...(input.onBehalfOf
+        ? { detail: `${holderName ?? w.role}${w.approval?.reason ? ` · ${w.approval.reason}` : ''}` }
+        : {}),
     });
   }
   return { ok: true };

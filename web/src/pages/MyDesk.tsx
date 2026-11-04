@@ -2,9 +2,12 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useEffect, useRef, useState } from 'react';
 import { useBidRequests, useMyFeedbackRequests, useTenders } from '../lib/hooks';
-import { REQUIRED_ROLES_BY_TYPE, REQUIRE_APPROVALS, missingApprovals } from '@obms/shared';
+import { REQUIRED_ROLES_BY_TYPE, REQUIRE_APPROVALS, APPROVAL_OPEN_STATUSES, hasDocument, missingApprovals } from '@obms/shared';
 import FeedbackForm from '../components/FeedbackForm';
 import { useAuth } from '../auth/AuthProvider';
+
+// The participant-feedback card is hidden for now (the data and the form stay, turn it back on here).
+const SHOW_FEEDBACK_REQUESTS = false;
 
 /** hh:mm dd.mm.yyyy in Israel time. */
 const fmtStamp = (ms: number) => {
@@ -32,10 +35,12 @@ export default function MyDesk() {
   const { requests } = useBidRequests();
   const { tenders } = useTenders();
   const isManager = role === 'tender_manager';
-  // Cases in internal review that wait for a role the signed-in user holds.
+  const firstName = (user?.displayName ?? '').trim().split(/\s+/)[0];
+  // Cases whose document waits for a role the signed-in user holds (approvals open once the document
+  // exists — plan D1; "לטיפולך" replaces this list in plan E1).
   const toApprove = REQUIRE_APPROVALS
     ? tenders.filter((td) => {
-        if (td.status !== 'internal_review' || !user) return false;
+        if (!APPROVAL_OPEN_STATUSES.includes(td.status) || !hasDocument(td) || !user) return false;
         const waiting = missingApprovals(td.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[td.type], td.team, td.approvals);
         return waiting.some((r) => td.team?.[r] === user.uid);
       })
@@ -61,7 +66,10 @@ export default function MyDesk() {
   return (
     <div>
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="font-display text-2xl font-bold">{t('nav.myDesk')}</h1>
+        <h1 className="font-display text-2xl font-bold">
+          {t('desk.hello')}
+          {firstName && <> <span className="text-accent">{firstName}</span></>}
+        </h1>
         {(isManager || role === 'requester') && (
           <Link to="/requests/new" className="btn btn-gold">
             + {t('nav.newTender')}
@@ -180,7 +188,7 @@ export default function MyDesk() {
         </div>
       )}
 
-      {pending.length === 0 ? (
+      {!SHOW_FEEDBACK_REQUESTS || pending.length === 0 ? (
         requests.length === 0 && !isManager && <div className="card p-6 text-tx-soft">{t('desk.empty')}</div>
       ) : (
         <div className="card p-5">

@@ -39,6 +39,19 @@ export const ROLE_HE: Record<ApprovalRole, string> = {
   security: 'אבטחת מידע',
 };
 
+/**
+ * Who approves at each stage, listed in the stage bar's hover card (prototype STAGE_APPR, line 2293; stages
+ * it doesn't list show the quartet). Security appears only on cases that involve it.
+ */
+export const STAGE_APPROVERS: Record<number, readonly ApprovalRole[]> = {
+  0: ['requester', 'manager'],
+  1: ['requester', 'manager', 'legal', 'finance', 'security'],
+  2: ['manager'],
+  3: QUARTET_ROLES,
+  4: QUARTET_ROLES,
+  5: ['manager', 'finance', 'requester'],
+};
+
 /** The unit a role's contact is assigned from (prototype ASG_BODY, line 1921). */
 export const ROLE_UNIT_HE: Partial<Record<TeamRole, string>> = {
   legal: 'היחידה המשפטית',

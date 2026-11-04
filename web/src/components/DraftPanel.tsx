@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { askedParams, resolveParam, isConfidentialParam, type DocumentGateReason, type TemplateDoc, type TemplateParam, type TenderDoc } from '@obms/shared';
 import { api } from '../lib/api';
@@ -34,11 +34,14 @@ export default function DraftPanel({
   template,
   canManage,
   onOpenInspector,
+  focusField,
 }: {
   tender: TenderDoc;
   template: TemplateDoc | null;
   canManage: boolean;
   onOpenInspector: () => void;
+  // Set by the draft view when a finding's "edit the field" is clicked; `n` makes repeat clicks count.
+  focusField?: { key: string; n: number } | null;
 }) {
   const { t } = useTranslation();
   const { params: internalParams } = useTenderInternal(tender.id);
@@ -48,6 +51,18 @@ export default function DraftPanel({
   const [title, setTitle] = useState(tender.title);
   const [deadline, setDeadline] = useState(toLocalInput(tender.submissionDeadline));
   const [values, setValues] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!focusField || !canManage) return;
+    setEditing(true);
+    // The input exists only after the editor opens.
+    const timer = setTimeout(() => {
+      const el = document.getElementById(`draft-field-${focusField.key}`);
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      el?.focus();
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [focusField, canManage]);
 
   const generating = tender.documentStatus === 'generating';
   const gate = draftGate(tender);
@@ -171,6 +186,7 @@ export default function DraftPanel({
                     />
                   ) : p.type === 'textarea' ? (
                     <textarea
+                      id={`draft-field-${p.key}`}
                       className="input min-h-20 w-full"
                       dir="auto"
                       value={valueOf(p)}
@@ -178,6 +194,7 @@ export default function DraftPanel({
                     />
                   ) : (
                     <input
+                      id={`draft-field-${p.key}`}
                       className="input w-full"
                       dir="auto"
                       type={p.type === 'number' ? 'number' : 'text'}

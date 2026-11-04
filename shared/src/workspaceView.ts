@@ -18,6 +18,7 @@ import {
   QUARTET_ROLES,
   ROLE_HE,
   ROLE_UNIT_HE,
+  STAGE_APPROVERS,
   STAGE_BAR_COUNT,
   STAGE_COLORS,
   STAGES_HE,
@@ -148,6 +149,44 @@ export function stageBar(i: { stageIdx: number; hasConference?: boolean }): {
       state: (idx < i.stageIdx ? 'done' : idx === i.stageIdx ? 'current' : 'upcoming') as StageState,
     }));
   return { items, note: i.hasConference ? null : NO_CONFERENCE_NOTE_HE };
+}
+
+export interface StagePopover {
+  title: string;
+  status: string;
+  rows: { role: ApprovalRole; roleHe: string; tag: ApprovalTag; tagLabel: string }[];
+}
+
+/**
+ * The hover card of one stage in the bar (prototype popOf, line 2387): done = everyone approved, upcoming =
+ * everyone waiting, current = the real state where the app has one (writing: the team's approvals; publication:
+ * procurement's final approval), otherwise waiting.
+ */
+export function stagePopover(
+  item: StageBarItem,
+  c: { stageIdx: number; holders: Holders; approvals: Approvals; securityInvolved: boolean },
+): StagePopover {
+  const roles = (STAGE_APPROVERS[item.idx] ?? QUARTET_ROLES).filter(
+    (r) => r !== 'security' || c.securityInvolved || !!c.holders.security,
+  );
+  const tagOf = (role: ApprovalRole): ApprovalTag => {
+    if (item.state === 'done') return 'approved';
+    if (item.state === 'upcoming') return 'pending';
+    if (item.idx === 1 && role !== 'manager') {
+      if (!isApproved(c.holders, c.approvals, role)) return 'pending';
+      return c.approvals[role]!.onBehalf ? 'on_behalf' : 'approved';
+    }
+    if (item.idx === 2 && role === 'manager') return 'approved'; // locked by procurement's final approval
+    return 'pending';
+  };
+  return {
+    title: `אישורים · ${item.label}`,
+    status: item.state === 'done' ? 'השלב הושלם' : item.state === 'current' ? 'השלב הנוכחי' : 'טרם התחיל',
+    rows: roles.map((role) => {
+      const tag = tagOf(role);
+      return { role, roleHe: ROLE_HE[role], tag, tagLabel: TAG_LABEL[tag] };
+    }),
+  };
 }
 
 // ───────────────────────── A2: findings ─────────────────────────
@@ -314,9 +353,17 @@ export function isApproved(holders: Holders, approvals: Approvals, role: TeamRol
   return !!a && !!holders[role] && a.uid === holders[role]!.uid;
 }
 
-/** Team approvals still missing before the manager's final action (security does not block — D2). */
-export function missingTeamApprovals(holders: Holders, approvals: Approvals): TeamRole[] {
-  return TEAM_APPROVER_ROLES.filter((r) => !isApproved(holders, approvals, r));
+/**
+ * Team approvals still missing before the manager's final action. `roles` defaults to requester, legal and
+ * finance (security does not block, plan D2); until D2 is signed off the server still requires security for
+ * service and project tenders, so callers pass the case's required roles.
+ */
+export function missingTeamApprovals(
+  holders: Holders,
+  approvals: Approvals,
+  roles: readonly TeamRole[] = TEAM_APPROVER_ROLES,
+): TeamRole[] {
+  return roles.filter((r) => !isApproved(holders, approvals, r));
 }
 
 /** Legal approves after requester and finance (D1a). Roles the same person holds don't make them wait. */
@@ -355,7 +402,12 @@ export interface WorkspaceCtx {
   myRoles: TeamRole[];
   holders: Holders;
   approvals: Approvals;
+  /** Roles whose approval the final action waits for (default: requester, legal, finance — see missingTeamApprovals). */
+  approverRoles?: readonly TeamRole[];
 }
+
+/** Security is an extra, non-blocking participant unless the case's approver roles include it. */
+const securityBlocks = (c: Pick<WorkspaceCtx, 'approverRoles'>) => !!c.approverRoles?.includes('security');
 
 const ONLY_MANAGER_CREATES = 'רק הרכש יכול ליצור את המסמך';
 const BLOCKED_TITLE = 'ממצא חוסם מונע אישור סופי ופרסום';
@@ -424,16 +476,16 @@ export function headerAction(c: WorkspaceCtx): HeaderAction | null {
           : {}),
       };
     }
-    if (myPending.every((r) => r === 'security'))
+    if (myPending.every((r) => r === 'security') && !securityBlocks(c))
       return { label: 'אישור (משתתף נוסף)', kind: 'approve', enabled: true };
     return { label: 'אישור סופי של המכרז', kind: 'approve', enabled: true };
   };
 
   if (c.isManager) {
     // A manager who also holds a team slot (e.g. opened the request) approves it first.
-    if (myPending.some((r) => r !== 'security')) return approveButton();
+    if (myPending.some((r) => r !== 'security' || securityBlocks(c))) return approveButton();
     // The manager acts last: the final action locks the case (D1, D1b, D1c).
-    const missing = missingTeamApprovals(c.holders, c.approvals);
+    const missing = missingTeamApprovals(c.holders, c.approvals, c.approverRoles);
     return {
       label: 'אישור סופי של המכרז',
       kind: 'final_approve',
@@ -533,7 +585,7 @@ export function approvalsView(c: ApprovalsCtx): ApprovalsView {
       role,
       roleHe: ROLE_HE[role],
       name: holder?.name ?? null,
-      nonBlocking: role === 'security',
+      nonBlocking: role === 'security' && !securityBlocks(c),
       tag,
       tagLabel: TAG_LABEL[tag],
       ...(tagTitle ? { tagTitle } : {}),
@@ -547,7 +599,7 @@ export function approvalsView(c: ApprovalsCtx): ApprovalsView {
   let note = '';
   if (locked) note = 'המסמך נעול ומוכן לפרסום.' + (c.isManager ? '' : ' רק הרכש יכול לפתוח מחדש.');
   else if (c.isManager) {
-    const missing = missingTeamApprovals(c.holders, c.approvals);
+    const missing = missingTeamApprovals(c.holders, c.approvals, c.approverRoles);
     note = missing.length
       ? `הכפתור שלך יפעל אחרי שהדורש, המשפטי והכספים יאשרו. נותר: ${rolesHe(missing)}.`
       : 'כולם אישרו. לחץ על "אישור סופי של המכרז" כדי לנעול את המסמך.';
@@ -559,7 +611,7 @@ export function approvalsView(c: ApprovalsCtx): ApprovalsView {
     note = waits.length
       ? `הכפתור שלך יפעל אחרי שהדורש והכספים יאשרו. נותר: ${rolesHe(waits)}.`
       : 'הדורש והכספים אישרו. אחרי האישור שלך הרכש יוכל לתת אישור סופי.';
-  } else if (myPending.length && myPending.every((r) => r === 'security'))
+  } else if (myPending.length && myPending.every((r) => r === 'security') && !securityBlocks(c))
     note = 'משתתף נוסף: האישור נרשם ואינו חוסם נעילה.';
   else if (myPending.length) note = 'לחץ על "אישור סופי של המכרז" כשסיימת לעבוד על המסמך.';
 
@@ -651,6 +703,8 @@ export interface PendingTenderInput {
   approvedAt?: number;
   /** The signed-in requester has opened the draft (plan B7). */
   draftSeen?: boolean;
+  /** Roles the final action waits for (see missingTeamApprovals). */
+  approverRoles?: readonly TeamRole[];
 }
 
 export interface PendingCtx {
@@ -704,7 +758,7 @@ export function pendingItems(c: PendingCtx): PendingItem[] {
           out.push(tenderItem(t, 'create', { tone: 'g', bold: 'הטיוטה נבדקה:', text: 'אין ממצא חוסם, אפשר ליצור את המסמך', button: 'יצירת מסמך', tab: 'document' }));
       } else if (t.ds === 'doc' && t.blockingCount > 0) {
         out.push(tenderItem(t, 'block', { tone: 'r', bold: 'ממצא חוסם בדוח הסוכן המפקח:', text: 'מונע אישור סופי ופרסום', button: 'טפל בממצא', tab: 'agent' }));
-      } else if (t.ds === 'doc' && t.stageIdx === 1 && !missingTeamApprovals(t.holders, t.approvals).length) {
+      } else if (t.ds === 'doc' && t.stageIdx === 1 && !missingTeamApprovals(t.holders, t.approvals, t.approverRoles).length) {
         // New with D1: the team approved, the manager's final action is due.
         out.push(tenderItem(t, 'final', { tone: 'w', bold: 'כל הצוות אישר:', text: 'ממתין לאישור הסופי שלך', button: 'אישור סופי של המכרז', tab: 'document' }));
       }

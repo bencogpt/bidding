@@ -12,6 +12,8 @@ import {
   TENDER_TYPE_LABELS_HE,
   BLANK_LINE,
   applySeverityPolicy,
+  askedParams,
+  resolveParam,
   hasDocument,
   isConfidentialParam,
   isFormHidden,
@@ -71,6 +73,26 @@ interface AiFinding {
   location: string;
   messageHe: string;
   evidence: string;
+  paramKey?: string;
+  suggestedValue?: string;
+}
+
+/**
+ * The fix the model proposed, kept only when it is safe to offer as a one-click change: it names a
+ * field the manager can edit (asked, public), the quote really sits in that field's value, and the
+ * proposed value is real text — no placeholder, a number for a number field, and different from now.
+ */
+function aiFix(f: AiFinding, tender: TenderDoc, template: TemplateDoc): Pick<SupervisionFinding, 'paramKey' | 'suggestion'> {
+  const key = f.paramKey?.trim();
+  if (!key) return {};
+  const param = askedParams(template.params.map(resolveParam)).find((p) => p.key === key);
+  if (!param || isConfidentialParam(param)) return {};
+  const current = String(tender.params[key] ?? '');
+  if (!normalize(current).includes(normalize(f.evidence))) return {};
+  const value = f.suggestedValue?.trim();
+  if (!value || value.includes('{{') || value === current.trim()) return { paramKey: key };
+  if (param.type === 'number' && !Number.isFinite(Number(value.replace(/,/g, '')))) return { paramKey: key };
+  return { paramKey: key, suggestion: value };
 }
 
 interface AiReviewInput {
@@ -211,6 +233,18 @@ export async function aiReview(
                         'EXACT verbatim quote copied from the document (for MISSING_MANDATORY_SECTION: ' +
                         'the name of the missing section). Findings without a real quote are discarded.',
                     },
+                    paramKey: {
+                      type: 'string',
+                      description:
+                        'OPTIONAL. The key of the one parameter (from "Parameters") whose value contains the ' +
+                        'quoted text, when the problem is in that value and fixing the value fixes the document.',
+                    },
+                    suggestedValue: {
+                      type: 'string',
+                      description:
+                        'OPTIONAL, only with paramKey. The complete corrected value for that parameter, in ' +
+                        'Hebrew, using ONLY facts from the sources above. Omit it if no safe fix exists.',
+                    },
                   },
                   required: ['code', 'severity', 'location', 'messageHe', 'evidence'],
                 },
@@ -306,6 +340,7 @@ export async function aiReview(
         message: f.messageHe,
         evidence: f.evidence,
         source: 'ai',
+        ...aiFix(f, tender, template),
       });
     }
     return { model: SUPERVISOR_MODEL, findings };
@@ -428,8 +463,13 @@ export async function superviseTender(
     aiModel = ai.model;
     aiFindings = ai.findings;
   }
+  // A rule finding about "params.<key>" names the field it concerns (the draft view jumps to it).
+  const taggedRules = rules.map((f) => {
+    const m = /^params\.(.+)$/.exec(f.location);
+    return m && !f.paramKey ? { ...f, paramKey: m[1] } : f;
+  });
   // Only hard facts block; everything else is a warning for the manager to weigh.
-  const findings = applySeverityPolicy([...rules, ...aiFindings]);
+  const findings = applySeverityPolicy([...taggedRules, ...aiFindings]);
 
   const report: SupervisionReport = {
     runId: supervisionRepo.newId(tenderId),

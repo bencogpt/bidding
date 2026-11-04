@@ -285,7 +285,8 @@ export default function TenderCreate() {
         team: Object.fromEntries(requiredRoles.filter((r) => team[r]).map((r) => [r, team[r]])),
         extraRoles,
       });
-      nav(`/tenders/${id}`);
+      // The draft opens at once; the supervisor agent starts checking it while the manager reads.
+      nav(`/tenders/${id}?tab=document`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setBusy(false);
@@ -451,6 +452,27 @@ export default function TenderCreate() {
               );
             })}
           </div>
+          {swapTo && (
+            <div
+              role="alertdialog"
+              className="mt-4 flex flex-wrap items-center gap-3 rounded-lg border border-accent bg-accent-soft px-4 py-3 text-sm"
+            >
+              <span className="flex-1">{t('create.swapWarn', { type: t(`type.${swapTo}`) })}</span>
+              <button
+                type="button"
+                className="btn btn-gold btn-sm"
+                onClick={() => {
+                  pickType(swapTo);
+                  setSwapTo(null);
+                }}
+              >
+                {t('create.swapOk')}
+              </button>
+              <button type="button" className="btn btn-sm" onClick={() => setSwapTo(null)}>
+                {t('create.swapNo')}
+              </button>
+            </div>
+          )}
           {drafting && (
             <div
               role="status"

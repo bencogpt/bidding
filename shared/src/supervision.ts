@@ -201,6 +201,11 @@ export interface SupervisionFinding {
   evidence?: string; // verbatim quote from the document / record
   source: 'rules' | 'ai';
   hard?: boolean; // a hard fact that keeps blocking (see applySeverityPolicy)
+  // The draft field the finding is about (a template param key) — lets the draft view jump to it.
+  paramKey?: string;
+  // The agent's proposed replacement for that field's value (Hebrew text or a number). With it the
+  // manager can apply the fix in one click (updateTenderDraft); without it only "edit the field".
+  suggestion?: string;
 }
 
 export interface SupervisionReport {
