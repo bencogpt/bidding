@@ -36,6 +36,9 @@ export default function RequestCreate() {
   const [error, setError] = useState('');
   const [notes, setNotes] = useState('');
   const [chosen, setChosen] = useState<string[]>([]);
+  // The principal service as formatted in the large window: kept here for the summary; the request itself is plain text.
+  const [rich, setRich] = useState<{ text: string; html: string } | null>(null);
+  const richHtmlFor = (text: string) => (rich && rich.text === text.trim() ? rich.html : undefined);
   const [recsStatus, setRecsStatus] = useState<'idle' | 'loading' | 'done'>('idle');
   const [bigText, setBigText] = useState(false); // the large writing window over the free-writing box
   // The web research run on the summary step, linked to the request so it isn't searched again.
@@ -235,9 +238,16 @@ export default function RequestCreate() {
                     disabled={a.asking === 'done'}
                     asking={a.asking}
                     details={{ n: rows.length - missing, total: rows.length }}
-                    onSay={a.say}
-                    onEdit={a.edit}
+                    onSay={(text, html) => {
+                      if (html) setRich({ text: text.trim(), html });
+                      a.say(text);
+                    }}
+                    onEdit={(index, text, html) => {
+                      if (html) setRich({ text: text.trim(), html });
+                      a.edit(index, text);
+                    }}
                     editAsking={a.editAsking}
+                    richHtmlFor={richHtmlFor}
                   />
                 )}
 
@@ -306,7 +316,7 @@ export default function RequestCreate() {
           <SubHead letter="ב" title={t('req.subB')} hint={t('req.subBHint')} />
           {ready ? (
             <div className="space-y-6">
-              <RequestSummary brief={a.brief} fields={a.fields} />
+              <RequestSummary brief={a.brief} fields={a.fields} rich={rich} />
               <RequestRecommendations
                 onResearch={setResearchRunId}
                 onStatus={setRecsStatus}
@@ -352,14 +362,17 @@ export default function RequestCreate() {
         <BigEditor
           title={t('req.principalService')}
           initial={a.brief}
+          initialHtml={richHtmlFor(a.brief)}
           submitLabel={t('req.bigSave')}
           hint={t('req.bigHint')}
-          onClose={(draft) => {
+          onClose={(draft, html) => {
             a.setBrief(draft.slice(0, BRIEF_MAX_LENGTH));
+            if (html) setRich({ text: draft.slice(0, BRIEF_MAX_LENGTH).trim(), html });
             setBigText(false);
           }}
-          onSubmit={(v) => {
+          onSubmit={(v, html) => {
             a.setBrief(v.slice(0, BRIEF_MAX_LENGTH));
+            if (html) setRich({ text: v.slice(0, BRIEF_MAX_LENGTH).trim(), html });
             setBigText(false);
           }}
         />

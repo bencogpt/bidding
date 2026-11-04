@@ -59,6 +59,7 @@ export default function RequestChat({
   onSay,
   onEdit,
   editAsking,
+  richHtmlFor,
 }: {
   chat: ChatMsg[];
   chips: string[];
@@ -66,15 +67,17 @@ export default function RequestChat({
   disabled: boolean;
   asking: string | null;
   details?: { n: number; total: number }; // how many of the mandatory details are known
-  onSay: (text: string) => void;
-  onEdit: (index: number, text: string) => void;
+  onSay: (text: string, html?: string) => void;
+  onEdit: (index: number, text: string, html?: string) => void;
   editAsking: (index: number) => string | null; // what was asked when that answer was given; null = not editable
+  richHtmlFor?: (text: string) => string | undefined; // the formatting a long answer was written with
 }) {
   const { t } = useTranslation();
   const [text, setText] = useState('');
   const [big, setBig] = useState(false);
   const [editing, setEditing] = useState<number | null>(null); // the answer being edited inline
   const [draft, setDraft] = useState('');
+  const [draftRich, setDraftRich] = useState<{ text: string; html: string } | null>(null); // formatting of a draft written in the large window
   const [bigEdit, setBigEdit] = useState<number | null>(null); // the principal service is edited in the large window
   const end = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
@@ -110,10 +113,11 @@ export default function RequestChat({
     if (bigEdit !== null && editAsking(bigEdit) === null) setBigEdit(null);
   }, [chat, typing, editing, bigEdit, editAsking]);
 
-  const send = (v: string) => {
+  const send = (v: string, html?: string) => {
     if (!v.trim() || typing || disabled || v.length > max) return;
-    onSay(v);
+    onSay(v, html ?? (draftRich && draftRich.text === v ? draftRich.html : undefined));
     setText('');
+    setDraftRich(null);
   };
   const startEdit = (i: number) => {
     if (editAsking(i) === 'scope') {
@@ -123,11 +127,11 @@ export default function RequestChat({
     setDraft(chat[i].text);
     setEditing(i);
   };
-  const saveEdit = (i: number, v: string) => {
+  const saveEdit = (i: number, v: string, html?: string) => {
     if (!v.trim()) return;
     setEditing(null);
     setBigEdit(null);
-    onEdit(i, v);
+    onEdit(i, v, html);
   };
   const clip = (m: string) =>
     m.length > CLIP ? `${m.slice(0, CLIP)}… (${t('req.pagesShort', { n: Math.ceil(m.length / SCOPE_PAGE_CHARS) })})` : m;
@@ -309,15 +313,17 @@ export default function RequestChat({
         <BigEditor
           title={isScope ? t('req.principalService') : t('req.chatName')}
           initial={text}
+          initialHtml={draftRich && draftRich.text === text ? draftRich.html : undefined}
           submitLabel={t('req.chatSend')}
           hint={t('req.bigHint')}
-          onClose={(draft) => {
+          onClose={(draft, html) => {
             setText(draft.slice(0, max));
+            setDraftRich(html ? { text: draft.slice(0, max), html } : null);
             setBig(false);
           }}
-          onSubmit={(v) => {
+          onSubmit={(v, html) => {
             setBig(false);
-            send(v);
+            send(v, html);
           }}
         />
       )}
@@ -325,10 +331,11 @@ export default function RequestChat({
         <BigEditor
           title={`${t('req.chatEdit')}: ${t('req.principalService')}`}
           initial={chat[bigEdit].text}
+          initialHtml={richHtmlFor?.(chat[bigEdit].text)}
           submitLabel={t('req.chatEditSave')}
           hint={t('req.chatEditing')}
           onClose={() => setBigEdit(null)}
-          onSubmit={(v) => saveEdit(bigEdit, v)}
+          onSubmit={(v, html) => saveEdit(bigEdit, v, html)}
         />
       )}
     </div>

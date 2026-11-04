@@ -1,12 +1,22 @@
 import { useTranslation } from 'react-i18next';
 import { CHECKLIST, REQUESTER_FIELDS, pageCount } from '@obms/shared';
 import type { Fields } from '../lib/useRequestAgent';
+import RichText from './RichText';
 
 const nf = new Intl.NumberFormat('en-US');
 
 // The request in one place before it goes to procurement: the five details, the principal service, and
-// whatever else the agent collected. Read-only.
-export default function RequestSummary({ brief, fields }: { brief: string; fields: Fields }) {
+// whatever else the agent collected. Read-only. The principal service shows the formatting the requester gave it
+// (bold, lists, alignment) when it was written in the large window.
+export default function RequestSummary({
+  brief,
+  fields,
+  rich,
+}: {
+  brief: string;
+  fields: Fields;
+  rich?: { text: string; html: string } | null;
+}) {
   const { t } = useTranslation();
   const value = (key: string): string => {
     if (key === 'annual_budget') {
@@ -16,6 +26,23 @@ export default function RequestSummary({ brief, fields }: { brief: string; field
     return (fields[key as keyof Fields] ?? '').trim() || '—';
   };
   const extras = REQUESTER_FIELDS.filter((f) => !f.required && (fields[f.key as keyof Fields] ?? '').trim() !== '');
+
+  const text = brief.trim();
+  const at = rich && rich.text ? text.indexOf(rich.text) : -1;
+  const plainBlock = (s: string) =>
+    s.trim() ? <div className="whitespace-pre-wrap text-sm leading-relaxed">{s.trim()}</div> : null;
+  // Formatted text sits where the plain text of the same words is; anything around it stays plain.
+  const full =
+    rich && at >= 0 ? (
+      <>
+        {plainBlock(text.slice(0, at))}
+        <RichText html={rich.html} className="text-sm leading-[1.8]" />
+        {plainBlock(text.slice(at + rich.text.length))}
+      </>
+    ) : (
+      <div className="whitespace-pre-wrap text-sm leading-[1.7]">{text}</div>
+    );
+
   return (
     <div className="space-y-3">
       <div className="rounded-lg border border-black/5 bg-paper-2/60 p-4">
@@ -31,16 +58,18 @@ export default function RequestSummary({ brief, fields }: { brief: string; field
         </div>
         <div className="mt-3 border-t border-dashed border-black/10 pt-3">
           <div className="text-xs text-tx-soft">{CHECKLIST.find((c) => c.key === 'scope')?.label}</div>
-          {brief.trim().length > 320 ? (
+          {text.length > 320 ? (
             <div className="text-sm leading-relaxed">
-              <span className="whitespace-pre-wrap">{brief.trim().slice(0, 300)}…</span>
+              <span className="whitespace-pre-wrap">{text.slice(0, 300)}…</span>
               <details className="mt-1.5 text-xs">
                 <summary className="cursor-pointer text-accent">{t('req.showFull', { n: pageCount(brief) })}</summary>
-                <div className="mt-1.5 whitespace-pre-wrap text-sm leading-[1.7]">{brief.trim()}</div>
+                <div className="mt-1.5">{full}</div>
               </details>
             </div>
+          ) : text ? (
+            full
           ) : (
-            <div className="whitespace-pre-wrap text-sm leading-relaxed">{brief.trim() || '—'}</div>
+            <div className="text-sm">—</div>
           )}
         </div>
       </div>
