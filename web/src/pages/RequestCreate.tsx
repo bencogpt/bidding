@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -39,6 +39,8 @@ export default function RequestCreate() {
   // The principal service as formatted in the large window: kept here for the summary; the request itself is plain text.
   const [rich, setRich] = useState<{ text: string; html: string } | null>(null);
   const richHtmlFor = (text: string) => (rich && rich.text === text.trim() ? rich.html : undefined);
+  const [blurTick, setBlurTick] = useState(0); // goes up when the free-writing box loses focus
+  const briefBox = useRef<HTMLTextAreaElement>(null);
   const [recsStatus, setRecsStatus] = useState<'idle' | 'loading' | 'done'>('idle');
   const [bigText, setBigText] = useState(false); // the large writing window over the free-writing box
   // The web research run on the summary step, linked to the request so it isn't searched again.
@@ -98,6 +100,15 @@ export default function RequestCreate() {
     }
   };
 
+  useEffect(() => {
+    const el = briefBox.current;
+    if (!el) return;
+    const top = el.scrollTop;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, 150), 340)}px`;
+    el.scrollTop = top;
+  }, [a.brief, a.mode]);
+
   const pickMode = (m: 'free' | 'chat') => {
     a.setMode(m);
     if (m === 'chat') setTimeout(() => goTo('rq-mode'), 0);
@@ -112,6 +123,15 @@ export default function RequestCreate() {
       const box = document.getElementById('rq-brief') as HTMLTextAreaElement | null;
       box?.focus();
       box?.setSelectionRange(box.value.length, box.value.length);
+    }, 0);
+  };
+
+  const pickOption = (key: string, option: string) => {
+    const base = a.brief.replace(/\s+$/, '');
+    a.setBrief((base ? `${base}\n` : '') + (STARTERS[key] ?? '') + option);
+    setTimeout(() => {
+      const el = briefBox.current;
+      if (el) el.scrollTop = el.scrollHeight;
     }, 0);
   };
 
@@ -207,28 +227,56 @@ export default function RequestCreate() {
 
                 {a.mode === 'free' ? (
                   <div>
-                    <textarea
-                      id="rq-brief"
-                      className="input min-h-40"
-                      maxLength={BRIEF_MAX_LENGTH}
-                      placeholder={t('req.briefPlaceholder')}
-                      value={a.brief}
-                      onChange={(e) => a.setBrief(e.target.value)}
-                    />
-                    <div className="mt-1 flex items-center justify-between text-xs text-tx-soft">
-                      <span>{a.brief.length > 0 && t('req.pagesOf', { n: pageCount(a.brief), max: 5 })}</span>
-                      <button type="button" className="text-accent underline" onClick={() => setBigText(true)}>
-                        {t('req.expand')}
+                    <div className="relative overflow-hidden rounded-[10px] border border-black/10 bg-surface transition-colors focus-within:border-accent">
+                      <button
+                        type="button"
+                        className="absolute end-6 top-2 z-[2] grid h-[30px] w-[30px] place-items-center rounded-full bg-surface text-tx-soft transition-colors hover:bg-accent-soft hover:text-accent"
+                        title={t('req.expand')}
+                        aria-label={t('req.expand')}
+                        onClick={() => setBigText(true)}
+                      >
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+                        </svg>
                       </button>
+                      <textarea
+                        ref={briefBox}
+                        id="rq-brief"
+                        className="block min-h-[150px] w-full resize-none overflow-y-auto border-0 bg-transparent px-4 py-3.5 text-sm leading-[1.7] outline-none"
+                        maxLength={BRIEF_MAX_LENGTH}
+                        placeholder={t('req.briefPlaceholder')}
+                        value={a.brief}
+                        onChange={(e) => a.setBrief(e.target.value)}
+                        onBlur={() => setBlurTick((n) => n + 1)}
+                      />
+                      <RequestGuide
+                        brief={a.brief}
+                        rows={rows}
+                        nudge={blurTick}
+                        onPick={pickOption}
+                        onAppend={appendStarter}
+                        onChat={() => pickMode('chat')}
+                      />
                     </div>
-                    <RequestGuide
-                      brief={a.brief}
-                      rows={rows}
-                      ready={ready}
-                      onChat={() => pickMode('chat')}
-                      onAppend={appendStarter}
-                      onSummary={() => goTo('step-b')}
-                    />
+                    {a.brief.length > BRIEF_MAX_LENGTH * 0.8 && (
+                      <div className="mt-1 text-xs text-red-600">{t('req.pagesOf', { n: pageCount(a.brief), max: 5 })}</div>
+                    )}
+                    {a.brief.trim() && missing === 0 && (
+                      <div className="mt-3.5 flex flex-wrap items-center gap-3">
+                        {goAgent ? (
+                          <>
+                            <button type="button" className="btn btn-gold" disabled={a.typing} onClick={a.continueToAgent}>
+                              {t('req.continueArrow')}
+                            </button>
+                            <span className="text-xs text-tx-soft">{t('req.continueHint')}</span>
+                          </>
+                        ) : (
+                          <button type="button" className="btn btn-gold" disabled={!ready} onClick={() => goTo('step-b')}>
+                            {t('req.toSummaryArrow')}
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <RequestChat
@@ -291,23 +339,6 @@ export default function RequestCreate() {
 
               <div className="space-y-4">
                 <RequestPanel rows={rows} fields={a.fields} />
-                {goAgent ? (
-                  <>
-                    <button
-                      type="button"
-                      className="btn btn-gold w-full"
-                      disabled={a.typing}
-                      onClick={a.continueToAgent}
-                    >
-                      {t('req.continue')}
-                    </button>
-                    <p className="text-xs text-tx-soft">{t('req.continueHint')}</p>
-                  </>
-                ) : (
-                  <button type="button" className="btn btn-gold w-full" disabled={!ready} onClick={() => goTo('step-b')}>
-                    {t('req.toSummary')}
-                  </button>
-                )}
               </div>
             </div>
           </div>
@@ -360,16 +391,13 @@ export default function RequestCreate() {
       </div>
       {bigText && (
         <BigEditor
-          title={t('req.principalService')}
+          title={t('req.freeTitle')}
           initial={a.brief}
           initialHtml={richHtmlFor(a.brief)}
           submitLabel={t('req.bigSave')}
-          hint={t('req.bigHint')}
-          onClose={(draft, html) => {
-            a.setBrief(draft.slice(0, BRIEF_MAX_LENGTH));
-            if (html) setRich({ text: draft.slice(0, BRIEF_MAX_LENGTH).trim(), html });
-            setBigText(false);
-          }}
+          closeLabel={t('req.cancel')}
+          hint={t('req.freeSaveHint')}
+          onClose={() => setBigText(false)}
           onSubmit={(v, html) => {
             a.setBrief(v.slice(0, BRIEF_MAX_LENGTH));
             if (html) setRich({ text: v.slice(0, BRIEF_MAX_LENGTH).trim(), html });

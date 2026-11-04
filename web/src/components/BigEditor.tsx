@@ -20,6 +20,7 @@ export default function BigEditor({
   initial,
   initialHtml,
   submitLabel,
+  closeLabel,
   hint,
   onSubmit,
   onClose,
@@ -28,6 +29,7 @@ export default function BigEditor({
   initial: string;
   initialHtml?: string; // the formatting this text was written with, when it is still known
   submitLabel: string;
+  closeLabel?: string; // the label of the button that closes without sending; defaults to "close"
   hint?: string;
   onSubmit: (text: string, html: string) => void;
   onClose: (draft: string, html: string) => void;
@@ -178,7 +180,7 @@ export default function BigEditor({
             {over ? t('req.tooLongPages', { max: MAX_PAGES }) : hint}
           </span>
           <button type="button" className="btn" onClick={close}>
-            {t('req.bigClose')}
+            {closeLabel ?? t('req.bigClose')}
           </button>
           <button type="button" className="btn btn-gold" disabled={over || empty} onClick={submit}>
             {submitLabel}
