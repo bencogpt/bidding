@@ -9,13 +9,11 @@ service firebase.storage {
     function role() { return isSignedIn() ? request.auth.token.role : ''; }
     function supplierId() { return isSignedIn() ? request.auth.token.supplierId : ''; }
 
-    // Supplier submission uploads: a supplier may write only under their own folder.
+    // Supplier submissions: suppliers have no direct Storage access — files are uploaded through a
+    // one-time signed link issued by createSubmissionUpload (access, deadline, size, type checked).
     match /tenders/{tenderId}/submissions/{ownerSupplierId}/{fileName} {
-      allow read: if role() == 'tender_manager'
-        || (role() == 'supplier' && supplierId() == ownerSupplierId);
-      allow write: if role() == 'supplier'
-        && supplierId() == ownerSupplierId
-        && request.resource.size < 50 * 1024 * 1024;
+      allow read: if role() == 'tender_manager';
+      allow write: if false;
     }
 
     // Everything else (exported tender PDFs, templates) is function-only via signed URLs.
