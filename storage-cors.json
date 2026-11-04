@@ -1,0 +1,12 @@
+[
+  {
+    "origin": [
+      "https://biding-system.web.app",
+      "https://biding-system.firebaseapp.com",
+      "http://localhost:5173"
+    ],
+    "method": ["PUT"],
+    "responseHeader": ["Content-Type"],
+    "maxAgeSeconds": 3600
+  }
+]
