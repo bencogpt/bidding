@@ -209,7 +209,8 @@ test('supplier WITH access cannot read a tender before it is published', async (
 
 test('supplier cannot read internal provenance or supervisor reports', async () => {
   await assertFails(getDoc(doc(supplierA(), 'tenders/t1/internal/provenance')));
-  await assertFails(getDoc(doc(supplierA(), 'tenders/t1/internal/suppliers')), 'who it is published to stays internal');
+  // who the case is published to stays internal
+  await assertFails(getDoc(doc(supplierA(), 'tenders/t1/internal/suppliers')));
   await assertSucceeds(getDoc(doc(manager(), 'tenders/t1/internal/suppliers')));
   await assertFails(setDoc(doc(manager(), 'tenders/t1/internal/suppliers'), { supplierIds: [] }));
   await assertFails(getDoc(doc(supplierA(), 'tenders/t1/supervision/r1')));
