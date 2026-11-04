@@ -8,6 +8,9 @@ import type {
   RecommendationsInput,
   RecommendationsResult,
   GrantAccessInput,
+  SupplierTenderView,
+  CreateSubmissionUploadInput,
+  SubmissionDoc,
   SetPendingSuppliersInput,
   AskQuestionInput,
   AnswerQuestionsInput,
@@ -59,6 +62,15 @@ import type {
   ResearchStatus,
   ExternalSearchStatus,
 } from '@obms/shared';
+
+/** What a supplier receives for one case (safe projection; see supplierGetTender). */
+export interface SupplierCase {
+  tender: SupplierTenderView;
+  questions: { id: string; text: string; answered: boolean; clusterId: string | null; createdAt: number }[];
+  answers: { id: string; clusterId: string; questionIds: string[]; text: string; createdAt: number }[];
+  myQuestionIds: string[];
+  mySubmission: Pick<SubmissionDoc, 'files' | 'summary' | 'status' | 'submittedAt'> | null;
+}
 
 // The Firebase client gives up after 70 s by default and reports an error — while the server keeps
 // going (creating a case runs the supervisor + Claude and takes ~1.5 min). Wait as long as the
@@ -124,6 +136,13 @@ export const api = {
     'rerunRequestResearch',
   ),
   askQuestion: call<AskQuestionInput, { id: string }>('askQuestion'),
+  // The supplier's side: functions only (suppliers have no direct database or storage access).
+  supplierListTenders: call<Record<string, never>, { tenders: SupplierTenderView[] }>('supplierListTenders'),
+  supplierGetTender: call<{ tenderId: string }, SupplierCase>('supplierGetTender'),
+  createSubmissionUpload: call<
+    CreateSubmissionUploadInput,
+    { url: string; method: 'PUT' | 'POST'; headers: Record<string, string>; path: string; name: string }
+  >('createSubmissionUpload'),
   clusterTenderQuestions: call<
     { tenderId: string },
     { clusters: { clusterId: string; questionIds: string[]; representativeText: string }[] }

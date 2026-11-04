@@ -30,6 +30,7 @@ import type {
   ConversionRun,
   BidRequestDoc,
   RequestResearch,
+  ComparisonReport,
   ResearchDraft,
   ResearchSummary,
 } from '@obms/shared';
@@ -332,6 +333,16 @@ export const accessRepo = {
     const q = await db.collection('tenders').doc(tenderId).collection('access').get();
     return q.docs.map((d) => d.data() as AccessDoc);
   },
+  /** The tender ids a principal (supplier) has access to. */
+  async tenderIdsFor(principalId: string): Promise<string[]> {
+    const q = await db.collectionGroup('access').where('principalId', '==', principalId).get();
+    return q.docs.map((d) => d.ref.parent.parent?.id).filter((id): id is string => !!id);
+  },
+  /** Questions a supplier asked on a tender (their own authorship records only). */
+  async questionIdsBy(tenderId: string, supplierId: string): Promise<string[]> {
+    const q = await db.collection('tenders').doc(tenderId).collection('questionAuthors').where('supplierId', '==', supplierId).get();
+    return q.docs.map((d) => d.id);
+  },
   async get(tenderId: string, principalId: string): Promise<AccessDoc | null> {
     const s = await db
       .collection('tenders')
@@ -396,6 +407,10 @@ export const answersRepo = {
   newId(tenderId: string): string {
     return db.collection('tenders').doc(tenderId).collection('answers').doc().id;
   },
+  async list(tenderId: string): Promise<AnswerDoc[]> {
+    const q = await db.collection('tenders').doc(tenderId).collection('answers').get();
+    return q.docs.map((d) => d.data() as AnswerDoc);
+  },
 };
 
 // ---- submissions (subcollection of tenders) ----
@@ -411,6 +426,10 @@ export const submissionsRepo = {
   async list(tenderId: string): Promise<SubmissionDoc[]> {
     const q = await db.collection('tenders').doc(tenderId).collection('submissions').get();
     return q.docs.map((d) => d.data() as SubmissionDoc);
+  },
+  async get(tenderId: string, supplierId: string): Promise<SubmissionDoc | null> {
+    const s = await db.collection('tenders').doc(tenderId).collection('submissions').doc(supplierId).get();
+    return s.exists ? (s.data() as SubmissionDoc) : null;
   },
 };
 
@@ -444,6 +463,14 @@ export const internalRepo = {
   async getParams(tenderId: string): Promise<Record<string, string | number>> {
     const s = await db.collection('tenders').doc(tenderId).collection('internal').doc('params').get();
     return s.exists ? (s.data() as Record<string, string | number>) : {};
+  },
+  /** The AI comparison report (internal: never on the supplier-readable tender doc). */
+  async getComparison(tenderId: string): Promise<ComparisonReport | null> {
+    const s = await db.collection('tenders').doc(tenderId).collection('internal').doc('comparison').get();
+    return s.exists ? (s.data() as ComparisonReport) : null;
+  },
+  async setComparison(tenderId: string, report: ComparisonReport): Promise<void> {
+    await db.collection('tenders').doc(tenderId).collection('internal').doc('comparison').set(JSON.parse(JSON.stringify(report)));
   },
   /** Suppliers picked before publication (internal; they get access when the case is published). */
   async getPendingSuppliers(tenderId: string): Promise<string[]> {

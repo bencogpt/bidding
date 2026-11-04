@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TenderDoc, SubmissionDoc } from '@obms/shared';
 import { api } from '../lib/api';
+import { useTenderInternal } from '../lib/hooks';
 
 export default function EvaluationPanel({
   tender,
@@ -13,7 +14,9 @@ export default function EvaluationPanel({
   const { t } = useTranslation();
   const [busy, setBusy] = useState<'compare' | string | null>(null);
   const [error, setError] = useState('');
-  const report = tender.comparisonReport ?? null;
+  // Internal report (older cases may still carry it on the tender doc until migrated).
+  const { comparison } = useTenderInternal(tender.id);
+  const report = comparison ?? tender.comparisonReport ?? null;
   const nameOf = (sid: string) =>
     submissions.find((s) => s.supplierId === sid)?.supplierName ?? sid;
 
@@ -121,6 +124,20 @@ export default function EvaluationPanel({
                     </div>
                   )}
                   {r.rationaleHe && <p className="mt-1 text-sm text-tx-soft" dir="auto">{r.rationaleHe}</p>}
+                  {r.criteriaScores && r.criteriaScores.length > 1 && (
+                    <div className="mt-1 flex flex-wrap gap-2 text-xs text-tx-mute">
+                      {r.criteriaScores.map((c) => (
+                        <span key={c.name} className="chip">
+                          {c.name}: {c.score}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {r.injection && (
+                    <div className="mt-2 rounded bg-red-50 p-2 text-xs text-red-700" dir="auto">
+                      {t('eval.injectionFlag')}: “{r.injection.evidence}”
+                    </div>
+                  )}
                 </div>
               ))}
           </div>

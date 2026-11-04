@@ -199,8 +199,23 @@ test('internal manager can read any tender', async () => {
   await assertSucceeds(getDoc(doc(manager(), 'tenders/t1')));
 });
 
-test('supplier WITH access can read the tender', async () => {
-  await assertSucceeds(getDoc(doc(supplierA(), 'tenders/t1')));
+test('suppliers have NO direct database access — only through Cloud Functions', async () => {
+  const sup = supplierA();
+  for (const path of [
+    'tenders/t1',
+    'tenders/t1/access/sup_a',
+    'tenders/t1/questions/qb',
+    'tenders/t1/questionAuthors/qa',
+    'tenders/t1/submissions/sup_a',
+    'suppliers/sup_a',
+    'users/ua',
+  ]) {
+    await assertFails(getDoc(doc(sup, path)));
+  }
+  await assertFails(getDocs(query(collectionGroup(sup, 'access'), where('principalId', '==', 'sup_a'))));
+  await assertFails(getDocs(query(collectionGroup(sup, 'submissions'), where('supplierId', '==', 'sup_a'))));
+  await assertFails(getDocs(collection(sup, 'tenders/t1/answers')));
+  await assertFails(setDoc(doc(sup, 'tenders/t1/submissions/sup_a'), { supplierId: 'sup_a', summary: 'x', files: [] }));
 });
 
 test('supplier WITH access cannot read a tender before it is published', async () => {
@@ -258,8 +273,8 @@ test('supplier cannot create a question document directly (function-only)', asyn
   );
 });
 
-test('authorized supplier reads a question and it carries NO asker identity', async () => {
-  const snap = await assertSucceeds(getDoc(doc(supplierA(), 'tenders/t1/questions/qb')));
+test('a question document carries NO asker identity (read by internal users; suppliers via the function)', async () => {
+  const snap = await assertSucceeds(getDoc(doc(legal(), 'tenders/t1/questions/qb')));
   const data = (snap as { data: () => Record<string, unknown> }).data();
   assert.equal(data.text, 'שאלה של ספק ב');
   assert.equal(data.supplierId, undefined, 'question must not expose supplierId');
@@ -270,8 +285,8 @@ test('supplier CANNOT read another supplier\'s question author', async () => {
   await assertFails(getDoc(doc(supplierA(), 'tenders/t1/questionAuthors/qb')));
 });
 
-test('supplier CAN read the author record of their own question', async () => {
-  await assertSucceeds(getDoc(doc(supplierA(), 'tenders/t1/questionAuthors/qa')));
+test('a supplier can\'t read even its own author record directly (own question ids come from the function)', async () => {
+  await assertFails(getDoc(doc(supplierA(), 'tenders/t1/questionAuthors/qa')));
 });
 
 test('internal user can read any question author', async () => {
