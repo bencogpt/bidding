@@ -30,6 +30,14 @@ export default {
         display: ['Heebo', 'Assistant', 'system-ui', 'sans-serif'],
       },
       borderRadius: { sm: '6px', DEFAULT: '10px', lg: '16px', xl: '22px' },
+      // The three bouncing dots of the agent's typing indicator (UX prototype).
+      keyframes: {
+        rcdot: {
+          '0%, 60%, 100%': { opacity: '.25', transform: 'translateY(0)' },
+          '30%': { opacity: '1', transform: 'translateY(-3px)' },
+        },
+      },
+      animation: { rcdot: 'rcdot 1.2s infinite ease-in-out' },
       boxShadow: {
         card: '0 1px 2px rgba(16,24,40,.04), 0 4px 16px rgba(16,24,40,.06)',
         lg: '0 12px 40px rgba(16,24,40,.16)',

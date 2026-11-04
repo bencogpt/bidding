@@ -8,6 +8,8 @@ import {
   parseAmount,
   type AskKey,
   type AssistRequestResult,
+  canEditMessage,
+  rewindSnapshots,
 } from '@obms/shared';
 import { api } from './api';
 
@@ -15,6 +17,7 @@ export type Mode = 'free' | 'chat';
 export interface ChatMsg {
   role: 'agent' | 'user';
   text: string;
+  edited?: boolean; // an answer the person changed afterwards
   local?: boolean; // shown in the chat but never sent to the server (the frame amount, GLOBAL_RULES G6)
 }
 /** What the chat is waiting for: a server question, or the frame amount which the browser asks and keeps. */
@@ -33,6 +36,20 @@ export interface Fields {
   supplier_equipment: string;
   work_hours: string;
   option_periods_count: string;
+}
+
+/** Conversation state just before an answer was given (see edit). */
+interface Snapshot {
+  brief: string;
+  qualityAsked: number;
+  fields: Fields;
+  touched: Set<keyof Fields>;
+  answered: Set<keyof Fields>;
+  asking: Asking | null;
+  chips: string[];
+  chat: ChatMsg[];
+  held: AssistRequestResult | null;
+  greeted: boolean;
 }
 
 export const DEFAULT_CLASSIFICATION = 'בלמ"ס';
@@ -91,6 +108,7 @@ export function useRequestAgent() {
   const extractSeq = useRef(0); // a newer extraction supersedes an older one
   const chatSeq = useRef(0); // a newer chat turn supersedes an older one; extraction never cancels a chat turn
   const greeted = useRef(false);
+  const snapshots = useRef(new Map<number, Snapshot>()); // by the position of the answer in the chat
   const held = useRef<AssistRequestResult | null>(null); // the server's next question, kept while the amount is asked
   const budgetOk = () => {
     const n = Number(fieldsRef.current.annual_budget);
@@ -251,28 +269,71 @@ export function useRequestAgent() {
     }
   };
 
+  // The conversation state as it was just before an answer, so that answer can be edited later.
+  const capture = (): Snapshot => ({
+    brief,
+    qualityAsked,
+    fields: fieldsRef.current,
+    touched: new Set(touched.current),
+    answered: new Set(answered.current),
+    asking,
+    chips,
+    chat,
+    held: held.current,
+    greeted: greeted.current,
+  });
+
   // An answer to a "scope" or "quality" question belongs to the brief; the other answers are read by the agent.
+  // `from` is the state the answer is given in: now, or an earlier snapshot when an answer is edited.
+  const submit = (text: string, from: Snapshot, edited = false) => {
+    const full = text.trim().slice(0, BRIEF_MAX_LENGTH);
+    const t = from.asking === 'scope' ? full : full.slice(0, 1000); // only the principal service may run long
+    if (!t || typing) return;
+    let nextBrief = from.brief;
+    let nextQuality = from.qualityAsked;
+    if (from.asking === 'scope') nextBrief = from.brief ? `${from.brief}\n${t}` : t;
+    if (from.asking === 'quality') {
+      nextQuality += 1;
+      if (t !== 'דלג') {
+        nextBrief = from.brief.includes(CLARIFY) ? `${from.brief}\n- ${t}` : `${from.brief}\n\n${CLARIFY}\n- ${t}`;
+      }
+    }
+    nextBrief = nextBrief.slice(0, BRIEF_MAX_LENGTH);
+    snapshots.current.set(from.chat.length, from);
+    setBrief(nextBrief);
+    setQualityAsked(nextQuality);
+    const history = [...from.chat, { role: 'user' as const, text: t, ...(edited ? { edited } : {}) }];
+    setChat(history);
+    void turn(history, nextBrief, nextQuality);
+  };
+
   const say = (text: string) => {
     if (asking === 'budget') {
       if (text.trim() && !typing) answerBudget(text.trim().slice(0, 100));
       return;
     }
-    const full = text.trim().slice(0, BRIEF_MAX_LENGTH);
-    const t = asking === 'scope' ? full : full.slice(0, 1000); // only the principal service may run long
-    if (!t || typing || asking === 'done') return;
-    let nextBrief = brief;
-    let nextQuality = qualityAsked;
-    if (asking === 'scope') nextBrief = brief ? `${brief}\n${t}` : t;
-    if (asking === 'quality') {
-      nextQuality += 1;
-      if (t !== 'דלג') nextBrief = brief.includes(CLARIFY) ? `${brief}\n- ${t}` : `${brief}\n\n${CLARIFY}\n- ${t}`;
-    }
-    nextBrief = nextBrief.slice(0, BRIEF_MAX_LENGTH);
-    setBrief(nextBrief);
-    setQualityAsked(nextQuality);
-    const history = [...chat, { role: 'user' as const, text: t }];
-    setChat(history);
-    void turn(history, nextBrief, nextQuality);
+    if (asking === 'done') return;
+    submit(text, capture());
+  };
+
+  // What the agent was asking when the answer at `index` was given; null when that answer cannot be edited.
+  const editAsking = (index: number): Asking | null =>
+    canEditMessage(chat, index, snapshots.current, typing) ? (snapshots.current.get(index)?.asking ?? null) : null;
+
+  // Edit an earlier answer: go back to the state before it, drop everything after it, and answer again from there.
+  const edit = (index: number, text: string) => {
+    if (!canEditMessage(chat, index, snapshots.current, typing) || !text.trim()) return;
+    const snap = rewindSnapshots(snapshots.current, index);
+    if (!snap) return;
+    touched.current = new Set(snap.touched);
+    answered.current = new Set(snap.answered);
+    held.current = snap.held;
+    greeted.current = snap.greeted;
+    fieldsRef.current = snap.fields;
+    setFields(snap.fields);
+    setAsking(snap.asking);
+    setChips(snap.chips);
+    submit(text, snap, true);
   };
 
   const reset = () => {
@@ -280,6 +341,7 @@ export function useRequestAgent() {
     chatSeq.current++;
     touched.current.clear();
     answered.current.clear();
+    snapshots.current.clear();
     held.current = null;
     greeted.current = false;
     setBrief('');
@@ -311,6 +373,8 @@ export function useRequestAgent() {
     limited,
     error,
     say,
+    edit,
+    editAsking,
     reset,
   };
 }

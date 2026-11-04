@@ -44,6 +44,24 @@ function toLocalInput(ms: number): string {
 const DEADLINE_ORDER = 9;
 const TEAM_ORDER = 11;
 const TAGS_ORDER = 15;
+// The agent's recommendation from the request text: the type whose keywords appear most. The choice stays with procurement.
+const TYPE_HINTS: [TenderType, RegExp][] = [
+  [TENDER_TYPES.service, /נותני שירות|כוח אדם|צוות|תחזוקה|פיתוח|שירותים|SLA/g],
+  [TENDER_TYPES.goods, /טובין|רכישת|אספקת|ציוד|מדפסות|ריהוט|חומרה|שרתים|מסכים/g],
+  [TENDER_TYPES.project, /פרויקט|תוצרים|אבני דרך|אבן דרך|בינוי|שיפוץ/g],
+];
+function suggestType(text: string): TenderType | '' {
+  let best: TenderType | '' = '';
+  let score = 0;
+  for (const [type, re] of TYPE_HINTS) {
+    const n = (text.match(re) ?? []).length;
+    if (n > score) {
+      score = n;
+      best = type;
+    }
+  }
+  return best;
+}
 const YES = 'כן';
 const NO = 'לא';
 
@@ -67,6 +85,8 @@ export default function TenderCreate() {
   // Bumped on every type pick; a draft response whose number is stale belongs to a type no longer selected.
   const draftSeq = useRef(0);
   const [drafting, setDrafting] = useState(false);
+  // Replacing a type that already has filled fields asks first, because the new type starts from a fresh draft.
+  const [swapTo, setSwapTo] = useState<TenderType | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const template = useTemplate(type || undefined);
@@ -169,6 +189,16 @@ export default function TenderCreate() {
     setDraftFailed(false);
     setDraftMissing([]);
     if (next) void runDraft(next);
+  };
+
+  const suggested = type ? '' : suggestType(`${String((request?.details as Record<string, unknown> | undefined)?.service_name ?? '')} ${brief}`);
+  const hasFilled = !!title.trim() || domainTags.length > 0 || Object.values(params).some((v) => String(v).trim() !== '');
+  const requestType = (next: TenderType) => {
+    if (type && type !== next && hasFilled) {
+      setSwapTo(next);
+      return;
+    }
+    pickType(type === next ? '' : next);
   };
 
   // Fields still holding the AI draft's {{PLACEHOLDER}} — the brief didn't give the value.
@@ -369,18 +399,46 @@ export default function TenderCreate() {
                   type="button"
                   role="radio"
                   aria-checked={on}
-                  onClick={() => pickType(on ? '' : tt)}
+                  onClick={() => requestType(tt)}
                   className={
                     'rounded-lg border px-4 py-3 text-start transition ' +
                     (on ? 'border-gold bg-gold-soft/40 ring-1 ring-gold' : 'border-black/10 hover:border-gold')
                   }
                 >
+                  {suggested === tt && (
+                    <em className="mb-1 inline-block rounded-full bg-accent-soft px-2 text-[10px] not-italic leading-4 text-accent">
+                      {t('create.suggested')}
+                    </em>
+                  )}
                   <b className={'mb-1 block text-sm ' + (on ? 'text-gold-deep' : '')}>{t(`type.${tt}`)}</b>
                   <span className="text-xs leading-relaxed text-tx-soft">{t(`type.desc.${tt}`)}</span>
                 </button>
               );
             })}
           </div>
+          {swapTo && (
+            <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-accent bg-accent-soft px-3.5 py-2.5 text-[13px]">
+              <span className="flex-1">{t('create.swapWarn', { type: t(`type.${swapTo}`) })}</span>
+              <button
+                type="button"
+                className="btn btn-gold btn-sm"
+                onClick={() => {
+                  pickType(swapTo);
+                  setSwapTo(null);
+                }}
+              >
+                {t('create.swapOk')}
+              </button>
+              <button type="button" className="btn btn-sm" onClick={() => setSwapTo(null)}>
+                {t('create.swapNo')}
+              </button>
+            </div>
+          )}
+          {!type && (
+            <div className="mt-3 rounded-lg border border-dashed border-black/10 p-3.5 text-center text-[13px] text-tx-soft">
+              {suggested ? t('create.suggestHint', { type: t(`type.${suggested}`) }) : t('create.pickHint')}
+            </div>
+          )}
           {drafting && <div className="mt-2 text-sm text-tx-soft">{t('create.drafting')}</div>}
           {draftNote && <div className="mt-2 rounded bg-amber-100 p-2 text-xs text-amber-700">{draftNote}</div>}
         </div>
