@@ -1031,8 +1031,8 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
     }
   }
 
-  // Final approval: every required role has signed off in this review round.
-  if (REQUIRE_APPROVALS && input.to === 'ready' && canTransition(current.status, 'ready')) {
+  // Final approval and publishing: every required role has signed off in this review round.
+  if (REQUIRE_APPROVALS && (input.to === 'ready' || input.to === 'published') && canTransition(current.status, input.to)) {
     const waiting = missingApprovals(
       current.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[current.type],
       current.team,
@@ -1041,7 +1041,7 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
     if (waiting.length) {
       throw new HttpsError(
         'failed-precondition',
-        `לא ניתן לאשר סופית — ממתין לאישור: ${waiting.map(roleLabel).join(', ')}.`,
+        `${input.to === 'published' ? 'לא ניתן לפרסם' : 'לא ניתן לאשר סופית'} — ממתין לאישור: ${waiting.map(roleLabel).join(', ')}.`,
       );
     }
   }

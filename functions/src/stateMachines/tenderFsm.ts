@@ -24,8 +24,9 @@ export async function transition(
     );
   }
   await tendersRepo.update(tenderId, { status: to });
-  // Every review round starts with no approvals.
-  if (to === 'internal_review') await tendersRepo.clearApprovals(tenderId);
+  // A review round starts with no approvals. Sent back from "ready" (to collect missing approvals), the
+  // approvals already given are kept.
+  if (to === 'internal_review' && tender.status !== 'ready') await tendersRepo.clearApprovals(tenderId);
   await auditRepo.append({
     entityType: 'tender',
     entityId: tenderId,

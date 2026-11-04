@@ -44,12 +44,10 @@ export function missingRoles(required: readonly TeamRole[], team: CaseTeam | und
 }
 
 /**
- * Whether the final approval waits for every role's sign-off. Off while approveTender cannot be
- * invoked on the live project (its invoker permission needs an admin): the approval buttons and
- * counter are hidden and "ready" does not need them. Turn on and redeploy transitionTender once
- * approveTender is callable.
+ * Every required role must sign off before the final approval ("ready") and before publishing.
+ * (approveTender is callable on the live project since 2026-11-03.)
  */
-export const REQUIRE_APPROVALS = false;
+export const REQUIRE_APPROVALS = true;
 
 /** One team role's sign-off on the tender during internal review. */
 export interface TeamApproval {
