@@ -19,3 +19,5 @@ export * from './amount.js';
 export * from './procurementForm.js';
 export * from './israelCalendar.js';
 export * from './injection.js';
+export * from './workspaceLabels.js';
+export * from './workspaceView.js';
