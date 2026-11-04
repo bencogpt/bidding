@@ -39,7 +39,8 @@ export default function SupplierForm({
     setError('');
     try {
       await api.upsertSupplier({
-        id: initial?.id,
+        // Only when editing: an undefined id is sent as null, which the server rejects.
+        ...(initial?.id ? { id: initial.id } : {}),
         name,
         contactEmail,
         country: initial?.country ?? prefill?.country ?? (isIsraeli ? 'IL' : 'OTHER'),
