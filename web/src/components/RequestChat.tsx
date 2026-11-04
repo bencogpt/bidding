@@ -60,6 +60,7 @@ export default function RequestChat({
   const end = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const composer = useRef<HTMLDivElement>(null);
+  const editor = useRef<HTMLDivElement>(null);
   const isScope = asking === 'scope';
   const max = isScope ? BRIEF_MAX_LENGTH : SHORT_MAX;
   const over = isScope && text.length > BRIEF_MAX_LENGTH;
@@ -80,6 +81,10 @@ export default function RequestChat({
     field.current?.focus({ preventScroll: true });
     composer.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [typing, chat, disabled, editing]);
+  // The inline editor opens inside the scrolling log: bring all of it (and its buttons) into view.
+  useEffect(() => {
+    if (editing !== null) editor.current?.scrollIntoView({ block: 'nearest' });
+  }, [editing]);
   // An edit cannot go on once the agent starts answering or the conversation is rewound.
   useEffect(() => {
     if (editing !== null && editAsking(editing) === null) setEditing(null);
@@ -133,7 +138,7 @@ export default function RequestChat({
           }
           if (editing === i) {
             return (
-              <div key={i} className="min-w-[260px] max-w-[86%] self-end rounded-[14px] rounded-ee-[4px] border border-accent bg-surface px-3.5 py-[9px]">
+              <div ref={editor} key={i} className="min-w-[260px] max-w-[86%] self-end rounded-[14px] rounded-ee-[4px] border border-accent bg-surface px-3.5 py-[9px]">
                 <textarea
                   autoFocus
                   className="min-h-[60px] w-full resize-y bg-transparent text-sm leading-relaxed outline-none"
