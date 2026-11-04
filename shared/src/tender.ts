@@ -38,7 +38,9 @@ export const TENDER_STATUS_LABELS_HE: Record<TenderStatus, string> = {
 
 // Allowed transitions for the tender FSM.
 export const TENDER_TRANSITIONS: Record<TenderStatus, TenderStatus[]> = {
-  draft: ['internal_review'],
+  // 'ready' straight from the draft: the team approves on the document, then the manager's final approval
+  // locks the case (plan D1). 'internal_review' stays for older cases and reopened ones.
+  draft: ['internal_review', 'ready'],
   internal_review: ['ready', 'draft'],
   ready: ['published', 'internal_review'],
   published: ['responses'],

@@ -37,6 +37,11 @@ connectFirestoreEmulator(db, '127.0.0.1', 8080);
 const fns = getFunctions(app, 'europe-west1');
 connectFunctionsEmulator(fns, '127.0.0.1', 5001);
 
+// The Admin SDK must talk to the emulators even when this runs directly (`node functions/lib/test/e2e.js`)
+// rather than under `firebase emulators:exec`, which sets these — never to the live project.
+process.env.FIRESTORE_EMULATOR_HOST ??= '127.0.0.1:8080';
+process.env.FIREBASE_AUTH_EMULATOR_HOST ??= '127.0.0.1:9099';
+process.env.FIREBASE_STORAGE_EMULATOR_HOST ??= '127.0.0.1:9199';
 const adminApp = initAdmin({ projectId: 'biding-system', storageBucket: 'biding-system.firebasestorage.app' }, 'e2e-admin');
 const call = (n: string) => httpsCallable(fns, n);
 const login = (email: string) => signInWithEmailAndPassword(auth, email, 'password');
@@ -54,6 +59,21 @@ async function approveAs(tenderId: string, roles: string[]) {
   }
   await signOut(auth);
   await login('manager@obms.test');
+}
+
+// Whether the given role's approval is refused with a message matching `re`; the manager is signed back in.
+async function refusedAs(tenderId: string, role: string, re: RegExp): Promise<boolean> {
+  await signOut(auth);
+  await login(role + '@obms.test');
+  let refused = false;
+  try {
+    await call('approveTender')({ tenderId, approve: true });
+  } catch (e) {
+    refused = re.test((e as Error).message);
+  }
+  await signOut(auth);
+  await login('manager@obms.test');
+  return refused;
 }
 
 async function main() {
@@ -209,9 +229,9 @@ async function main() {
   assert.ok(twice, 'the document is created only once');
   console.log('✓ draft-first: document created only after the inspector checked the draft');
 
-  await call('transitionTender')({ tenderId, to: 'internal_review' });
-  // With REQUIRE_APPROVALS off, an early "ready" would succeed and end the review round —
-  // so only probe the refusal when the gate is on. The approvals themselves are always exercised.
+  // Approvals open as soon as the document exists — no "send for approval" step; the manager acts last
+  // (plan D1). With REQUIRE_APPROVALS off, an early "ready" would succeed, so only probe the refusal
+  // when the gate is on. The approvals themselves are always exercised.
   if (REQUIRE_APPROVALS) {
     let notApproved = false;
     try {
@@ -221,10 +241,27 @@ async function main() {
     }
     assert.ok(notApproved, 'final approval is refused until every role has approved');
   }
-  await approveAs(tenderId, ['requester', 'legal', 'finance']);
+  assert.ok(await refusedAs(tenderId, 'legal', /המשפטי מאשר אחרי/), 'legal approves after requester and finance (D1a)');
+  await approveAs(tenderId, ['requester']);
+  // The manager approves on finance's behalf (D1d): a reason is required; it counts like finance's own.
+  let noReason = false;
+  try {
+    await call('approveTender')({ tenderId, approve: true, onBehalfOf: 'finance', reason: 'קצר' });
+  } catch (e) {
+    noReason = /יש לציין סיבה/.test((e as Error).message);
+  }
+  assert.ok(noReason, 'approving on behalf needs a reason');
+  await call('approveTender')({ tenderId, approve: true, onBehalfOf: 'finance', reason: 'אושר בטלפון, איש הכספים בחופשה' });
+  await approveAs(tenderId, ['legal']);
   const approved = (await getDoc(doc(db, 'tenders', tenderId))).data()!.approvals ?? {};
   assert.deepEqual(Object.keys(approved).sort(), ['finance', 'legal', 'requester'], 'each role recorded its approval');
+  assert.equal(approved.finance.onBehalf, true, "finance's approval was given on its behalf");
+  assert.equal(approved.finance.uid, goodsTeam.finance, 'an approval on behalf stands for the slot holder');
   await call('transitionTender')({ tenderId, to: 'ready' });
+  const locked = (await getDoc(doc(db, 'tenders', tenderId))).data()!;
+  assert.equal(locked.status, 'ready', "the manager's final approval goes straight from the draft to ready");
+  assert.ok(locked.lockedAt, 'and locks the case');
+  console.log('✓ approvals: team first (legal after requester and finance), on behalf with a reason, manager last');
   // Publishing goes to the suppliers the manager picked beforehand — at least one.
   let noSuppliers = false;
   try {
@@ -276,12 +313,11 @@ async function main() {
   assert.notEqual(recheck.data.verdict, 'BLOCK', 'the fixed draft passes the inspector');
   await call('generateDocument')({ tenderId: bad.data.id });
   console.log('✓ draft-first: blocked draft fixed in the app, rechecked, then its document created');
-  // Simulate a later manual edit that leaves a placeholder in the document (dev mode keeps HTML in Storage).
+  // A manual edit that leaves a placeholder in the document (dev mode keeps HTML in Storage).
   const docFile = adminStorage(adminApp).bucket('biding-system.firebasestorage.app').file(`tenders/${bad.data.id}/document.html`);
   const [html] = await docFile.download();
-  await docFile.save(html.toString('utf8').replace('</body>', '<p>{{milestones_appendix}}</p></body>'), {
-    contentType: 'text/html',
-  });
+  const cleanHtml = html.toString('utf8');
+  const withPlaceholder = cleanHtml.replace('</body>', '<p>{{milestones_appendix}}</p></body>');
   let gateRefused = false;
   try {
     await call('transitionTender')({ tenderId: bad.data.id, to: 'internal_review' });
@@ -293,8 +329,19 @@ async function main() {
   await call('assignTeamMember')({ tenderId: bad.data.id, role: 'security', uid: uidOf('security') });
   await call('transitionTender')({ tenderId: bad.data.id, to: 'internal_review' });
   console.log('✓ review gate: refused with an empty slot, passes once the team is complete');
-  await approveAs(bad.data.id, ['requester', 'legal', 'finance', 'security']);
+  // A blocking finding on the document stops approvals ("ממצא חוסם מונע אישור סופי ופרסום", plan D1).
+  await docFile.save(withPlaceholder, { contentType: 'text/html' });
+  const blockedCheck = (await call('runSupervision')({ tenderId: bad.data.id })) as { data: { verdict: string } };
+  assert.equal(blockedCheck.data.verdict, 'BLOCK', 'the leftover placeholder blocks the document');
+  assert.ok(await refusedAs(bad.data.id, 'requester', /ממצא חוסם/), 'no approval while a blocking finding is open');
+  await docFile.save(cleanHtml, { contentType: 'text/html' });
+  const clearCheck = (await call('runSupervision')({ tenderId: bad.data.id })) as { data: { verdict: string } };
+  assert.notEqual(clearCheck.data.verdict, 'BLOCK', 'the cleaned document passes again');
+  console.log('✓ approvals: refused while the document has a blocking finding');
+  // Security is assigned but doesn't block: the final approval goes ahead without it (plan D2).
+  await approveAs(bad.data.id, ['requester', 'finance', 'legal']);
   await call('transitionTender')({ tenderId: bad.data.id, to: 'ready' });
+  console.log('✓ approvals: information security does not block the final approval');
   // A case that is "ready" without every approval (e.g. from before approvals were required) can't be
   // published; sent back to review it keeps the approvals already given.
   process.env.FIRESTORE_EMULATOR_HOST ??= '127.0.0.1:8080';
@@ -308,10 +355,12 @@ async function main() {
   assert.ok(unapproved, 'publish is refused while a required role has not approved');
   await call('transitionTender')({ tenderId: bad.data.id, to: 'internal_review' });
   const kept = (await getDoc(doc(db, 'tenders', bad.data.id))).data()!.approvals ?? {};
-  assert.deepEqual(Object.keys(kept).sort(), ['finance', 'requester', 'security'], 'approvals already given are kept');
+  assert.deepEqual(Object.keys(kept).sort(), ['finance', 'requester'], 'approvals already given are kept');
   await approveAs(bad.data.id, ['legal']);
   await call('transitionTender')({ tenderId: bad.data.id, to: 'ready' });
   console.log('✓ approvals: publish needs every role; back to review keeps given approvals');
+  // After the lock a manual edit leaves a placeholder: the publish gate still catches it.
+  await docFile.save(withPlaceholder, { contentType: 'text/html' });
   await call('setPendingSuppliers')({ tenderId: bad.data.id, supplierIds: ['sup_globex'] });
   let blocked = false;
   try {

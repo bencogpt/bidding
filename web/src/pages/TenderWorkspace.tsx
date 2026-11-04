@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/AuthProvider';
 import {
@@ -13,24 +13,53 @@ import {
   useTemplate,
   useChat,
   useTenderInternal,
+  useSupervision,
 } from '../lib/hooks';
-import { REQUIRED_ROLES_BY_TYPE, REQUIRE_APPROVALS, missingRoles, missingApprovals, hasDocument } from '@obms/shared';
-import TeamPanel from '../components/TeamPanel';
+import {
+  REQUIRED_ROLES_BY_TYPE,
+  REQUIRE_APPROVALS,
+  TEAM_ROLES,
+  ROLE_HE,
+  missingApprovals,
+  hasDocument,
+  draftStateOf,
+  stageIndexOf,
+  findingsView,
+  headerAction,
+  approvalsView,
+  stageBar,
+  stagePopover,
+  visibleTabs,
+  resolveTab,
+  blockingApproverRoles,
+  type AgentRunState,
+  type ApprovalRowAction,
+  type Approvals,
+  type Holders,
+  type WorkspaceCtx,
+  type WorkspaceTabKey,
+} from '@obms/shared';
 import ChatPanel from '../components/ChatPanel';
 import { api } from '../lib/api';
 import DocumentViewer from '../components/DocumentViewer';
-import DraftPanel, { draftGate } from '../components/DraftPanel';
+import DraftPanel from '../components/DraftPanel';
+import DraftReview from '../components/DraftReview';
 import AccessPanel from '../components/AccessPanel';
 import QuestionsPanel from '../components/QuestionsPanel';
 import EvaluationPanel from '../components/EvaluationPanel';
-import CasePanel from '../components/CasePanel';
 import QuartetCard from '../components/QuartetCard';
 import NextActionCard from '../components/NextActionCard';
 import DatesCard from '../components/DatesCard';
 import SupervisorPanel from '../components/SupervisorPanel';
-import TenderHeader, { type HeaderAction } from '../components/TenderHeader';
+import TenderHeader, { type HeaderButton } from '../components/TenderHeader';
+import OnBehalfDialog from '../components/agent/OnBehalfDialog';
+import PublishDialog from '../components/agent/PublishDialog';
 
-type Tab = 'overview' | 'document' | 'supervisor' | 'access' | 'questions' | 'evaluation' | 'case';
+// The prototype's tabs (shared visibleTabs). "שיתוף והרשאות" and "תיק מכרז" are hidden for now (plan D9):
+// suppliers are picked in the publish dialog. פעילות and היסטוריית גרסאות join once built (plan D10); the
+// conference stage has no backend.
+type Tab = WorkspaceTabKey;
+const NOT_BUILT_YET: readonly WorkspaceTabKey[] = ['activity', 'versions', 'conference'];
 
 export default function TenderWorkspace() {
   const { id } = useParams();
@@ -46,7 +75,10 @@ export default function TenderWorkspace() {
   const submissions = useSubmissions(id);
   const template = useTemplate(tender?.type);
   const { pendingSuppliers } = useTenderInternal(id);
-  const [tab, setTab] = useState<Tab>('overview');
+  // A new case opens on its draft (?tab=document), where the supervisor's check is already running.
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState<Tab>(searchParams.get('tab') === 'document' ? 'document' : 'overview');
+  const [focusField, setFocusField] = useState<{ key: string; n: number } | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -54,6 +86,13 @@ export default function TenderWorkspace() {
   const [blocked, setBlocked] = useState(false);
   const [overrideReason, setOverrideReason] = useState('');
   const [initialCheck, setInitialCheck] = useState(false);
+  const reports = useSupervision(id);
+  // A check this browser started (until the server reports runs itself — plan B1).
+  const [agentBusy, setAgentBusy] = useState(false);
+  // Approving on a participant's behalf: the row it was asked for, while the reason dialog is open.
+  const [onBehalf, setOnBehalf] = useState<ApprovalRowAction | null>(null);
+  const [onBehalfError, setOnBehalfError] = useState('');
+  const [publishOpen, setPublishOpen] = useState(false);
 
   // A new case is created in seconds; its first supervisor check starts here, once per case.
   useEffect(() => {
@@ -72,10 +111,6 @@ export default function TenderWorkspace() {
   if (!tender) return <div className="text-tx-soft">{denied ? t('team.notAssigned') : '404'}</div>;
 
   const isManager = role === 'tender_manager';
-  const missing = missingRoles(
-    tender.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[tender.type],
-    tender.team,
-  );
   const transitionTo = async (
     to: Parameters<typeof api.transitionTender>[0]['to'],
     override?: string,
@@ -91,7 +126,7 @@ export default function TenderWorkspace() {
       setError(e instanceof Error ? e.message : String(e));
       if (to === 'published') {
         setBlocked(true);
-        setTab('supervisor');
+        setTab('agent');
       }
     } finally {
       setBusy(false);
@@ -100,9 +135,8 @@ export default function TenderWorkspace() {
 
   // Sign-offs of the case team in internal review: one per required role.
   const requiredRoles = tender.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[tender.type] ?? [];
-  const waiting = missingApprovals(requiredRoles, tender.team, tender.approvals);
-  const myApproved = requiredRoles.some((r) => tender.team?.[r] === user?.uid && !waiting.includes(r));
-  const iHoldSlot = requiredRoles.some((r) => tender.team?.[r] === user?.uid);
+  // Information security approves but doesn't block (plan D2).
+  const waiting = missingApprovals(blockingApproverRoles(requiredRoles), tender.team, tender.approvals);
   const setApproval = async (approve: boolean) => {
     setBusy(true);
     setError('');
@@ -115,100 +149,218 @@ export default function TenderWorkspace() {
     }
   };
 
-  const showEval = ['responses', 'evaluated', 'awarded'].includes(tender.status);
-  const tabs: { key: Tab; label: string }[] = [
-    { key: 'overview', label: t('ws.overview') },
-    { key: 'document', label: t('ws.document') },
-    { key: 'supervisor', label: t('ws.supervisor') },
-    { key: 'access', label: t('ws.access') },
-    { key: 'questions', label: t('ws.questions') },
-    ...(showEval ? [{ key: 'evaluation' as Tab, label: t('ws.evaluation') }] : []),
-    { key: 'case', label: t('ws.case') },
-  ];
 
-  // The next step for this case, shown as the header's main button.
-  let action: HeaderAction | undefined;
-  if (isManager) {
-    if (tender.status === 'draft' && !hasDocument(tender)) {
-      // Draft-first: the next step is creating the document, from the document tab.
-      const gate = draftGate(tender);
-      action = {
-        label: t('draft.nextAction'),
-        onClick: () => setTab('document'),
-        title: gate ? t(`draft.gate.${gate}`) : undefined,
-      };
-    } else if (tender.status === 'draft') {
-      // The manager's own approval: the case goes to the team for theirs.
-      action = {
-        label: t('ws.sendForApproval'),
-        onClick: () => transitionTo('internal_review'),
-        disabled: busy || missing.length > 0,
-        title: missing.length
-          ? t('team.missing', { roles: missing.map((r) => t(`role.${r}`)).join(', ') })
-          : undefined,
-      };
-    } else if (tender.status === 'internal_review') {
-      // Says what it waits for instead of looking like a dead button.
-      const done = requiredRoles.length - waiting.length;
-      action = {
-        label:
-          REQUIRE_APPROVALS && waiting.length
-            ? t('ws.waitingTeam', { done, total: requiredRoles.length })
-            : t('ws.finalApprove'),
-        onClick: () => transitionTo('ready'),
-        disabled: busy || (REQUIRE_APPROVALS && waiting.length > 0),
-        title: REQUIRE_APPROVALS && waiting.length
-          ? t('ws.awaitingApproval', { roles: waiting.map((r) => t(`role.${r}`)).join(', ') })
-          : undefined,
-      };
-    } else if (tender.status === 'ready') {
-      // Publishing needs every required role's approval too (cases that reached "ready" without them).
-      action = {
-        label: busy ? t('sup.checking') : t('ws.publish'),
-        onClick: () => transitionTo('published'),
-        disabled: busy || (REQUIRE_APPROVALS && waiting.length > 0) || pendingSuppliers.length === 0,
-        title: REQUIRE_APPROVALS && waiting.length
-          ? t('ws.awaitingApproval', { roles: waiting.map((r) => t(`role.${r}`)).join(', ') })
-          : pendingSuppliers.length === 0
-            ? t('ws.pickSuppliersFirst')
-            : undefined,
-      };
-    } else if (tender.status === 'responses' || tender.status === 'evaluated') {
-      action = { label: t('ws.toEvaluation'), onClick: () => setTab('evaluation') };
-    }
-  }
-  // A team member (not the manager) signs off through the same button.
-  if (REQUIRE_APPROVALS && !isManager && iHoldSlot && tender.status === 'internal_review') {
-    action = myApproved
-      ? { label: t('ws.withdrawApproval'), onClick: () => setApproval(false), disabled: busy }
-      : { label: t('ws.approve'), onClick: () => setApproval(true), disabled: busy };
-  }
   const ownerName =
     users.find((u) => u.uid === tender.ownerUid)?.displayName ??
     access.find((a) => a.principalId === tender.ownerUid)?.displayName;
+
+  // The prototype's header (plan D1, D2): one shared ruleset decides the main button, the approvals card and
+  // the stage bar (shared/src/workspaceView.ts).
+  const ds = draftStateOf(tender);
+  const stageIdx = stageIndexOf(tender.status);
+  const latest = reports[0];
+  // A check counts for what exists now: the document, or exactly the draft's current data.
+  const fresh =
+    !!latest &&
+    (ds === 'doc' ? latest.basis !== 'draft' : latest.basis === 'draft' && latest.dataHash === tender.draftDataHash);
+  const fv = findingsView(fresh ? { findings: latest.findings, basis: latest.basis ?? 'document' } : null);
+  const agent: AgentRunState = agentBusy || initialCheck ? 'running' : fresh ? 'done' : 'none';
+  const nameOf = (uid: string) =>
+    users.find((u) => u.uid === uid)?.displayName ??
+    access.find((a) => a.principalId === uid)?.displayName ??
+    Object.values(tender.approvals ?? {}).find((a) => a?.uid === uid)?.name ??
+    '';
+  const holders: Holders = {};
+  for (const r of TEAM_ROLES) {
+    const uid = tender.team?.[r];
+    if (uid) holders[r] = { uid, name: nameOf(uid) || ROLE_HE[r] };
+  }
+  const securityInvolved = requiredRoles.includes('security');
+  const wctx: WorkspaceCtx = {
+    stageIdx,
+    ds,
+    agent,
+    openCount: fv.open.length,
+    blockingCount: fv.blocking.length,
+    isManager,
+    myRoles: requiredRoles.filter((r) => tender.team?.[r] === user?.uid),
+    holders,
+    approvals: (tender.approvals ?? {}) as Approvals,
+    // The final approval waits for requester, legal and finance; security doesn't block (plan D2).
+    approverRoles: REQUIRE_APPROVALS ? blockingApproverRoles(requiredRoles) : [],
+  };
+  const hv = headerAction(wctx);
+  const av = approvalsView({
+    ...wctx,
+    myUid: user?.uid ?? '',
+    isOwner: user?.uid === tender.ownerUid,
+    ownerName: ownerName ?? '',
+    lockedAt: tender.lockedAt ?? null,
+    securityInvolved,
+  });
+  const bar = stageBar({ stageIdx });
+  const tabs = visibleTabs({ stageIdx, ds, blockingCount: fv.blocking.length, questionCount: questions.length }).filter(
+    (tb) => !NOT_BUILT_YET.includes(tb.key),
+  );
+  const shown = resolveTab(tab, tabs);
+
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setError('');
+    try {
+      await fn();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const onHeader = () => {
+    if (!hv) return;
+    switch (hv.kind) {
+      case 'run_agent':
+        setAgentBusy(true);
+        setError('');
+        api
+          .runSupervision({ tenderId: tender.id })
+          .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+          .finally(() => setAgentBusy(false));
+        return;
+      case 'create_document':
+        void run(async () => {
+          await api.generateDocument({ tenderId: tender.id });
+          setTab('document');
+        });
+        return;
+      case 'open_tab':
+        if (hv.tab) setTab(hv.tab);
+        return;
+      case 'approve':
+        void setApproval(true);
+        return;
+      case 'final_approve':
+        void transitionTo('ready');
+        return;
+      case 'publish':
+        // Suppliers are picked in the publish dialog (the access tab is hidden — plan D9).
+        setPublishOpen(true);
+        return;
+    }
+  };
+  const action: HeaderButton | null = hv
+    ? {
+        label: hv.label,
+        enabled: hv.enabled,
+        title: hv.title,
+        tip: hv.tip,
+        busy: busy || agentBusy,
+        ...(hv.kind ? { onClick: onHeader } : {}),
+      }
+    : null;
 
   return (
     <div>
       <TenderHeader
         tender={tender}
         ownerName={ownerName}
-        action={action}
-        approvals={REQUIRE_APPROVALS ? { slots: requiredRoles.map((r) => !waiting.includes(r)) } : undefined}
+        button={action}
+        approvals={{
+          // "פתח מחדש (שכפול)" arrives with the reopen callable (plan B5).
+          view: { ...av, actions: av.actions.filter((a) => a.kind !== 'reopen') },
+          busy,
+          onAction: (kind) => {
+            if (kind === 'withdraw') void setApproval(false);
+          },
+          onRowAction: (a) => {
+            if (a.kind === 'approve_on_behalf') {
+              setOnBehalfError('');
+              setOnBehalf(a);
+            } else void run(() => api.approveTender({ tenderId: tender.id, approve: false, onBehalfOf: a.role }));
+          },
+        }}
+        stages={{
+          items: bar.items,
+          note: bar.note,
+          popover: (item) => stagePopover(item, { stageIdx, holders, approvals: wctx.approvals, securityInvolved }),
+        }}
       >
-        <div className="mt-3 flex gap-1">
-          {tabs.map((tb) => (
-            <button
-              key={tb.key}
-              className={`px-4 py-2 text-sm font-semibold ${
-                tab === tb.key ? 'border-b-2 border-teal text-tx' : 'text-tx-mute'
-              }`}
-              onClick={() => setTab(tb.key)}
-            >
-              {tb.label}
-            </button>
-          ))}
+        {/* Tabs (prototype CSS lines 994–999): text with a 2px underline on the open one. */}
+        <div className="mt-2.5 flex gap-[26px]" role="tablist">
+          {tabs.map((tb) => {
+            const on = shown === tb.key;
+            return (
+              <button
+                key={tb.key}
+                type="button"
+                role="tab"
+                aria-selected={on}
+                className="-mb-px border-b-2 px-0.5 py-[11px] text-[13px] hover:!text-tx"
+                style={{
+                  color: on ? 'var(--text)' : 'var(--muted)',
+                  fontWeight: on ? 600 : 400,
+                  borderBottomColor: on ? 'var(--brand)' : 'transparent',
+                }}
+                onClick={() => setTab(tb.key)}
+              >
+                {tb.label}
+                {tb.badge ? (
+                  <span
+                    className="ms-1.5 inline-block min-w-[22px] rounded-full px-[7px] text-center text-xs font-semibold"
+                    style={{ background: 'var(--brand-soft)', color: 'var(--brand)' }}
+                  >
+                    {tb.badge}
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
         </div>
       </TenderHeader>
+
+      {publishOpen && isManager && (
+        <PublishDialog
+          canPublish={pendingSuppliers.length > 0}
+          busy={busy}
+          onClose={() => setPublishOpen(false)}
+          onPublish={() => {
+            setPublishOpen(false);
+            void transitionTo('published');
+          }}
+        >
+          <AccessPanel
+            tenderId={tender.id}
+            tenderType={tender.type}
+            tenderStatus={tender.status}
+            tenderDomainTags={tender.domainTags ?? []}
+            access={access}
+            suppliers={suppliers}
+            canManage={isManager}
+            pendingSupplierIds={pendingSuppliers}
+          />
+        </PublishDialog>
+      )}
+
+      {onBehalf && holders[onBehalf.role] && (
+        <OnBehalfDialog
+          name={holders[onBehalf.role]!.name}
+          roleHe={ROLE_HE[onBehalf.role]}
+          busy={busy}
+          error={onBehalfError}
+          onCancel={() => setOnBehalf(null)}
+          onConfirm={async (reason) => {
+            setBusy(true);
+            setOnBehalfError('');
+            try {
+              await api.approveTender({ tenderId: tender.id, approve: true, onBehalfOf: onBehalf.role, reason });
+              setOnBehalf(null);
+            } catch (e) {
+              setOnBehalfError(e instanceof Error ? e.message : String(e));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+      )}
 
       {(initialCheck || (!tender.lastSupervision && isManager)) && (
         <div className="card mb-4 border-teal-200 bg-teal-soft p-3 text-sm text-teal-600">
@@ -231,7 +383,7 @@ export default function TenderWorkspace() {
       {isManager && tender.status === 'ready' && waiting.length === 0 && pendingSuppliers.length === 0 && (
         <div className="card mb-4 flex flex-wrap items-center justify-between gap-2 border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
           <span>{t('ws.pickSuppliersFirst')}</span>
-          <button className="btn btn-sm" onClick={() => setTab('access')}>
+          <button className="btn btn-sm" onClick={() => setPublishOpen(true)}>
             {t('ws.goPickSuppliers')}
           </button>
         </div>
@@ -259,16 +411,16 @@ export default function TenderWorkspace() {
         </div>
       )}
 
-      {tab === 'overview' && (
+      {shown === 'overview' && (
         <div className="space-y-4">
           <div className="grid items-start gap-4 lg:grid-cols-3">
-            <NextActionCard tender={tender} action={action} onOpenDocument={() => setTab('document')} />
+            <NextActionCard tender={tender} action={action ?? undefined} onOpenDocument={() => setTab('document')} />
             <QuartetCard tender={tender} />
             <DatesCard tender={tender} template={template} />
           </div>
         </div>
       )}
-      {tab === 'document' && (
+      {shown === 'document' && (
         <div>
           {hasDocument(tender) ? (
             <div className="space-y-3">
@@ -298,33 +450,26 @@ export default function TenderWorkspace() {
               <DocumentViewer tenderId={tender.id} googleDocId={tender.googleDocId} />
             </div>
           ) : (
-            <DraftPanel
-              tender={tender}
-              template={template}
-              canManage={isManager}
-              onOpenInspector={() => setTab('supervisor')}
-            />
+            <div className="space-y-4">
+              <DraftReview
+                tender={tender}
+                template={template}
+                canManage={isManager}
+                checking={initialCheck}
+                onEditField={(key) => setFocusField((f) => ({ key, n: (f?.n ?? 0) + 1 }))}
+              />
+              <DraftPanel
+                tender={tender}
+                template={template}
+                canManage={isManager}
+                onOpenInspector={() => setTab('agent')}
+                focusField={focusField}
+              />
+            </div>
           )}
         </div>
       )}
-      {tab === 'access' && (
-        <div className="mb-4">
-          <TeamPanel tender={tender} users={users} access={access} canManage={isManager} />
-        </div>
-      )}
-      {tab === 'access' && (
-        <AccessPanel
-          tenderId={tender.id}
-          tenderType={tender.type}
-          tenderStatus={tender.status}
-          tenderDomainTags={tender.domainTags ?? []}
-          access={access}
-          suppliers={suppliers}
-          canManage={isManager}
-          pendingSupplierIds={pendingSuppliers}
-        />
-      )}
-      {tab === 'questions' && (
+      {shown === 'questions' && (
         <QuestionsPanel
           tenderId={tender.id}
           questions={questions}
@@ -333,21 +478,8 @@ export default function TenderWorkspace() {
           canAsk={false}
         />
       )}
-      {tab === 'evaluation' && <EvaluationPanel tender={tender} submissions={submissions} />}
-      {tab === 'case' && (
-        <div className="space-y-4">
-          <CasePanel tender={tender} />
-          <div className="card space-y-2 p-6 text-sm">
-            {Object.entries(tender.params).map(([k, v]) => (
-              <div key={k} className="flex gap-2">
-                <span className="font-semibold text-tx-soft">{k}:</span>
-                <span>{String(v)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-      {tab === 'supervisor' && <SupervisorPanel tender={tender} template={template} />}
+      {shown === 'bids' && <EvaluationPanel tender={tender} submissions={submissions} />}
+      {shown === 'agent' && <SupervisorPanel tender={tender} template={template} />}
 
       {/* Case team chat: floats over every tab; the button shows the unread count while it is closed. */}
       {chatOpen && (

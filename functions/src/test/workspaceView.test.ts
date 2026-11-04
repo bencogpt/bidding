@@ -19,6 +19,7 @@ import {
   resolveTab,
   stageBar,
   stageIndexOf,
+  stagePopover,
   visibleTabs,
   type ApprovalsCtx,
   type Approvals,
@@ -490,6 +491,44 @@ test('A5 stage chip counts', () => {
     }),
   );
   assert.deepEqual(pendingStageCounts(items), [1, 2, 0, 0, 0, 0]);
+});
+
+test('approver roles: while security still blocks on the server (D2 pending), the UI waits for it too', () => {
+  const roles = ['requester', 'legal', 'finance', 'security'] as const;
+  const mgr = headerAction(ctx({ isManager: true, approverRoles: roles, approvals: approvals('requester', 'finance', 'legal') }))!;
+  assert.equal(mgr.enabled, false);
+  assert.equal(mgr.title, 'הכפתור שלך יפעל אחרי שהדורש, המשפטי והכספים יאשרו. נותר: אבטחת מידע.');
+  // security approves as a regular approver then, not as an extra participant
+  assert.deepEqual(headerAction(ctx({ myRoles: ['security'], approverRoles: roles })), { label: 'אישור סופי של המכרז', kind: 'approve', enabled: true });
+  const v = approvalsView(actx({ approverRoles: roles }));
+  assert.equal(v.rows.find((r) => r.role === 'security')!.nonBlocking, false);
+  assert.equal(approvalsView(actx({ myRoles: ['security'], approverRoles: roles })).note, 'לחץ על "אישור סופי של המכרז" כשסיימת לעבוד על המסמך.');
+  const items = pendingItems(pctx({ tenders: [tender({ ds: 'doc', approverRoles: roles, approvals: approvals('requester', 'legal', 'finance') })] }));
+  assert.equal(items.length, 0);
+});
+
+test('D2 stage hover card: done / current / upcoming', () => {
+  const bar = stageBar({ stageIdx: 1 }).items;
+  const pop = (i: number, ap: Approvals = {}) => stagePopover(bar[i], { stageIdx: 1, holders: H, approvals: ap, securityInvolved: true });
+  assert.deepEqual(pop(0), {
+    title: 'אישורים · אפיון',
+    status: 'השלב הושלם',
+    rows: [
+      { role: 'requester', roleHe: 'דורש', tag: 'approved', tagLabel: 'אושר' },
+      { role: 'manager', roleHe: 'רכש', tag: 'approved', tagLabel: 'אושר' },
+    ],
+  });
+  const cur = pop(1, { requester: ok('requester'), finance: { ...ok('finance'), onBehalf: true } });
+  assert.equal(cur.status, 'השלב הנוכחי');
+  assert.deepEqual(cur.rows.map((r) => `${r.roleHe}:${r.tag}`), ['דורש:approved', 'רכש:pending', 'משפטי:pending', 'כספים:on_behalf', 'אבטחת מידע:pending']);
+  const next = pop(2);
+  assert.equal(next.status, 'טרם התחיל');
+  assert.deepEqual(next.rows.map((r) => r.tag), ['pending']);
+  // without security on the case, its row is left out
+  assert.equal(stagePopover(bar[1], { stageIdx: 1, holders: { ...H, security: undefined }, approvals: {}, securityInvolved: false }).rows.length, 4);
+  // at publication, procurement's final approval shows as done
+  const pub = stageBar({ stageIdx: 2 }).items;
+  assert.deepEqual(stagePopover(pub[2], { stageIdx: 2, holders: H, approvals: {}, securityInvolved: true }).rows.map((r) => r.tag), ['approved']);
 });
 
 test('approval helpers: current holder only; security is not a team approver', () => {

@@ -140,7 +140,8 @@ export type TenderDoc = z.infer<typeof tenderDocSchema> & {
   team?: CaseTeam; // role → uid (one user per required role)
   requiredRoles?: TeamRole[];
   memberUids?: string[]; // owner + team: the only internal users (besides managers) who see the case
-  approvals?: CaseApprovals; // role → sign-off during internal review; cleared when a review starts
+  approvals?: CaseApprovals; // role → sign-off on the document; cleared when a review starts or the document is reset
+  lockedAt?: number | null; // the manager's final approval (→ "ready"): the document is locked
   // Draft-first: the document is created only after the inspector passes (see draft.ts).
   documentStatus?: DocumentStatus;
   documentGeneratedAt?: number;
