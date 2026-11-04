@@ -59,6 +59,7 @@ before(async () => {
       level: 'view',
     });
     await setDoc(doc(db, 'tenders/t1/internal/provenance'), { templateType: 'goods' });
+    await setDoc(doc(db, 'tenders/t1/internal/suppliers'), { supplierIds: ['sup_a', 'sup_b'] });
     await setDoc(doc(db, 'tenders/t1/supervision/r1'), { runId: 'r1', verdict: 'PASS' });
     await setDoc(doc(db, 'caseScores/t1'), { tenderId: 't1', total: 80 });
     await setDoc(doc(db, 'feedbackRequests/t1_publish_ul'), { uid: 'ul', tenderId: 't1', status: 'pending' });
@@ -124,6 +125,15 @@ test('manager reads every bid request; nobody writes from the client', async () 
   await assertFails(getDoc(doc(supplierA(), 'bidRequests/2026-31')));
 });
 // A non-manager internal role, to exercise the isInternal() branch rather than isManager().
+test('research run before sending: clients never read or write it', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'researchDrafts/d1'), { runId: 'd1', createdBy: 'ur', status: 'done' });
+  });
+  await assertFails(getDoc(doc(requester(), 'researchDrafts/d1')));
+  await assertFails(getDoc(doc(manager(), 'researchDrafts/d1')));
+  await assertFails(setDoc(doc(requester(), 'researchDrafts/d2'), { createdBy: 'ur' }));
+});
+
 test('request research: the requester reads their own, managers read all; nobody writes', async () => {
   await assertSucceeds(getDoc(doc(requester(), 'bidRequests/2026-31/research/r1')));
   await assertFails(getDoc(doc(requester(), 'bidRequests/2026-32/research/r2')));
@@ -199,6 +209,10 @@ test('supplier WITH access cannot read a tender before it is published', async (
 
 test('supplier cannot read internal provenance or supervisor reports', async () => {
   await assertFails(getDoc(doc(supplierA(), 'tenders/t1/internal/provenance')));
+  // who the case is published to stays internal
+  await assertFails(getDoc(doc(supplierA(), 'tenders/t1/internal/suppliers')));
+  await assertSucceeds(getDoc(doc(manager(), 'tenders/t1/internal/suppliers')));
+  await assertFails(setDoc(doc(manager(), 'tenders/t1/internal/suppliers'), { supplierIds: [] }));
   await assertFails(getDoc(doc(supplierA(), 'tenders/t1/supervision/r1')));
 });
 

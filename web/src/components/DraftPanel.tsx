@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { askedParams, isConfidentialParam, type DocumentGateReason, type TemplateDoc, type TemplateParam, type TenderDoc } from '@obms/shared';
+import { askedParams, resolveParam, isConfidentialParam, type DocumentGateReason, type TemplateDoc, type TemplateParam, type TenderDoc } from '@obms/shared';
 import { api } from '../lib/api';
 import { useTenderInternal } from '../lib/hooks';
 
@@ -51,7 +51,7 @@ export default function DraftPanel({
 
   const generating = tender.documentStatus === 'generating';
   const gate = draftGate(tender);
-  const asked = askedParams(template?.params ?? []);
+  const asked = askedParams((template?.params ?? []).map(resolveParam));
   const current = (p: TemplateParam) => String(tender.params[p.key] ?? internalParams[p.key] ?? '');
   const valueOf = (p: TemplateParam) => values[p.key] ?? current(p);
 

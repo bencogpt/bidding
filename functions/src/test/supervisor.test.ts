@@ -285,3 +285,16 @@ test('the system-filled bid number is not flagged as an AI-invented value', () =
   const r = codes(base({ template: tpl, tender: t, docText: doc, provenance: p }));
   assert.ok(!r.some((c) => c.startsWith('UNSOURCED')), r.join());
 });
+
+test("the organisation's real headings are recognised (service template)", () => {
+  const live = [
+    'ג. תנאים מוקדמים להגשת הצעה:',
+    'ד. מסמכים שיש לצרף להצעה להוכחת עמידתו של המציע בתנאים המוקדמים:',
+    'ח. אופן בחירת ההצעה הזוכה ובחירה בכשיר שני.',
+  ].join('\nגוף הסעיף.\n') + '\nגוף הסעיף.';
+  const present = presentLegalSections(live);
+  for (const id of ['thresholds', 'requiredDocs', 'winnerSelection'] as const) assert.ok(present.includes(id), id);
+  // a long numbered body clause that mentions the winning offer is not a heading
+  const body = '23. בעת בחירת ההצעה הזוכה או ההצעות הזוכות, יהיה רשאי המזמין, אך לא חייב, להתחשב גם בניסיונו של המציע.';
+  assert.ok(!presentLegalSections(body).includes('winnerSelection'));
+});

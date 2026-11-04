@@ -26,7 +26,7 @@ import {
 import { getFunctions, connectFunctionsEmulator, httpsCallable } from 'firebase/functions';
 import { SKILL_IDS } from '@obms/shared';
 import { initializeApp as initAdmin } from 'firebase-admin/app';
-import { getFirestore as adminFirestore } from 'firebase-admin/firestore';
+import { getFirestore as adminFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getStorage as adminStorage } from 'firebase-admin/storage';
 
 const app = initializeApp({ projectId: 'biding-system', apiKey: 'demo' });
@@ -41,7 +41,7 @@ const adminApp = initAdmin({ projectId: 'biding-system', storageBucket: 'biding-
 const call = (n: string) => httpsCallable(fns, n);
 const login = (email: string) => signInWithEmailAndPassword(auth, email, 'password');
 // The requester's mandatory phase-1 answers.
-const REQUEST_DETAILS = { service_name: 'שירות לבדיקה', document_classification: 'בלמ"ס', annual_budget: 100000, contract_years: 2 };
+const REQUEST_DETAILS = { service_name: 'שירות לבדיקה', document_classification: 'בלמ"ס', annual_budget: 240000, contract_years: 2 };
 const newRequest = async (brief = 'דרישה לבדיקה'): Promise<string> =>
   ((await call('createBidRequest')({ brief, details: REQUEST_DETAILS })) as { data: { serial: string } }).data.serial;
 
@@ -225,6 +225,19 @@ async function main() {
   const approved = (await getDoc(doc(db, 'tenders', tenderId))).data()!.approvals ?? {};
   assert.deepEqual(Object.keys(approved).sort(), ['finance', 'legal', 'requester'], 'each role recorded its approval');
   await call('transitionTender')({ tenderId, to: 'ready' });
+  // Publishing goes to the suppliers the manager picked beforehand — at least one.
+  let noSuppliers = false;
+  try {
+    await call('transitionTender')({ tenderId, to: 'published' });
+  } catch (e) {
+    noSuppliers = /לפחות ספק אחד/.test((e as Error).message);
+  }
+  assert.ok(noSuppliers, 'publish is refused until a supplier is picked');
+  await call('setPendingSuppliers')({ tenderId, supplierIds: ['sup_aegis'] });
+  const pick = await getDoc(doc(db, 'tenders', tenderId, 'internal', 'suppliers'));
+  assert.deepEqual(pick.data()?.supplierIds, ['sup_aegis'], 'the pick is kept internally');
+  const preAccess = await getDocs(collection(db, 'tenders', tenderId, 'access'));
+  assert.ok(!preAccess.docs.some((d) => d.id === 'sup_aegis'), 'no supplier access before publication');
   const published = (await call('transitionTender')({ tenderId, to: 'published' })) as {
     data: { verdict: string };
   };
@@ -282,6 +295,24 @@ async function main() {
   console.log('✓ review gate: refused with an empty slot, passes once the team is complete');
   await approveAs(bad.data.id, ['requester', 'legal', 'finance', 'security']);
   await call('transitionTender')({ tenderId: bad.data.id, to: 'ready' });
+  // A case that is "ready" without every approval (e.g. from before approvals were required) can't be
+  // published; sent back to review it keeps the approvals already given.
+  process.env.FIRESTORE_EMULATOR_HOST ??= '127.0.0.1:8080';
+  await adminFirestore(adminApp).collection('tenders').doc(bad.data.id).update({ 'approvals.legal': FieldValue.delete() });
+  let unapproved = false;
+  try {
+    await call('transitionTender')({ tenderId: bad.data.id, to: 'published' });
+  } catch (e) {
+    unapproved = /לא ניתן לפרסם — ממתין לאישור/.test((e as Error).message);
+  }
+  assert.ok(unapproved, 'publish is refused while a required role has not approved');
+  await call('transitionTender')({ tenderId: bad.data.id, to: 'internal_review' });
+  const kept = (await getDoc(doc(db, 'tenders', bad.data.id))).data()!.approvals ?? {};
+  assert.deepEqual(Object.keys(kept).sort(), ['finance', 'requester', 'security'], 'approvals already given are kept');
+  await approveAs(bad.data.id, ['legal']);
+  await call('transitionTender')({ tenderId: bad.data.id, to: 'ready' });
+  console.log('✓ approvals: publish needs every role; back to review keeps given approvals');
+  await call('setPendingSuppliers')({ tenderId: bad.data.id, supplierIds: ['sup_globex'] });
   let blocked = false;
   try {
     await call('transitionTender')({ tenderId: bad.data.id, to: 'published' });
@@ -319,6 +350,35 @@ async function main() {
   assert.equal((await getDocs(collection(db, 'bidRequests', researched, 'research'))).size, 2, 'rerun recorded');
   console.log('✓ request research: background trigger + rerun recorded');
 
+  // Research on the summary step (before sending) is linked to the request — not searched again.
+  const draftRun = (await call('researchDraftRequest')({ brief: 'שירותי ניקיון למשרדים', details: { service_name: 'ניקיון' } })) as {
+    data: { runId: string; status: string };
+  };
+  assert.equal(draftRun.data.status, 'skipped', 'no AI in the emulator');
+  const linked = ((await call('createBidRequest')({
+    brief: 'שירותי ניקיון למשרדים',
+    details: REQUEST_DETAILS,
+    researchRunId: draftRun.data.runId,
+  })) as { data: { serial: string } }).data.serial;
+  const linkedReq = (await getDoc(doc(db, 'bidRequests', linked))).data()!;
+  assert.equal(linkedReq.research?.runId, draftRun.data.runId, 'the summary-step run is on the request');
+  await new Promise((r) => setTimeout(r, 2000)); // give the trigger time to (not) run
+  const linkedRuns = await getDocs(collection(db, 'bidRequests', linked, 'research'));
+  assert.deepEqual(linkedRuns.docs.map((d) => d.id), [draftRun.data.runId], 'searched once, not again after sending');
+  // Someone else's run is not linked: that request is researched after sending as usual.
+  await signOut(auth);
+  await login('requester@obms.test');
+  const other = ((await call('createBidRequest')({
+    brief: 'שירותי ניקיון למשרדים',
+    details: REQUEST_DETAILS,
+    researchRunId: draftRun.data.runId,
+  })) as { data: { serial: string } }).data.serial;
+  await signOut(auth);
+  await login('manager@obms.test');
+  const otherReq = (await getDoc(doc(db, 'bidRequests', other))).data()!;
+  assert.notEqual(otherReq.research?.runId, draftRun.data.runId, "another user's run is not linked");
+  console.log('✓ summary-step web research linked to the request; no second search');
+
   // Internal users can no longer be granted ad hoc — only through the team.
   let adHocRefused = false;
   try {
@@ -327,8 +387,10 @@ async function main() {
     adHocRefused = true;
   }
   assert.ok(adHocRefused, 'ad-hoc internal grants are refused');
-  await call('grantAccess')({ tenderId, supplierIds: ['sup_aegis'], internalUids: [] });
-  console.log('✓ manager published tender + shared with aegis');
+  const postAccess = await getDocs(collection(db, 'tenders', tenderId, 'access'));
+  assert.ok(postAccess.docs.some((d) => d.id === 'sup_aegis'), 'the picked supplier got access on publish');
+  assert.ok(!postAccess.docs.some((d) => d.id === 'sup_meridian'), 'only the picked suppliers');
+  console.log('✓ manager picked aegis before publishing; aegis got access on publish');
 
   // Removing legal from a case revokes their access to it.
   await call('assignTeamMember')({ tenderId: bad.data.id, role: 'legal', uid: null });
@@ -472,7 +534,19 @@ async function main() {
     (d) => d.data().email === 'legal2@obms.test',
   );
   assert.ok(!gone, 'internal user removed');
-  console.log('✓ internal user created (role claim) + deleted');
+  // A bid manager must be defined with a phone (it fills BID_MANAGER_PHONE in documents).
+  let noPhone = false;
+  try {
+    await call('createInternalUser')({ name: 'מנהל חדש', email: 'mgr2@obms.test', role: 'tender_manager' });
+  } catch (e) {
+    noPhone = /טלפון/.test((e as Error).message);
+  }
+  assert.ok(noPhone, 'a bid manager without a phone is refused');
+  await call('createInternalUser')({ name: 'מנהל חדש', email: 'mgr2@obms.test', role: 'tender_manager', phone: '050-7654321' });
+  const mgr2 = (await getDocs(collection(db, 'users'))).docs.find((d) => d.data().email === 'mgr2@obms.test')!;
+  assert.equal(mgr2.data().phone, '050-7654321', 'the phone is stored on the user');
+  await call('deleteInternalUser')({ uid: mgr2.id });
+  console.log('✓ internal user created (role claim) + deleted; a bid manager needs a phone');
 
   // ---- audit entries reference the related bid (manager-only reads) ----
   await signOut(auth);
@@ -733,6 +807,75 @@ async function main() {
   assert.equal(retried.data.duplicate, true);
   const copies = await getDocs(query(collection(db, 'tenders'), where('title', '==', 'מכרז שירותי פיתוח')));
   assert.equal(copies.size, 1, 'no duplicate case was created');
+
+  // Step 2 fills the hand-typed service fields itself: the title from the requester's service name,
+  // the manager's email from their user record, the bid guarantee as 2% of the annual estimate (both
+  // guarantee fields + words); "תוקף אחריות" is not asked.
+  const typedFields = ['tender_title', 'כתובת מייל של מנהל המכרז', 'סכום ערבות להצעה', 'bid_guarantee_amount', 'bid_guarantee_amount_words', 'תוקף אחריות', 'BID_MANAGER_PHONE', 'SECURITY_APPENDIX', 'service_field_summary'];
+  await adminDb.collection('templates').doc('service').set(
+    {
+      // …and a supplier's XXXX left in the guarantee form: only {{}} are ours, so it doesn't block.
+      bodyTemplate: svc.bodyTemplate + '\n' + typedFields.map((k) => `{{${k}}}`).join('\n') + '\nאשר תדרשו מאת : XXXXX (להלן: "החייב")',
+      params: [...svc.params, ...typedFields.map((k) => ({ key: k, labelHe: k, type: 'text', required: true }))],
+      fieldsStatus: 'ready',
+    },
+    { merge: true },
+  );
+  const autoReq = ((await call('createBidRequest')({
+    brief: 'שירותי ניקיון למבנה משרדים\n\nהבהרות מהדורש:\n- ניקיון יומי\n\nהמלצות שנבחרו:\n- הדרישות סותרות זו את זו ויש לאחדן.',
+    details: { ...REQUEST_DETAILS, service_name: 'שירותי ניקיון', annual_budget: 1_000_000 },
+  })) as { data: { serial: string } }).data.serial;
+  const autoCase = (await call('createTender')({
+    title: '',
+    bidRequestId: autoReq,
+    type: 'service',
+    params: { service_subject: 'ניקיון' }, // nothing else typed: the rest is filled by the system
+    team: svcTeam,
+    submissionDeadline: Date.parse('2026-12-16T14:52:00Z'),
+  })) as { data: { id: string } };
+  const autoTender = (await getDoc(doc(db, 'tenders', autoCase.data.id))).data()!;
+  assert.equal(autoTender.params.tender_title, 'שירותי ניקיון', "title = the requester's service name");
+  assert.equal(autoTender.params['כתובת מייל של מנהל המכרז'], 'manager@obms.test', "the creating manager's email");
+  assert.equal(autoTender.params['סכום ערבות להצעה'], '20,000', 'guarantee = 2% of the annual estimate');
+  assert.equal(autoTender.params.bid_guarantee_amount, '20,000', 'both guarantee fields agree');
+  assert.equal(autoTender.params.bid_guarantee_amount_words, 'עשרים אלף שקלים');
+  assert.equal(autoTender.params['תוקף אחריות'], '__________', 'not asked in step 2: a blank line to complete in the document');
+  const autoCheck = (await call('runSupervision')({ tenderId: autoCase.data.id })) as {
+    data: { findings: { severity: string; message: string }[] };
+  };
+  assert.ok(
+    autoCheck.data.findings.some((f) => f.severity === 'warn' && /יושלמו ידנית/.test(f.message)),
+    'the inspector lists the blank lines as a warning',
+  );
+  assert.ok(
+    !autoCheck.data.findings.some((f) => f.severity === 'block' && /תוקף אחריות/.test(f.message)),
+    'a blank line does not block the document',
+  );
+  assert.ok(
+    !autoCheck.data.findings.some((f) => f.severity === 'block' && /SECURITY_APPENDIX|BID_MANAGER_PHONE/.test(JSON.stringify(f))),
+    'neither tag blocks',
+  );
+  // The service description suppliers read is public: never the internal parts of the request.
+  const summaryKey = 'service_field_summary';
+  assert.equal(
+    autoTender.params[summaryKey],
+    'שירותי ניקיון למבנה משרדים\nניקיון יומי',
+    'the description + the clarification; no internal recommendations (emulator: no AI)',
+  );
+  // Only hard facts block now, so this draft (legal sections missing → warnings) can get its document,
+  // and a document not yet sent to review can be regenerated (back to draft-first; old doc kept).
+  await call('generateDocument')({ tenderId: autoCase.data.id });
+  await call('regenerateDocument')({ tenderId: autoCase.data.id });
+  const regen = (await getDoc(doc(db, 'tenders', autoCase.data.id))).data()!;
+  assert.equal(regen.documentStatus, 'none', 'back to a draft without a document');
+  assert.equal(regen.replacedDocuments?.length, 1, 'the old document is kept and listed');
+  console.log('✓ public service description; only hard facts block; document regenerated');
+  // (the rendering of both tags is unit-tested: the e2e service template has no legal sections, so its
+  // draft can't open the document gate here)
+  assert.equal(autoTender.params.annual_budget, undefined, 'the annual estimate itself is never published');
+  assert.equal(autoTender.params.BID_MANAGER_PHONE, '050-0000001', "the bid manager's phone, from the user record");
+  assert.equal(autoTender.params.SECURITY_APPENDIX, '', 'SECURITY_APPENDIX prints nothing');
+  console.log('✓ step 2 auto-fill: title, manager email, 2% guarantee (+ words); תוקף אחריות not asked');
   // A request converts to exactly one tender.
   const reqId = await newRequest('בקשה להמרה');
   const input = { title: '', type: 'goods', params: { org: 'א', description: 'ב', quantity: 1, budget: 1 }, team: goodsTeam, bidRequestId: reqId };

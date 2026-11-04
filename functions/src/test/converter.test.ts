@@ -57,11 +57,14 @@ test('a bare XXXX supplier quote does not exempt manager lines containing XXXX',
   assert.ok(spots[0].line.startsWith('הנדון'));
 });
 
-test('templateFieldsStatus: needs conversion until fields exist and no spots remain', () => {
-  assert.equal(templateFieldsStatus(DOC).status, 'needs_conversion');
+test('templateFieldsStatus: only {{fields}} count — XXXX and ____ are the supplier\'s', () => {
+  assert.equal(templateFieldsStatus(DOC).status, 'needs_conversion', 'a raw Word paste (no {{}}) needs conversion');
+  assert.ok(templateFieldsStatus(DOC).unresolved > 0, 'its spots guide the conversion');
   assert.equal(templateFieldsStatus('גוף מזמין: {{org}}').status, 'ready');
   assert.equal(templateFieldsStatus('ללא שדות כלל').status, 'needs_conversion', 'no fields at all');
-  assert.equal(templateFieldsStatus('{{org}} ____').status, 'needs_conversion');
+  assert.equal(templateFieldsStatus('').status, 'needs_conversion');
+  assert.deepEqual(templateFieldsStatus('{{org}} ____'), { status: 'ready', unresolved: 0, fields: 1 }, 'a ____ blank is the supplier\'s');
+  assert.equal(templateFieldsStatus('{{org}}\nאשר תדרשו מאת : XXXXX (להלן: "החייב")').status, 'ready', 'XXXX is the supplier\'s');
   assert.equal(templateFieldsStatus('{{org}}\nחתימה ____', ['חתימה']).status, 'ready');
 });
 

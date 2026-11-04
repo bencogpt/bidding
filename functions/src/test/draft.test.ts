@@ -2,8 +2,9 @@
 //   node --test functions/lib/test/draft.test.js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { hasDocument, type ResearchSource } from '@obms/shared';
+import { briefWithDetails, hasDocument, researchDraftInput, type ResearchSource } from '@obms/shared';
 import { documentGate, draftDataHash } from '../services/draftCalc.js';
+import { fillTemplate } from '../services/docsService.js';
 import { collectSources, groundResearch, unsafeQueryReason } from '../services/requestResearch.js';
 
 const base = { previewText: 'מכרז טובין · כמות: 10', submissionDeadline: 1, awardDate: null, evaluationCriteria: [], internalParams: {} };
@@ -105,4 +106,23 @@ test('collectSources reads search results and text citations, deduplicated', () 
   ];
   const s = collectSources(content as never);
   assert.deepEqual(s.map((x) => x.url).sort(), ['https://a.example/tender', 'https://b.example/spec', 'https://c.example']);
+});
+
+test('draft research: no budget reaches the brief, and no bid number yet does not refuse every query', () => {
+  // The request screen's details have no budget field at all; one sent anyway is rejected.
+  assert.equal(researchDraftInput.safeParse({ brief: 'שירותי ניקיון', details: { annual_budget: 1 } }).success, false);
+  const ok = researchDraftInput.parse({ brief: 'שירותי ניקיון', details: { service_name: 'ניקיון משרדים' } });
+  const brief = briefWithDetails(ok.brief, ok.details);
+  assert.match(brief, /ניקיון משרדים/);
+  assert.doesNotMatch(brief, /אומדן|תקציב/);
+  assert.equal(unsafeQueryReason('שירותי ניקיון משרדים מפרט', [], ''), null, 'empty bid number matches nothing');
+  assert.ok(unsafeQueryReason('בל"מ 2026-31 ניקיון', [], '2026-31'));
+});
+
+test('rendering: a removed tag prints nothing; a filled field prints its value; an unfilled one stays', () => {
+  const body = 'נספח: {{SECURITY_APPENDIX}}| טלפון: {{BID_MANAGER_PHONE}} | {{other}}';
+  assert.equal(
+    fillTemplate(body, { SECURITY_APPENDIX: '', BID_MANAGER_PHONE: '050-0000001' }),
+    'נספח: | טלפון: 050-0000001 | {{other}}',
+  );
 });

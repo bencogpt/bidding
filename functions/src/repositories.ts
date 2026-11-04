@@ -4,7 +4,7 @@ import { HttpsError } from 'firebase-functions/v2/https';
 import { FieldValue } from 'firebase-admin/firestore';
 import { db, now } from './lib/admin.js';
 import { nextUsage, type UsageWindow } from './lib/rateWindow.js';
-import { isInternalRole, formatSerial } from '@obms/shared';
+import { isInternalRole, formatSerial, withBuiltinFills } from '@obms/shared';
 import type { TeamRole, TeamApproval } from '@obms/shared';
 import type {
   TenderDoc,
@@ -30,6 +30,7 @@ import type {
   ConversionRun,
   BidRequestDoc,
   RequestResearch,
+  ResearchDraft,
   ResearchSummary,
 } from '@obms/shared';
 
@@ -102,6 +103,11 @@ export const templatesRepo = {
   async get(type: string): Promise<TemplateDoc | null> {
     const s = await db.collection('templates').doc(type).get();
     return s.exists ? (s.data() as TemplateDoc) : null;
+  },
+  /** The template as cases use it: with the built-in fill rules (by field name) attached. Not for saving. */
+  async getForCase(type: string): Promise<TemplateDoc | null> {
+    const t = await templatesRepo.get(type);
+    return t ? { ...t, params: withBuiltinFills(t.params ?? []) } : null;
   },
   async patch(type: string, data: Partial<TemplateDoc>): Promise<void> {
     assertTemplateFits(data);
@@ -179,11 +185,26 @@ export const researchRepo = {
   },
 };
 
+// ---- research run before its request existed (Admin SDK only; clients never read it) ----
+export const researchDraftsRepo = {
+  newId(): string {
+    return db.collection('researchDrafts').doc().id;
+  },
+  async save(r: ResearchDraft): Promise<void> {
+    await db.collection('researchDrafts').doc(r.runId).set(JSON.parse(JSON.stringify(r)));
+  },
+  async get(runId: string): Promise<ResearchDraft | null> {
+    const s = await db.collection('researchDrafts').doc(runId).get();
+    return s.exists ? (s.data() as ResearchDraft) : null;
+  },
+};
+
 // ---- per-user call counter for the request agent (one document per user; the Admin SDK only) ----
 export const agentUsageRepo = {
   /** Count one call; false (nothing counted) when the user is over the limit for the current window. */
-  async take(uid: string, limit: number, windowMs: number, nowMs: number): Promise<boolean> {
-    const ref = db.collection('agentUsage').doc(uid);
+  async take(uid: string, limit: number, windowMs: number, nowMs: number, bucket?: string): Promise<boolean> {
+    // A separate bucket (e.g. the costlier web research) has its own window.
+    const ref = db.collection('agentUsage').doc(bucket ? `${uid}__${bucket}` : uid);
     return db.runTransaction(async (tx) => {
       const prev = (await tx.get(ref)).data() as UsageWindow | undefined;
       const { allowed, next } = nextUsage(prev, nowMs, limit, windowMs);
@@ -423,6 +444,19 @@ export const internalRepo = {
   async getParams(tenderId: string): Promise<Record<string, string | number>> {
     const s = await db.collection('tenders').doc(tenderId).collection('internal').doc('params').get();
     return s.exists ? (s.data() as Record<string, string | number>) : {};
+  },
+  /** Suppliers picked before publication (internal; they get access when the case is published). */
+  async getPendingSuppliers(tenderId: string): Promise<string[]> {
+    const s = await db.collection('tenders').doc(tenderId).collection('internal').doc('suppliers').get();
+    return s.exists ? ((s.data()?.supplierIds as string[]) ?? []) : [];
+  },
+  async setPendingSuppliers(tenderId: string, supplierIds: string[], by: string): Promise<void> {
+    await db
+      .collection('tenders')
+      .doc(tenderId)
+      .collection('internal')
+      .doc('suppliers')
+      .set({ supplierIds, updatedAt: now(), updatedBy: by });
   },
 };
 

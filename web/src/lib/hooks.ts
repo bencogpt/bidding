@@ -39,7 +39,7 @@ import type {
   ChatMessage,
   ConversionRun,
 } from '@obms/shared';
-import { DEFAULT_SCORE_TARGETS, DEFAULT_DCI_PARAMS } from '@obms/shared';
+import { DEFAULT_SCORE_TARGETS, DEFAULT_DCI_PARAMS, withBuiltinFills } from '@obms/shared';
 
 // Managers see every case; other internal roles only the cases whose team they belong to
 // (Firestore rules enforce the same — an unscoped query by a non-manager is denied).
@@ -161,7 +161,10 @@ export function useTemplate(type: TenderType | undefined) {
     if (!type) return;
     let alive = true;
     void getDoc(doc(db, 'templates', type)).then((d) => {
-      if (alive) setTemplate(d.exists() ? (d.data() as TemplateDoc) : null);
+      if (!alive) return;
+      // As cases use it: with the built-in fill rules (manager email, guarantee, …) attached.
+      const t = d.exists() ? (d.data() as TemplateDoc) : null;
+      setTemplate(t ? { ...t, params: withBuiltinFills(t.params ?? []) } : null);
     });
     return () => {
       alive = false;
@@ -405,8 +408,15 @@ export function useSupervision(tenderId: string | undefined) {
 export function useTenderInternal(tenderId: string | undefined) {
   const [provenance, setProvenance] = useState<TenderProvenance | null>(null);
   const [params, setParams] = useState<Record<string, string | number>>({});
+  const [pendingSuppliers, setPendingSuppliers] = useState<string[]>([]);
   useEffect(() => {
     if (!tenderId) return;
+    // Suppliers picked for publication (internal until the case is published).
+    const unsubS = onSnapshot(
+      doc(db, 'tenders', tenderId, 'internal', 'suppliers'),
+      (d) => setPendingSuppliers(d.exists() ? ((d.data().supplierIds as string[]) ?? []) : []),
+      () => setPendingSuppliers([]),
+    );
     const unsubP = onSnapshot(
       doc(db, 'tenders', tenderId, 'internal', 'provenance'),
       (d) => setProvenance(d.exists() ? (d.data() as TenderProvenance) : null),
@@ -420,9 +430,10 @@ export function useTenderInternal(tenderId: string | undefined) {
     return () => {
       unsubP();
       unsubI();
+      unsubS();
     };
   }, [tenderId]);
-  return { provenance, params };
+  return { provenance, params, pendingSuppliers };
 }
 
 // Success score of one bid case (internal-only by rules).

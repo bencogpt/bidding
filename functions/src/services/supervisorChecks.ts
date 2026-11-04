@@ -6,6 +6,9 @@ import {
   REQUIRED_SKILLS,
   isConfidentialParam,
   isSystemParam,
+  isFormHidden,
+  BLANK_LINE,
+  isOmittedParam,
   type SkillUse,
   type SupervisionFinding,
   type TemplateDoc,
@@ -108,6 +111,7 @@ export function checkTemplate(i: DeterministicInput): Finding[] {
     if (prov.templateType !== tender.type) {
       out.push({
         code: 'TEMPLATE_MISMATCH',
+        hard: true,
         severity: 'block',
         location: 'provenance.templateType',
         message: `המסמך נוצר מתבנית "${prov.templateType}" אך סוג המכרז הוא "${tender.type}".`,
@@ -116,6 +120,7 @@ export function checkTemplate(i: DeterministicInput): Finding[] {
     if (prov.draftType && prov.draftType !== tender.type) {
       out.push({
         code: 'TEMPLATE_MISMATCH',
+        hard: true,
         severity: 'block',
         location: 'provenance.draftType',
         message: `טיוטת ה-AI נבנתה לסוג "${prov.draftType}" ולא לסוג המכרז "${tender.type}".`,
@@ -165,6 +170,7 @@ export function checkTemplate(i: DeterministicInput): Finding[] {
         if (hits.length / distinctive.length >= 0.5 && hits.length / distinctive.length > ownScore) {
           out.push({
             code: 'TEMPLATE_MISMATCH',
+        hard: true,
             severity: 'block',
             location: 'document',
             message: `המסמך תואם את תבנית "${other.title}" (${other.type}) יותר מאשר את תבנית סוג המכרז.`,
@@ -189,12 +195,17 @@ function headingText(line: string): string {
 }
 
 // A heading is short and isn't a sentence; a body line that merely mentions "סודיות" is not the
-// section.
+// section. A numbered or lettered heading ("ח.", "ד.", "5.") may run longer and end with a period, as
+// the organisation's documents do ("ח. אופן בחירת ההצעה הזוכה ובחירה בכשיר שני.", "ד. מסמכים שיש לצרף
+// להצעה להוכחת עמידתו של המציע בתנאים המוקדמים:") — as long as the section's name opens it.
 function isHeadingFor(line: string, s: LegalSection): boolean {
   const h = headingText(line);
-  return (
-    h.length > 0 && h.length <= 60 && h.split(' ').length <= 5 && !/[.!?]$/.test(h) && s.pattern.test(h)
-  );
+  if (!h) return false;
+  if (h.length <= 60 && h.split(' ').length <= 5 && !/[.!?]$/.test(h) && s.pattern.test(h)) return true;
+  const outlined = /^\s*(?:#+|\d+(?:\.\d+)*\.?|[א-ת][.)])\s/.test(normalize(line));
+  const plain = h.replace(/\.$/, '');
+  const at = plain.search(s.pattern);
+  return outlined && plain.length <= 100 && plain.split(' ').length <= 14 && !/[!?]$/.test(plain) && at >= 0 && at <= 12;
 }
 
 const isAnyHeading = (line: string) =>
@@ -316,6 +327,7 @@ export function checkValues(i: DeterministicInput): Finding[] {
       if (!isBlank(value)) {
         out.push({
           code: 'CONFIDENTIAL_LEAK',
+          hard: true,
           severity: 'block',
           location: `params.${p.key}`,
           message: `"${p.labelHe}" הוא ערך חסוי (G6) אך נשמר בפרמטרים הגלויים לספקים.`,
@@ -324,7 +336,7 @@ export function checkValues(i: DeterministicInput): Finding[] {
       continue;
     }
     if (isBlank(value)) {
-      if (p.required) {
+      if (p.required && !isOmittedParam(p)) {
         out.push({
           code: 'MISSING_INFO',
           severity: 'block',
@@ -340,11 +352,14 @@ export function checkValues(i: DeterministicInput): Finding[] {
         severity: 'block',
         location: `params.${p.key}`,
         message: `בשדה "${p.labelHe}" נותר מציין מקום שלא מולא.`,
+        hard: true,
         evidence: String(value),
       });
       continue;
     }
-    if (p.type === 'number' && !Number.isFinite(Number(value))) {
+    if (value === BLANK_LINE) continue; // completed by hand in the document (checkBlankLines)
+    // Amounts the system prints are formatted ("87,000").
+    if (p.type === 'number' && !Number.isFinite(Number(String(value).replace(/,/g, '')))) {
       out.push({
         code: 'PARAM_INVALID',
         severity: 'block',
@@ -357,7 +372,8 @@ export function checkValues(i: DeterministicInput): Finding[] {
     // G1/G11: a value the AI wrote (and the manager kept) must be traceable. Numbers are the
     // classic hallucination — they must literally appear in the brief or the template.
     // The bid number is the case serial, filled by the system — not an AI value to trace.
-    if (prov?.draftId && !prov.editedByManager.includes(p.key) && !isSystemParam(p)) {
+    // Fields the form doesn't ask (system or requester values) aren't the AI's either.
+    if (prov?.draftId && !prov.editedByManager.includes(p.key) && !isSystemParam(p) && !isFormHidden(p)) {
       if (!prov.paramSources[p.key]) {
         out.push({
           code: 'UNSOURCED_PARAM',
@@ -408,6 +424,7 @@ export function checkValues(i: DeterministicInput): Finding[] {
       if (leaked) {
         out.push({
           code: 'CONFIDENTIAL_LEAK',
+          hard: true,
           severity: 'block',
           location: `document (${key})`,
           message: 'ערך חסוי (אומדן/תקציב) מופיע במסמך המיועד לספקים (G6).',
@@ -419,6 +436,7 @@ export function checkValues(i: DeterministicInput): Finding[] {
     if (kw) {
       out.push({
         code: 'CONFIDENTIAL_LEAK',
+          hard: true,
         severity: 'warn',
         location: 'document',
         message: 'המסמך מזכיר אומדן/תקציב — ודא שלא נחשף ערך או בסיס לחישובו (G6).',
@@ -434,6 +452,7 @@ export function checkValues(i: DeterministicInput): Finding[] {
         severity: 'block',
         location: 'document',
         message: 'נותר במסמך מציין מקום שלא מולא.',
+        hard: true,
         evidence: ph,
       });
     }
@@ -443,6 +462,7 @@ export function checkValues(i: DeterministicInput): Finding[] {
         severity: 'block',
         location: 'document',
         message: `ועוד ${leftovers.length - MAX_LISTED} מציינים שלא מולאו.`,
+        hard: true,
       });
     }
     if (/\bMISSING_INFO\b|\[FLAG\s*\|/.test(i.docText!)) {
@@ -451,6 +471,7 @@ export function checkValues(i: DeterministicInput): Finding[] {
         severity: 'block',
         location: 'document',
         message: 'במסמך נותרו דגלים פנימיים (MISSING_INFO / FLAG) שאסור לפרסם (G6).',
+        hard: true,
       });
     }
   }
@@ -470,16 +491,38 @@ export function checkValues(i: DeterministicInput): Finding[] {
   return out;
 }
 
+/**
+ * Fields the procurement form doesn't ask and nothing filled are printed as blank lines, to complete in
+ * the document. A reminder (warning), not a blocker — the document can still be created.
+ */
+export function checkBlankLines(i: DeterministicInput): Finding[] {
+  const labelOf = (k: string) => i.template.params.find((p) => p.key === k)?.labelHe ?? k;
+  const keys = Object.entries(i.tender.params)
+    .filter(([, v]) => v === BLANK_LINE)
+    .map(([k]) => k);
+  if (!keys.length) return [];
+  return [
+    {
+      code: 'MISSING_INFO',
+      severity: 'warn',
+      location: 'document',
+      message: `${keys.length} שדות יושלמו ידנית במסמך (מודפסים כקו ריק): ${keys.map(labelOf).join(', ')}`,
+    },
+  ];
+}
+
 export function runDeterministicChecks(i: DeterministicInput): SupervisionFinding[] {
   const findings: Finding[] = [
     ...checkTemplate(i),
     ...checkSkills(i),
     ...checkValues(i),
     ...checkLegalSections(i),
+    ...checkBlankLines(i),
   ];
   if (i.docText === null) {
     findings.push({
       code: 'DOC_UNREADABLE',
+      hard: true,
       severity: 'block',
       location: 'document',
       message: 'לא ניתן היה לקרוא את מסמך המכרז לבדיקה.',

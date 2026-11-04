@@ -1,5 +1,6 @@
 // Pure helpers for binding a Google Doc template to a tender type. Shared by functions
 // (the bind callable) and tests — no I/O here.
+import { hebrewLabel, fieldType } from './fieldLabels.js';
 
 import { isFormHidden } from './requesterFields.js';
 
@@ -21,6 +22,18 @@ export const SYSTEM_FORMULAS = [
   'manager_email',
   'requester_name', // the requester on the case team
   'requester_phone',
+  // the procurement form (procurementForm.ts)
+  'bid_guarantee', // 2% of the annual estimate from ₪1M, floored to thousands
+  'performance_guarantee', // 5% of the annual estimate
+  'guarantee_validity', // submission deadline + 60 days
+  'bid_validity', // submission deadline + 90 days, moved to a working day
+  'annual_estimate', // the requester's annual estimate, published as the framework amount
+  'manager_phone',
+  'option_total_months', // contract months + option periods × months per period
+  'bid_serial', // the case's bid number
+  'submission_date', // the submission deadline's date
+  'request_brief', // the requester's description of the service (פרק ב')
+  'option_months_total', // the requester's option periods × OPTION_MONTHS_PER_PERIOD
 ] as const;
 export type SystemFormula = (typeof SYSTEM_FORMULAS)[number];
 
@@ -66,7 +79,8 @@ export function detectPlaceholders(text: string): TemplateParam[] {
     const key = m[1].trim();
     if (!key || seen.has(key)) continue;
     seen.add(key);
-    params.push({ key, labelHe: key, type: 'text', required: true });
+    const labelHe = hebrewLabel(key, key);
+    params.push({ key, labelHe, type: fieldType(key, labelHe, 'text'), required: true });
   }
   return params;
 }
@@ -89,8 +103,8 @@ export function mergeSyncedParams(
     if (!old) return p;
     return {
       ...p,
-      labelHe: old.labelHe,
-      type: old.type,
+      labelHe: hebrewLabel(p.key, old.labelHe),
+      type: fieldType(p.key, hebrewLabel(p.key, old.labelHe), old.type),
       required: old.required,
       ...(old.internal ? { internal: true } : {}),
       // form layout and system-fill rules survive a re-sync too
@@ -157,16 +171,19 @@ export function findFillSpots(text: string, supplierFillQuotes: readonly string[
 export type TemplateFieldsStatus = 'ready' | 'needs_conversion';
 
 /**
- * A template is usable for new cases only when it has real {{fields}} and no unresolved Word-style
- * fill-in spots. Recomputed from the text, so it can't drift from the document.
+ * A template is usable for new cases once it has real {{fields}} — the organisation's own bookmarks
+ * are always {{…}}. XXXX and ____ are where the SUPPLIER writes (bank details, signatures, the bidder's
+ * name), so they never block a template. Only a document with no {{field}} at all (a raw Word paste)
+ * needs conversion; its fill spots are then reported to guide it. Recomputed from the text, so it can't
+ * drift from the document.
  */
 export function templateFieldsStatus(
   bodyTemplate: string,
   supplierFillQuotes: readonly string[] = [],
 ): { status: TemplateFieldsStatus; unresolved: number; fields: number } {
   const fields = detectPlaceholders(bodyTemplate).length;
-  const unresolved = findFillSpots(bodyTemplate, supplierFillQuotes).length;
-  return { status: fields > 0 && unresolved === 0 ? 'ready' : 'needs_conversion', unresolved, fields };
+  if (fields > 0) return { status: 'ready', unresolved: 0, fields };
+  return { status: 'needs_conversion', unresolved: findFillSpots(bodyTemplate, supplierFillQuotes).length, fields };
 }
 
 /**

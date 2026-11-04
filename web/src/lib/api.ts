@@ -5,7 +5,10 @@ import type {
   CreateBidRequestInput,
   AssistRequestInput,
   AssistRequestResult,
+  RecommendationsInput,
+  RecommendationsResult,
   GrantAccessInput,
+  SetPendingSuppliersInput,
   AskQuestionInput,
   AnswerQuestionsInput,
   TransitionTenderInput,
@@ -51,7 +54,10 @@ import type {
   UpdateTenderDraftInput,
   GenerateDocumentInput,
   RerunRequestResearchInput,
+  ResearchDraftInput,
+  ResearchDraftResult,
   ResearchStatus,
+  ExternalSearchStatus,
 } from '@obms/shared';
 
 // The Firebase client gives up after 70 s by default and reports an error — while the server keeps
@@ -67,6 +73,7 @@ const call = <I, O>(name: string) => {
 export const api = {
   createBidRequest: call<CreateBidRequestInput, { serial: string; duplicate: boolean }>('createBidRequest'),
   assistRequest: call<AssistRequestInput, AssistRequestResult>('assistRequest'),
+  requestRecommendations: call<RecommendationsInput, RecommendationsResult>('requestRecommendations'),
   createTender: call<
     CreateTenderInput,
     {
@@ -102,6 +109,7 @@ export const api = {
   generateSkillTips: call<GenerateSkillTipsInput, SkillTipsRun>('generateSkillTips'),
   getSkillsCatalog: call<Record<string, never>, SkillsCatalog>('getSkillsCatalog'),
   grantAccess: call<GrantAccessInput, { ok: true; docsSkipped: string[] }>('grantAccess'),
+  setPendingSuppliers: call<SetPendingSuppliersInput, { ok: true; supplierIds: string[] }>('setPendingSuppliers'),
   getTenderDocument: call<
     { tenderId: string },
     { kind: 'html'; content: string; title: string } | { kind: 'none'; title: string }
@@ -110,6 +118,8 @@ export const api = {
     'updateTenderDraft',
   ),
   generateDocument: call<GenerateDocumentInput, { ok: true }>('generateDocument'),
+  regenerateDocument: call<GenerateDocumentInput, { ok: true; draftDataHash: string }>('regenerateDocument'),
+  researchDraftRequest: call<ResearchDraftInput, ResearchDraftResult>('researchDraftRequest'),
   rerunRequestResearch: call<RerunRequestResearchInput, { status: ResearchStatus; runId: string }>(
     'rerunRequestResearch',
   ),
@@ -147,6 +157,7 @@ export const api = {
     {
       registered: { supplierId: string; name: string; isIsraeli: boolean; matchedTags: string[] }[];
       external: ExternalSupplierSuggestion[];
+      externalStatus: ExternalSearchStatus;
     }
   >('searchSuppliers'),
   createInternalUser: call<CreateInternalUserInput, { email: string; tempPassword: string | null }>(

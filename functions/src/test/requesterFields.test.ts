@@ -14,19 +14,51 @@ import {
   askedParams,
   isRequesterAnswered,
   isFormHidden,
+  BUDGET_MIN,
 } from '@obms/shared';
 
 const REQ = { service_name: 'שירותי תמיכה', document_classification: 'בלמ"ס', annual_budget: 900000, contract_years: 3 };
 
-test('the request screen asks four questions besides the brief, all required, only the budget internal', () => {
+test('the request screen asks four required questions and eight optional ones; only the budget is internal', () => {
   assert.deepEqual(
-    REQUESTER_FIELDS.map((f) => f.labelHe),
+    REQUESTER_FIELDS.filter((f) => f.required).map((f) => f.labelHe),
     ['שם השירות', 'סיווג המסמך', 'מהו אומדן ההתקשרות השנתית או מהו גובה התקציב שהוקצה לשירות?', 'משך תקופת התקשרות בשנים'],
   );
-  assert.ok(REQUESTER_FIELDS.every((f) => f.required));
+  assert.deepEqual(
+    REQUESTER_FIELDS.filter((f) => !f.required).map((f) => [f.key, f.labelHe]),
+    [
+      ['service_location', 'מקום אספקת השירות'],
+      ['provider_responsibilities', 'תחומי אחריות נותני השירות'],
+      ['team_lead_role', 'תפקיד ראש הצוות'],
+      ['min_pool_candidates', 'מספר מועמדים מינימלי למאגר'],
+      ['service_providers_total', 'כמות נותני השירות'],
+      ['supplier_equipment', 'ציוד שהספק מספק לנותני השירות'],
+      ['work_hours', 'היקף משרה והאם נדרש גם שעות כוננות'],
+      ['option_periods_count', 'מספר תקופות אופציה'],
+    ],
+  );
   assert.deepEqual(REQUESTER_FIELDS.filter((f) => f.internal).map((f) => f.key), ['annual_budget']);
   const defaults = Object.fromEntries(REQUESTER_FIELDS.filter((f) => f.default).map((f) => [f.key, f.default]));
   assert.deepEqual(defaults, { document_classification: 'בלמ"ס' });
+});
+
+test('the optional answers are accepted, may be left out, and are checked when given', () => {
+  const extras = { service_location: 'חיפה', provider_responsibilities: 'פיתוח ותחזוקה', team_lead_role: 'מנהל צוות', min_pool_candidates: 5, service_providers_total: 12, supplier_equipment: 'מחשב נייד', work_hours: 'משרה מלאה - 170 שעות' };
+  assert.ok(requesterDetailsInputSchema.safeParse({ ...REQ, ...extras }).success);
+  assert.ok(requesterDetailsInputSchema.safeParse(REQ).success, 'all five may be left out');
+  for (const bad of [{ min_pool_candidates: 0 }, { min_pool_candidates: 2.5 }, { service_providers_total: -1 }, { service_location: '' }, { team_lead_role: 'x {{y}}' }, { work_hours: 'x'.repeat(201) }, { supplier_equipment: '' }, { provider_responsibilities: 'x'.repeat(1001) }]) {
+    assert.equal(requesterDetailsInputSchema.safeParse({ ...REQ, ...bad }).success, false, JSON.stringify(bad));
+  }
+  const out = briefWithDetails('שירותי תמיכה', { ...REQ, ...extras });
+  assert.ok(out.includes('מקום אספקת השירות: חיפה'));
+  assert.ok(out.includes('כמות נותני השירות: 12'));
+  assert.ok(out.includes('היקף משרה והאם נדרש גם שעות כוננות: משרה מלאה - 170 שעות'));
+  const n = normalizeDetailsInput({ ...REQ, annual_budget: '900000', contract_years: '3', service_location: ' חיפה ', min_pool_candidates: '5', service_providers_total: '2.5', team_lead_role: ' ' } as never);
+  assert.equal(n.details.service_location, 'חיפה');
+  assert.equal(n.details.min_pool_candidates, 5);
+  assert.ok(!('team_lead_role' in n.details), 'a blank optional answer is dropped');
+  assert.deepEqual(n.badNumbers, ['service_providers_total']);
+  assert.deepEqual(n.missing, ['service_name', 'document_classification'].filter((k) => !(k in REQ)), 'optional answers are never "missing"');
 });
 
 test('details schema accepts the answers, an empty stored object and a legacy option_periods; the input schema does not', () => {
@@ -125,7 +157,7 @@ test('normalizeDetailsInput trims, converts numbers, reports bad and missing ans
   for (const bad of ['1.5', '0', '31', 'x']) assert.deepEqual(normalizeDetailsInput({ contract_years: bad }).badNumbers, ['contract_years'], bad);
 });
 
-test('procurement form: the requester answers leave it, removed fields never show, option periods is an ordinary field again', () => {
+test('procurement form: the requester answers leave it (option periods too, per the spreadsheet), removed fields never show', () => {
   assert.equal(isRequesterAnswered('service_name'), true);
   assert.equal(isRequesterAnswered('contract_years'), true);
   assert.equal(isRequesterAnswered('annual_budget'), false);
@@ -135,10 +167,60 @@ test('procurement form: the requester answers leave it, removed fields never sho
     { key: 'option_periods', labelHe: 'מספר תקופות אופציה' },
     { key: 'סוג_האישור_הרפואי_הנדרש', labelHe: 'סוג האישור הרפואי הנדרש', required: true },
     { key: 'x1', labelHe: 'מקום אספקת השירות' },
+    { key: 'x2', labelHe: "פה יבוא מס' נותני השירות" },
+    { key: 'x3', labelHe: 'מספר מועמדים מינימלי למאגר' },
     { key: 'work_days' },
     { key: 'estimate', labelHe: 'סכום המסגרת המקסימלי (בש"ח)' },
   ];
-  assert.deepEqual(askedParams(params).map((p) => p.key), ['option_periods', 'estimate']);
+  assert.equal(isRequesterAnswered('option_periods_count'), true);
+  assert.deepEqual(askedParams(params).map((p) => p.key), ['estimate'], 'option periods are asked of the requester');
   assert.equal(isFormHidden(params[2]), true);
   assert.equal(isFormHidden(params[3]), true);
+  assert.equal(isFormHidden(params[4]), true, 'the raw template label of the provider count');
+  assert.equal(isFormHidden(params[5]), true);
+});
+
+test('a template field is matched to a requester answer by its Hebrew label too, including the template\'s own wording', () => {
+  const params = [
+    { key: 'SERVICE_PROVIDERS_COUNT', labelHe: "פה יבוא מס' נותני השירות" },
+    { key: 'loc', labelHe: 'מקום אספקת השירות' },
+    { key: 'other', labelHe: 'משהו אחר' },
+    { key: 'HOURS', labelHe: "מס' שעות עבודה" },
+  ];
+  const out = fillFromRequestDetails(params, {}, { service_providers_total: 12, service_location: 'חיפה', annual_budget: 5 });
+  assert.equal(out.SERVICE_PROVIDERS_COUNT, 12);
+  assert.equal(out.loc, 'חיפה');
+  assert.ok(!('other' in out));
+  assert.equal(fillFromRequestDetails(params, {}, { work_hours: 'משרה מלאה, ללא כוננות' }).HOURS, 'משרה מלאה, ללא כוננות', "the template still says מס' שעות עבודה");
+  assert.equal(fillFromRequestDetails(params, { SERVICE_PROVIDERS_COUNT: 7 }, { service_providers_total: 12 }).SERVICE_PROVIDERS_COUNT, 7, 'the manager wins');
+  assert.equal(isFormHidden(params[0]), true);
+  assert.equal(isFormHidden(params[1]), true);
+  assert.equal(isFormHidden(params[2]), false);
+  assert.deepEqual(askedParams(params).map((p) => p.key), ['other']);
+  assert.equal(isFormHidden(params[3]), true);
+  // the budget is never matched by label either
+  assert.ok(!('b' in fillFromRequestDetails([{ key: 'b', labelHe: 'מהו אומדן ההתקשרות השנתית או מהו גובה התקציב שהוקצה לשירות?' }], {}, { annual_budget: 5 })));
+});
+
+test("the bid's title is the requester's service name, and step 2 doesn't ask it", async () => {
+  const { fillFromRequestDetails, isFormHidden } = await import('@obms/shared');
+  const params = [{ key: 'tender_title', labelHe: 'tender_title' }, { key: 'כותרת המכרז', labelHe: 'כותרת המכרז' }];
+  const out = fillFromRequestDetails(params, {}, REQ);
+  assert.equal(out.tender_title, 'שירותי תמיכה');
+  assert.equal(out['כותרת המכרז'], 'שירותי תמיכה');
+  assert.equal(fillFromRequestDetails(params, { tender_title: 'כותרת אחרת' }, REQ).tender_title, 'כותרת אחרת', 'a typed title wins');
+  assert.ok(params.every((p) => isFormHidden(p)));
+  assert.ok(isFormHidden({ key: 'תוקף אחריות', labelHe: 'תוקף אחריות' }));
+  assert.ok(!isFormHidden({ key: 'תקופת האחריות', labelHe: 'תקופת האחריות' }));
+});
+
+test('the maximum frame amount must be at least 240,000', () => {
+  assert.equal(BUDGET_MIN, 240000);
+  assert.ok(requesterDetailsInputSchema.safeParse({ ...REQ, annual_budget: 240000 }).success);
+  assert.equal(requesterDetailsInputSchema.safeParse({ ...REQ, annual_budget: 239999 }).success, false);
+  assert.equal(requesterDetailsInputSchema.safeParse({ ...REQ, annual_budget: 1 }).success, false);
+  assert.equal(createBidRequestInput.safeParse({ brief: 'שירותי תמיכה', details: { ...REQ, annual_budget: 100000 } }).success, false);
+  assert.deepEqual(normalizeDetailsInput({ annual_budget: '239999' }).badNumbers, ['annual_budget']);
+  assert.deepEqual(normalizeDetailsInput({ annual_budget: '240000' }).details, { annual_budget: 240000 });
+  assert.deepEqual(normalizeDetailsInput({ annual_budget: '240000' }).badNumbers, []);
 });

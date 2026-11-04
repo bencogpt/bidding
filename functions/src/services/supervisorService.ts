@@ -10,9 +10,14 @@ import {
   LEGAL_CLAUSE_CHECKLIST,
   REQUIRED_SKILLS,
   TENDER_TYPE_LABELS_HE,
+  BLANK_LINE,
+  applySeverityPolicy,
   hasDocument,
   isConfidentialParam,
+  isFormHidden,
+  publicDetails,
   verdictOf,
+  type SystemFill,
   type FindingCode,
   type FindingSeverity,
   type SupervisionFinding,
@@ -26,6 +31,7 @@ import { now } from '../lib/admin.js';
 import type { Caller } from '../lib/context.js';
 import {
   auditRepo,
+  bidRequestsRepo,
   internalRepo,
   supervisionRepo,
   templatesRepo,
@@ -73,6 +79,42 @@ interface AiReviewInput {
   provenance: TenderProvenance | null;
   internalParams: Record<string, string | number>;
   docText: string;
+  requestAnswers?: Record<string, string | number>; // the requester's public answers (no budget)
+}
+
+const FORMULA_NOTES: Record<string, string> = {
+  bid_guarantee: "calculated: 2% of the requester's annual estimate, floored to whole thousands (none under ₪1M)",
+  guarantee_words: 'calculated: the bid-guarantee amount in Hebrew words',
+  guarantee_validity: 'calculated: submission deadline + 60 days',
+  bid_validity: 'calculated: submission deadline + 90 days, moved past Fri/Sat and Israeli holidays',
+  annual_estimate: "the requester's annual estimate, published as the framework amount by organisational decision",
+  manager_name: "the bid manager's name from their user record",
+  manager_email: "the bid manager's email from their user record",
+  manager_phone: "the bid manager's phone from their user record",
+  option_months_total: "calculated: the requester's number of option periods × 12 months",
+  option_total_months: 'calculated: contract months + option months',
+  bid_serial: "the case's bid number",
+  submission_date: 'the submission deadline',
+  submission_day: 'the weekday of the submission deadline',
+  request_brief: "the requester's description of the service",
+};
+const fillNote = (f: SystemFill) =>
+  f.kind === 'fixed'
+    ? 'a fixed organisational value (from the procurement fields spreadsheet)'
+    : f.kind === 'copy'
+      ? `a copy of the field "${f.from}"`
+      : (FORMULA_NOTES[f.formula] ?? `calculated by the system (${f.formula})`);
+
+/** What the system filled and why — so the reviewer doesn't report correct values as invented. */
+function systemValuesNote(tender: TenderDoc, template: TemplateDoc): string {
+  const lines = template.params.flatMap((p) => {
+    const v = tender.params[p.key];
+    if (v === undefined || v === '' || v === BLANK_LINE) return [];
+    if (p.fill) return [`- "${p.labelHe}" = ${JSON.stringify(v)}: ${fillNote(p.fill)}`];
+    if (isFormHidden(p)) return [`- "${p.labelHe}" = ${JSON.stringify(v)}: from the requester's answers`];
+    return [];
+  });
+  return lines.join('\n');
 }
 
 const fmtDate = (ms: number | null) =>
@@ -201,6 +243,12 @@ export async function aiReview(
                 `Submission deadline: ${fmtDate(tender.submissionDeadline) ?? '(not set)'}\n` +
                 `Award date: ${fmtDate(tender.awardDate) ?? '(not set)'}\n` +
                 `Evaluation criteria: ${JSON.stringify(tender.evaluationCriteria ?? [])}\n` +
+                `Requester's answers: ${JSON.stringify(input.requestAnswers ?? {})}\n` +
+                '## Values the system filled (correct by definition — never report them as UNSOURCED_VALUE ' +
+                'or CONTRADICTION; read them in their own units)\n' +
+                `${systemValuesNote(tender, template) || '(none)'}\n` +
+                `- "${BLANK_LINE}" lines are deliberate blanks the bid manager completes by hand, and XXXX / ____ ` +
+                'are places the supplier fills — neither is a missing or invented value.\n' +
                 `CONFIDENTIAL values that must NOT appear or be derivable (G6): ${JSON.stringify(internalParams)}\n\n` +
                 '## Task\n' +
                 'Audit the document below. Report:\n' +
@@ -330,7 +378,7 @@ export async function superviseTender(
   const tender = await tendersRepo.get(tenderId);
   if (!tender) throw new Error(`tender ${tenderId} not found`);
   const [allTemplates, provenance, internalParams] = await Promise.all([
-    Promise.all(TENDER_TYPES.map((t) => templatesRepo.get(t))),
+    Promise.all(TENDER_TYPES.map((t) => templatesRepo.getForCase(t))),
     internalRepo.getProvenance(tenderId),
     internalRepo.getParams(tenderId),
   ]);
@@ -352,7 +400,7 @@ export async function superviseTender(
   }
   const dataHash = isDraft ? currentDraftDataHash(tender, template, internalParams) : null;
 
-  const findings = runDeterministicChecks({
+  const rules = runDeterministicChecks({
     tender,
     template,
     otherTemplates: allTemplates.filter((t): t is TemplateDoc => !!t && t.type !== tender.type),
@@ -366,11 +414,22 @@ export async function superviseTender(
   if (docText !== null && !isDraft) await recordVersion(tender, docText, docHash(docText), stage);
 
   let aiModel: string | null = null;
+  let aiFindings: SupervisionFinding[] = [];
   if (!RULES_ONLY.includes(stage) && docText !== null) {
-    const ai = await aiReview({ tender, template, provenance, internalParams, docText });
+    const request = tender.serial ? await bidRequestsRepo.get(tender.serial) : null;
+    const ai = await aiReview({
+      tender,
+      template,
+      provenance,
+      internalParams,
+      docText,
+      requestAnswers: publicDetails(request?.details),
+    });
     aiModel = ai.model;
-    findings.push(...ai.findings);
+    aiFindings = ai.findings;
   }
+  // Only hard facts block; everything else is a warning for the manager to weigh.
+  const findings = applySeverityPolicy([...rules, ...aiFindings]);
 
   const report: SupervisionReport = {
     runId: supervisionRepo.newId(tenderId),

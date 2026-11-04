@@ -5,6 +5,7 @@ import {
   createTenderInput,
   createBidRequestInput,
   assistRequestInput,
+  recommendationsInput,
   grantAccessInput,
   askQuestionInput,
   answerQuestionsInput,
@@ -55,15 +56,21 @@ import {
   isAutoSerialParam,
   briefWithDetails,
   isFormHidden,
+  isConfidentialParam,
+  BLANK_LINE,
+  isOmittedParam,
   fillFromRequestDetails,
   isSystemParam,
   resolveSystemFills,
   SERVICE_KEYS,
+  guaranteeDefault,
   isAutoDeadlineParam,
   hasDocument,
   updateTenderDraftInput,
   generateDocumentInput,
   rerunRequestResearchInput,
+  researchDraftInput,
+  RESEARCH_DRAFT_MAX_AGE_MS,
   type BidRequestDoc,
   isAutoParam,
   formatDeadlineFor,
@@ -79,14 +86,18 @@ import {
   type SubmissionDoc,
   type UserDoc,
   type TemplateDoc,
+  type UpdateTenderDraftInput,
+  setPendingSuppliersInput,
   type TenderProvenance,
   type SupervisionReport,
   type CaseTeam,
   type TeamRole,
+  hebrewLabel,
+  stripMarkup,
 } from '@obms/shared';
 import { randomBytes } from 'node:crypto';
 import { auth, db, now } from './lib/admin.js';
-import { requireAuth, requireRole, requireManager, requireInternal, requireCaseAccess } from './lib/context.js';
+import { requireAuth, requireRole, requireManager, requireInternal, requireCaseAccess, type Caller } from './lib/context.js';
 import { parseInput } from './lib/validate.js';
 import {
   tendersRepo,
@@ -104,6 +115,8 @@ import {
   countersRepo,
   bidRequestsRepo,
   agentUsageRepo,
+  researchDraftsRepo,
+  researchRepo,
   caseCreationRepo,
 } from './repositories.js';
 import { allocateBidNumber, israelYear } from './services/bidNumber.js';
@@ -129,6 +142,7 @@ import {
   getClient,
 } from './services/aiService.js';
 import { requestAgentTurn } from './services/requestAgent.js';
+import { recommendationsFor } from './services/requestRecommendations.js';
 import { findCandidates } from './services/supplierSearch.js';
 import { requiredSkillsFor, skillsCatalog } from './services/skillsRegistry.js';
 import {
@@ -138,7 +152,8 @@ import {
   recordVersion,
 } from './services/supervisorService.js';
 import { documentGate, DOCUMENT_GATE_MESSAGE_HE } from './services/draftCalc.js';
-import { runRequestResearch } from './services/requestResearch.js';
+import { runDraftResearch, runRequestResearch } from './services/requestResearch.js';
+import { publicServiceSummary } from './services/publicSummary.js';
 import { docHash } from './services/supervisorChecks.js';
 import { templateHash } from './services/supervisorChecks.js';
 import { computeCaseScore, refreshCaseScore } from './services/scoreService.js';
@@ -201,11 +216,12 @@ const SUPERVISED = {
 function validateParams(
   template: TemplateDoc,
   params: Record<string, string | number>,
+  annualEstimate?: unknown, // a blank guarantee takes its default from it (see resolveSystemFills)
 ): Record<string, string | number> {
   const clean: Record<string, string | number> = {};
   const stillPlaceholders = template.params
     .filter((p) => !isSystemParam(p) && !isFormHidden(p) && hasPlaceholder(params[p.key]))
-    .map((p) => p.labelHe);
+    .map((p) => hebrewLabel(p.key, p.labelHe));
   if (stillPlaceholders.length) {
     throw new HttpsError(
       'invalid-argument',
@@ -217,14 +233,18 @@ function validateParams(
     const v = params[p.key];
     const blank = v === undefined || String(v).trim() === '';
     if (blank) {
-      if (p.required) throw new HttpsError('invalid-argument', `שדה חובה חסר: ${p.labelHe}`);
+      const defaulted =
+        p.defaultFrom === 'guarantee_pct' && guaranteeDefault(annualEstimate ?? params[SERVICE_KEYS.estimate]) !== null;
+      if (p.required && !defaulted) {
+        throw new HttpsError('invalid-argument', `שדה חובה חסר: ${hebrewLabel(p.key, p.labelHe)}`);
+      }
       continue;
     }
     if (p.type === 'number' && !Number.isFinite(Number(v))) {
-      throw new HttpsError('invalid-argument', `השדה "${p.labelHe}" חייב להיות מספר.`);
+      throw new HttpsError('invalid-argument', `השדה "${hebrewLabel(p.key, p.labelHe)}" חייב להיות מספר.`);
     }
     if (p.key === SERVICE_KEYS.economicPct && (Number(v) < 0 || Number(v) > 100)) {
-      throw new HttpsError('invalid-argument', `השדה "${p.labelHe}" חייב להיות בין 0 ל-100.`);
+      throw new HttpsError('invalid-argument', `השדה "${hebrewLabel(p.key, p.labelHe)}" חייב להיות בין 0 ל-100.`);
     }
     clean[p.key] = p.type === 'number' ? Number(v) : v;
   }
@@ -377,11 +397,28 @@ async function grantTeamAccess(
 function buildCaseParams(
   template: TemplateDoc,
   asked: Record<string, string | number>,
-  ctx: { serial: string; submissionDeadline: number | null; owner: UserDoc | null; requester?: UserDoc },
+  ctx: {
+    serial: string;
+    submissionDeadline: number | null;
+    owner: UserDoc | null;
+    requester?: UserDoc;
+    request?: BidRequestDoc | null; // its confidential annual estimate is the guarantee default's base
+    publicBrief?: string; // the supplier-facing service description (publicSummary.ts), never the raw request
+  },
 ): { publicParams: Record<string, string | number>; internalParams: Record<string, string | number> } {
+  const details = (ctx.request?.details ?? {}) as Record<string, unknown>;
+  const annual = Number(details.annual_budget);
+  const years = Number(details.contract_years);
   const params = resolveSystemFills(template.params, asked, {
     submissionDeadline: ctx.submissionDeadline,
-    manager: ctx.owner ? { displayName: ctx.owner.displayName, email: ctx.owner.email } : undefined,
+    annualEstimate: Number.isFinite(annual) && annual > 0 ? annual : undefined,
+    contractYears: Number.isInteger(years) && years > 0 ? years : undefined,
+    optionPeriods: Number.isInteger(Number(details.option_periods_count)) ? Number(details.option_periods_count) : undefined,
+    requestBrief: ctx.publicBrief,
+    serial: ctx.serial,
+    manager: ctx.owner
+      ? { displayName: ctx.owner.displayName, email: ctx.owner.email, phone: ctx.owner.phone }
+      : undefined,
     requester: ctx.requester ? { displayName: ctx.requester.displayName, phone: ctx.requester.phone } : undefined,
   });
   // Confidential values (the estimate, G6) never go on the supplier-readable tender doc.
@@ -392,18 +429,42 @@ function buildCaseParams(
       publicParams[p.key] = formatDeadlineFor(p.key, ctx.submissionDeadline);
     }
   }
+  // A field the form doesn't ask and nothing filled is printed as a blank line to complete in the
+  // document (the inspector lists them as a warning) — not left as a {{placeholder}} that blocks.
+  for (const p of template.params) {
+    const notAsked = isSystemParam(p) || isFormHidden(p);
+    const blank = String(publicParams[p.key] ?? '').trim() === '';
+    if (isOmittedParam(p)) publicParams[p.key] = ''; // removed from the system: printed as nothing
+    else if (notAsked && blank && !isConfidentialParam(p)) publicParams[p.key] = BLANK_LINE;
+  }
   return { publicParams, internalParams };
 }
 
 // Phase 1: the requester's summary becomes a request with its bid number. No AI, no document yet.
 export const createBidRequest = onCall(async (req) => {
   const caller = requireRole(req, 'requester', 'tender_manager');
-  const input = parseInput(createBidRequestInput, req.data);
+  const parsed = parseInput(createBidRequestInput, req.data);
+  // Plain text only: tags typed into the request never reach documents or prompts as markup.
+  const input = {
+    ...parsed,
+    brief: stripMarkup(parsed.brief).trim(),
+    details: Object.fromEntries(
+      Object.entries(parsed.details).map(([k, v]) => [k, typeof v === 'string' ? stripMarkup(v).trim() : v]),
+    ) as typeof parsed.details,
+  };
+  if (input.brief.length < 3) throw new HttpsError('invalid-argument', 'תיאור הבקשה קצר מדי.');
   if (input.requestId) {
     const prev = await bidRequestsRepo.byClientRequestId(caller.uid, input.requestId);
     if (prev) return { serial: prev.serial, duplicate: true };
   }
   const createdAt = now();
+  // Web research the requester already ran on the summary step is linked, not searched again. The
+  // summary is on the request from its creation, so the background trigger skips it.
+  const draftRun = input.researchRunId ? await researchDraftsRepo.get(input.researchRunId) : null;
+  const linkRun =
+    draftRun && draftRun.createdBy === caller.uid && createdAt - draftRun.createdAt < RESEARCH_DRAFT_MAX_AGE_MS
+      ? draftRun
+      : null;
   const serial = await allocateBidNumber(israelYear(createdAt), {
     random: Math.random,
     claim: (serial, n) =>
@@ -420,8 +481,13 @@ export const createBidRequest = onCall(async (req) => {
         clientRequestId: input.requestId,
         createdAt,
         convertedAt: null,
+        ...(linkRun ? { research: { status: linkRun.status, runId: linkRun.runId, at: createdAt } } : {}),
       }),
   });
+  if (linkRun) {
+    const { createdBy: _by, ...run } = linkRun;
+    await researchRepo.save({ ...run, serial });
+  }
   await auditRepo.append({
     entityType: 'bidRequest',
     entityId: serial,
@@ -449,6 +515,22 @@ export const researchOnRequestCreated = onDocumentCreated(
   },
 );
 
+// Web research on the request while it is still being written (the summary step): ideas from similar
+// procurements, shown with the recommendations. Its own, smaller hourly budget — web search costs more.
+const RESEARCH_DRAFTS_PER_HOUR = 5;
+export const researchDraftRequest = onCall(
+  { secrets: ['ANTHROPIC_API_KEY'], timeoutSeconds: 300 },
+  async (req) => {
+    const caller = requireRole(req, 'requester', 'tender_manager');
+    const input = parseInput(researchDraftInput, req.data);
+    const allowed = await agentUsageRepo.take(caller.uid, RESEARCH_DRAFTS_PER_HOUR, 3_600_000, Date.now(), 'research');
+    if (!allowed) {
+      throw new HttpsError('resource-exhausted', 'הגעת למספר החיפושים ברשת המותר לשעה. נסה שוב מאוחר יותר.');
+    }
+    return runDraftResearch(input, caller);
+  },
+);
+
 // Re-run the research (failed / outdated): the request's owner or a manager.
 export const rerunRequestResearch = onCall(
   { secrets: ['ANTHROPIC_API_KEY'], timeoutSeconds: 540 },
@@ -473,6 +555,15 @@ export const assistRequest = onCall({ secrets: ['ANTHROPIC_API_KEY'], timeoutSec
   const input = parseInput(assistRequestInput, req.data);
   const allowed = await agentUsageRepo.take(caller.uid, AGENT_CALLS_PER_HOUR, 3_600_000, Date.now());
   return requestAgentTurn(input, allowed ? getClient() : null);
+});
+
+// Notes and ideas that sharpen a request before it is sent to procurement ("המלצות לשיפור ודיוק"). Counts against
+// the same hourly limit as the request agent; over it, the fixed suggestions are returned instead of an error.
+export const requestRecommendations = onCall({ secrets: ['ANTHROPIC_API_KEY'], timeoutSeconds: 90 }, async (req) => {
+  const caller = requireRole(req, 'requester', 'tender_manager');
+  const input = parseInput(recommendationsInput, req.data);
+  const allowed = await agentUsageRepo.take(caller.uid, AGENT_CALLS_PER_HOUR, 3_600_000, Date.now());
+  return recommendationsFor(input, allowed ? getClient() : null);
 });
 
 // ---- Tenders ----
@@ -505,7 +596,7 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
   if (prior) return prior;
 
   // ---- 1. validate (no writes) ----
-  const template = await templatesRepo.get(input.type);
+  const template = await templatesRepo.getForCase(input.type);
   if (!template) {
     throw new HttpsError('failed-precondition', `אין תבנית לסוג המכרז: ${input.type}`);
   }
@@ -517,10 +608,10 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
       'התבנית טרם הומרה — יש להשלים את שדות התבנית בעמוד התבניות לפני יצירת מכרז.',
     );
   }
-  const asked = validateParams(template, input.params);
-
   const bidReq = await bidRequestsRepo.get(input.bidRequestId);
   if (!bidReq) throw new HttpsError('not-found', 'הבקשה לא נמצאה.');
+  const asked = validateParams(template, input.params, (bidReq.details as Record<string, unknown> | undefined)?.annual_budget);
+
   if (bidReq.status !== 'open') throw new HttpsError('failed-precondition', 'הבקשה כבר הומרה למכרז.');
   // What the requester already answered in phase 1 fills the matching fields the manager left blank.
   const askedWithDetails = fillFromRequestDetails(template.params, asked, bidReq.details);
@@ -549,8 +640,12 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
 
   const requester = teamUsers.find((u) => u.role === 'requester');
   const serial = bidReq.serial;
+  // The service description in the document is public: rewritten for suppliers, never the raw request.
+  const publicBrief = needsPublicBrief(template) ? (await publicServiceSummary(bidReq.brief)).summary : undefined;
   const { publicParams, internalParams } = buildCaseParams(template, askedWithDetails, {
     serial,
+    request: bidReq,
+    publicBrief,
     submissionDeadline: input.submissionDeadline ?? null,
     owner,
     requester,
@@ -697,6 +792,17 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
   return { id, serial, docsSkipped: skipped, verdict: null, missingRoles: missing, duplicate: false };
 });
 
+/** Whether the template prints the requester's service description (the request_brief rule). */
+const needsPublicBrief = (template: TemplateDoc) =>
+  template.params.some((p) => p.fill?.kind === 'formula' && p.fill.formula === 'request_brief');
+
+/** The public service description already on a draft (from its request_brief field). */
+function currentPublicBrief(template: TemplateDoc, params: Record<string, string | number>): string | undefined {
+  const p = template.params.find((x) => x.fill?.kind === 'formula' && x.fill.formula === 'request_brief');
+  const v = p ? params[p.key] : undefined;
+  return v !== undefined && v !== BLANK_LINE && String(v).trim() ? String(v) : undefined;
+}
+
 // Draft-first: edit a case's data in the app while it has no document (manager). Same checks as
 // creation; any change makes earlier inspector checks stale (a new fingerprint).
 export const updateTenderDraft = onCall(async (req) => {
@@ -708,8 +814,24 @@ export const updateTenderDraft = onCall(async (req) => {
     throw new HttpsError('failed-precondition', 'למכרז כבר נוצר מסמך — יש לערוך את המסמך עצמו.');
   }
   if (tender.status !== 'draft') throw new HttpsError('failed-precondition', 'ניתן לערוך רק מכרז בטיוטה.');
-  const template = await templatesRepo.get(tender.type);
+  const template = await templatesRepo.getForCase(tender.type);
   if (!template) throw new HttpsError('failed-precondition', `אין תבנית לסוג המכרז: ${tender.type}`);
+  // The public service description already on the draft is kept (it is regenerated only on request).
+  const { draftDataHash, changed } = await applyDraftData(caller, tender, template, input, currentPublicBrief(template, tender.params));
+  return { ok: true, draftDataHash, changed };
+});
+
+/**
+ * Rebuild a draft's data from the asked values + edits (same checks as creation) and save it. Any change
+ * gives a new fingerprint, so earlier inspector checks become stale.
+ */
+async function applyDraftData(
+  caller: Caller,
+  tender: TenderDoc,
+  template: TemplateDoc,
+  input: UpdateTenderDraftInput,
+  publicBrief: string | undefined,
+): Promise<{ draftDataHash: string; changed: string[] }> {
 
   const submissionDeadline =
     input.submissionDeadline !== undefined ? input.submissionDeadline : tender.submissionDeadline;
@@ -721,8 +843,11 @@ export const updateTenderDraft = onCall(async (req) => {
   const asked = validateParams(template, { ...tender.params, ...internalBefore, ...(input.params ?? {}) });
   const owner = await usersRepo.get(tender.ownerUid);
   const requester = tender.team?.requester ? await usersRepo.get(tender.team.requester) : null;
+  const bidReq = tender.serial ? await bidRequestsRepo.get(tender.serial) : null;
   const { publicParams, internalParams } = buildCaseParams(template, asked, {
     serial: tender.serial ?? '',
+    request: bidReq,
+    publicBrief,
     submissionDeadline,
     owner,
     requester: requester ?? undefined,
@@ -774,8 +899,8 @@ export const updateTenderDraft = onCall(async (req) => {
     newState: `${changed.length} fields`,
     detail: changed.slice(0, 20).join(', ') || undefined,
   });
-  return { ok: true, draftDataHash, changed };
-});
+  return { draftDataHash, changed };
+}
 
 // Draft-first: create the case's document — manager only, and only when the latest inspector check
 // covered exactly the current draft data with no blocking finding (no override).
@@ -784,7 +909,7 @@ export const generateDocument = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 
   const input = parseInput(generateDocumentInput, req.data);
   const tender = await tendersRepo.get(input.tenderId);
   if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
-  const template = await templatesRepo.get(tender.type);
+  const template = await templatesRepo.getForCase(tender.type);
   if (!template) throw new HttpsError('failed-precondition', `אין תבנית לסוג המכרז: ${tender.type}`);
   const internalParams = await internalRepo.getParams(tender.id);
   const reason = documentGate(tender, currentDraftDataHash(tender, template, internalParams));
@@ -853,6 +978,49 @@ export const generateDocument = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 
   return { ok: true, googleDocId: gen.googleDocId, docsSkipped: skipped };
 });
 
+// A draft whose document was created but not yet sent to review can be regenerated (e.g. after a fix to
+// how values are filled): the data is rebuilt — the public service description rewritten afresh — and the
+// case goes back to draft-first: the inspector checks it again before a new document is created. The old
+// document is kept and listed, never deleted (edits made in it are not carried over).
+export const regenerateDocument = onCall(
+  { secrets: ['ANTHROPIC_API_KEY'], timeoutSeconds: 120 },
+  async (req) => {
+    const caller = requireManager(req);
+    const input = parseInput(generateDocumentInput, req.data);
+    const tender = await tendersRepo.get(input.tenderId);
+    if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+    if (!hasDocument(tender)) throw new HttpsError('failed-precondition', 'למכרז עדיין אין מסמך.');
+    if (tender.status !== 'draft') {
+      throw new HttpsError('failed-precondition', 'ניתן ליצור מסמך מחדש רק לפני שליחה לבדיקה פנימית.');
+    }
+    const template = await templatesRepo.getForCase(tender.type);
+    if (!template) throw new HttpsError('failed-precondition', `אין תבנית לסוג המכרז: ${tender.type}`);
+    const bidReq = tender.serial ? await bidRequestsRepo.get(tender.serial) : null;
+    const publicBrief =
+      needsPublicBrief(template) && bidReq ? (await publicServiceSummary(bidReq.brief)).summary : currentPublicBrief(template, tender.params);
+    const { draftDataHash } = await applyDraftData(caller, tender, template, { tenderId: tender.id }, publicBrief);
+    const old = tender.googleDocId ?? tender.docExportPath;
+    await tendersRepo.update(tender.id, {
+      documentStatus: 'none',
+      googleDocId: null,
+      docExportPath: null,
+      replacedDocuments: [...(tender.replacedDocuments ?? []), ...(old ? [old] : [])],
+    });
+    await auditRepo.append({
+      entityType: 'tender',
+      entityId: tender.id,
+      tenderId: tender.id,
+      actorUid: caller.uid,
+      actorName: caller.name,
+      action: 'document_reset',
+      prevState: old,
+      newState: 'draft',
+      detail: 'המסמך יווצר מחדש לאחר בדיקת הסוכן המפקח',
+    });
+    return { ok: true, draftDataHash };
+  },
+);
+
 export const transitionTender = onCall(SUPERVISED, async (req) => {
   const caller = requireManager(req);
   const input = parseInput(transitionTenderInput, req.data);
@@ -874,8 +1042,8 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
     }
   }
 
-  // Final approval: every required role has signed off in this review round.
-  if (REQUIRE_APPROVALS && input.to === 'ready' && canTransition(current.status, 'ready')) {
+  // Final approval and publishing: every required role has signed off in this review round.
+  if (REQUIRE_APPROVALS && (input.to === 'ready' || input.to === 'published') && canTransition(current.status, input.to)) {
     const waiting = missingApprovals(
       current.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[current.type],
       current.team,
@@ -884,8 +1052,17 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
     if (waiting.length) {
       throw new HttpsError(
         'failed-precondition',
-        `לא ניתן לאשר סופית — ממתין לאישור: ${waiting.map(roleLabel).join(', ')}.`,
+        `${input.to === 'published' ? 'לא ניתן לפרסם' : 'לא ניתן לאשר סופית'} — ממתין לאישור: ${waiting.map(roleLabel).join(', ')}.`,
       );
+    }
+  }
+
+  // Publishing goes to the suppliers picked beforehand (at least one).
+  let pendingSuppliers: string[] = [];
+  if (input.to === 'published' && canTransition(current.status, 'published')) {
+    pendingSuppliers = await internalRepo.getPendingSuppliers(input.tenderId);
+    if (!pendingSuppliers.length) {
+      throw new HttpsError('failed-precondition', 'יש לבחור לפחות ספק אחד לפני הפרסום (לשונית הגישה).');
     }
   }
 
@@ -904,6 +1081,9 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
       ...(path ? { docExportPath: path } : {}),
       publishedDocHash: gate.docHash,
     });
+    // The picked suppliers get access now that the document is public to them.
+    await grantSupplierAccess(caller, input.tenderId, pendingSuppliers);
+    await internalRepo.setPendingSuppliers(input.tenderId, [], caller.uid);
     // Ask every internal participant how the drafting/review went.
     await requestFeedback(caller, input.tenderId, 'publish');
   }
@@ -944,6 +1124,64 @@ export const refreshTenderDocument = onCall(SUPERVISED, async (req) => {
 });
 
 // ---- Access & sharing ----
+/** Suppliers → view access (in-system only, no Google Docs permission), one audit entry each. */
+async function grantSupplierAccess(caller: Caller, tenderId: string, supplierIds: readonly string[]): Promise<string[]> {
+  const granted: string[] = [];
+  for (const supplierId of supplierIds) {
+    const supplier = await suppliersRepo.get(supplierId);
+    if (!supplier) continue;
+    const a: AccessDoc = {
+      principalId: supplierId,
+      kind: 'supplier',
+      level: 'view',
+      displayName: supplier.name,
+      grantedBy: caller.uid,
+      grantedAt: now(),
+    };
+    await accessRepo.grant(tenderId, a);
+    await auditRepo.append({
+      entityType: 'tender',
+      entityId: tenderId,
+      tenderId,
+      actorUid: caller.uid,
+      actorName: caller.name,
+      action: 'share_supplier',
+      prevState: null,
+      newState: supplier.name,
+    });
+    granted.push(supplier.name);
+  }
+  return granted;
+}
+
+// The suppliers the case will be published to. Picked in review / once ready, kept internal (suppliers
+// can't see it or each other); "פרסם לספקים" gives exactly these access.
+export const setPendingSuppliers = onCall(async (req) => {
+  const caller = requireManager(req);
+  const input = parseInput(setPendingSuppliersInput, req.data);
+  const tender = await tendersRepo.get(input.tenderId);
+  if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  if (tender.status !== 'internal_review' && tender.status !== 'ready') {
+    throw new HttpsError('failed-precondition', 'ניתן לבחור ספקים לפרסום בבדיקה פנימית או כשהמכרז מוכן לפרסום.');
+  }
+  const ids = [...new Set(input.supplierIds)];
+  const known = (await Promise.all(ids.map((id) => suppliersRepo.get(id)))).filter((s): s is SupplierDoc => !!s);
+  if (known.length !== ids.length) throw new HttpsError('invalid-argument', 'ספק לא מוכר ברשימה.');
+  await internalRepo.setPendingSuppliers(tender.id, ids, caller.uid);
+  await auditRepo.append({
+    entityType: 'tender',
+    entityId: tender.id,
+    tenderId: tender.id,
+    actorUid: caller.uid,
+    actorName: caller.name,
+    action: 'suppliers_selected',
+    prevState: null,
+    newState: `${ids.length} ספקים`,
+    detail: known.map((s) => s.name).join(', ') || undefined,
+  });
+  return { ok: true, supplierIds: ids };
+});
+
 export const grantAccess = onCall({ secrets: DOCS_SECRETS }, async (req) => {
   const caller = requireManager(req);
   const input = parseInput(grantAccessInput, req.data);
@@ -961,30 +1199,7 @@ export const grantAccess = onCall({ secrets: DOCS_SECRETS }, async (req) => {
     );
   }
 
-  // Suppliers -> view access (in-system only, no Google Docs permission).
-  for (const supplierId of input.supplierIds ?? []) {
-    const supplier = await suppliersRepo.get(supplierId);
-    if (!supplier) continue;
-    const a: AccessDoc = {
-      principalId: supplierId,
-      kind: 'supplier',
-      level: 'view',
-      displayName: supplier.name,
-      grantedBy: caller.uid,
-      grantedAt: now(),
-    };
-    await accessRepo.grant(input.tenderId, a);
-    await auditRepo.append({
-      entityType: 'tender',
-      entityId: input.tenderId,
-      tenderId: input.tenderId,
-      actorUid: caller.uid,
-      actorName: caller.name,
-      action: 'share_supplier',
-      prevState: null,
-      newState: supplier.name,
-    });
-  }
+  await grantSupplierAccess(caller, input.tenderId, input.supplierIds ?? []);
 
   return { ok: true, docsSkipped: [] as string[] };
 });
@@ -1325,11 +1540,8 @@ export const searchSuppliers = onCall(
     requireInternal(req);
     const input = parseInput(searchSuppliersInput, req.data);
     const tags = input.domainTags ?? [];
-    const [registered, external] = await Promise.all([
-      findCandidates(tags),
-      suggestExternalSuppliers(tags, input.type),
-    ]);
-    return { registered, external };
+    const [registered, ext] = await Promise.all([findCandidates(tags), suggestExternalSuppliers(tags, input.type)]);
+    return { registered, external: ext.suppliers, externalStatus: ext.status };
   },
 );
 
@@ -1341,7 +1553,7 @@ export const draftBid = onCall(
   async (req) => {
     const caller = requireManager(req);
     const input = parseInput(draftBidInput, req.data);
-    const template = await templatesRepo.get(input.type);
+    const template = await templatesRepo.getForCase(input.type);
     if (!template) throw new HttpsError('failed-precondition', `אין תבנית לסוג: ${input.type}`);
     const skills = requiredSkillsFor(input.type);
     // The requester's phase 1 answers (never the internal budget) ride along with the brief.
@@ -1767,6 +1979,7 @@ export const createInternalUser = onCall(async (req) => {
     displayName: input.name,
     role: input.role,
     googleEmail: input.googleEmail, // stripUndefined drops it when not provided
+    phone: input.phone, // the bid manager's phone fills BID_MANAGER_PHONE in documents
     createdAt: now(),
   });
   await auditRepo.append({

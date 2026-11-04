@@ -12,9 +12,9 @@ import {
   type TemplateParam,
 } from '@obms/shared';
 
-test('guaranteeDefault: 2.5% of the estimate, rounded to the shekel', () => {
-  assert.equal(guaranteeDefault(1_000_000), 25_000);
-  assert.equal(guaranteeDefault('1234567'), 30_864);
+test('guaranteeDefault: 2% of the annual estimate, rounded to the shekel', () => {
+  assert.equal(guaranteeDefault(1_000_000), 20_000);
+  assert.equal(guaranteeDefault('1234567'), 24_691);
   assert.equal(guaranteeDefault(''), null);
   assert.equal(guaranteeDefault(0), null);
   assert.equal(guaranteeDefault('abc'), null);
@@ -91,8 +91,8 @@ test('resolveSystemFills: default guarantee, words, totals, copies, fixed and co
     { estimate: 1_000_000, initial_period_months: 24, option_periods: 2, validity: 90 },
     ctx,
   );
-  assert.equal(out.guarantee_amount, 25_000);
-  assert.equal(out.guarantee_amount_words, 'עשרים וחמישה אלף שקלים');
+  assert.equal(out.guarantee_amount, 20_000);
+  assert.equal(out.guarantee_amount_words, 'עשרים אלף שקלים');
   assert.equal(out.total_months, 26);
   assert.equal(out.offer_validity_days, 90);
   assert.equal(out.envelope_addressee, 'דנה מנהלת');
@@ -162,7 +162,7 @@ test('a brief longer than BRIEF_MAX_LENGTH is rejected by createBidRequest and t
   const { createBidRequestInput, draftBidInput, BRIEF_MAX_LENGTH } = await import('@obms/shared');
   const ok = 'א'.repeat(BRIEF_MAX_LENGTH);
   const tooLong = ok + 'א';
-  const details = { service_name: 'שירות', document_classification: 'בלמ"ס', annual_budget: 1, contract_years: 1 };
+  const details = { service_name: 'שירות', document_classification: 'בלמ"ס', annual_budget: 240000, contract_years: 1 };
   assert.equal(createBidRequestInput.safeParse({ brief: ok, details }).success, true);
   assert.equal(createBidRequestInput.safeParse({ brief: tooLong, details }).success, false);
   assert.equal(draftBidInput.safeParse({ type: 'service', brief: ok }).success, true);
@@ -178,4 +178,162 @@ test('quality share is 100 minus the economic share, and absent for a bad value'
   assert.equal(resolveSystemFills(params, { economic_pct: 100 }, ctx).quality_pct, 0);
   assert.equal('quality_pct' in resolveSystemFills(params, { economic_pct: 130 }, ctx), false);
   assert.equal('quality_pct' in resolveSystemFills(params, {}, ctx), false);
+});
+
+// The service template as typed into the Google Doc: Hebrew placeholders, no fill metadata.
+const typed: TemplateParam[] = [
+  { key: 'tender_title', labelHe: 'tender_title', type: 'text', required: true },
+  { key: 'כתובת מייל של מנהל המכרז', labelHe: 'כתובת מייל של מנהל המכרז', type: 'text', required: true },
+  { key: 'סכום ערבות להצעה', labelHe: 'סכום ערבות להצעה', type: 'text', required: true },
+  { key: 'bid_guarantee_amount', labelHe: 'סכום ערבות ההצעה (בש"ח)', type: 'number', required: true },
+  { key: 'bid_guarantee_amount_words', labelHe: 'סכום ערבות ההצעה במילים', type: 'text', required: true },
+  { key: 'bid_guarantee_validity_date', labelHe: 'תוקף ערבות ההצעה', type: 'date', required: true },
+  { key: 'guarantee_duration', labelHe: 'guarantee_duration', type: 'text', required: true },
+  { key: 'bid_validity_date', labelHe: 'תוקף ההצעה', type: 'date', required: true },
+  { key: 'סכום ערבות ביצוע', labelHe: 'סכום ערבות ביצוע', type: 'text', required: true },
+  { key: 'תוקף אחריות', labelHe: 'תוקף אחריות', type: 'text', required: true },
+  { key: 'service_field_summary', labelHe: "עיקרי השירות הנדרש (פרק ב')", type: 'textarea', required: true },
+  { key: 'agreement_service_field', labelHe: 'תחום השירות (בהסכם)', type: 'text', required: true },
+  { key: 'gathering_hour', labelHe: 'gathering_hour', type: 'text', required: true },
+  { key: 'bank_name', labelHe: 'bank_name', type: 'text', required: true },
+  { key: 'phone_number', labelHe: 'phone_number', type: 'text', required: true },
+  { key: 'clarifications_email', labelHe: 'כתובת דוא"ל לשאלות הבהרה', type: 'text', required: true },
+  { key: 'clarifications_reference', labelHe: 'מזהה הבל"ם לפנייה בשאלות', type: 'text', required: true },
+  { key: "מס' שעות עבודה", labelHe: "מס' שעות עבודה", type: 'text', required: true },
+  { key: 'framework_max_amount', labelHe: 'סכום המסגרת המקסימלי (בש"ח)', type: 'number', required: true },
+  { key: 'option_periods_count', labelHe: 'מספר תקופות אופציה', type: 'number', required: true },
+  { key: 'option_period_months', labelHe: 'מספר חודשים לכל תקופת אופציה', type: 'number', required: true },
+  { key: 'option_total_months', labelHe: 'סך מצטבר של חודשי אופציה', type: 'number', required: true },
+  { key: 'gathering_date', labelHe: 'gathering_date', type: 'date', required: true },
+  { key: 'הוראות ביטחון', labelHe: 'הוראות ביטחון', type: 'text', required: true },
+];
+
+test('procurement form: step 2 asks only what the spreadsheet leaves to procurement', async () => {
+  const { withBuiltinFills, askedParams } = await import('@obms/shared');
+  const asked = askedParams(withBuiltinFills(typed)).map((p) => p.key);
+  assert.deepEqual(asked, ['option_period_months'], 'הוראות ביטחון is not on the create form');
+});
+
+test('procurement form: calculated, fixed and context values', async () => {
+  const { withBuiltinFills } = await import('@obms/shared');
+  const all = withBuiltinFills(typed);
+  const out = resolveSystemFills(
+    all,
+    { option_periods_count: 2, option_period_months: 12, "מס' שעות עבודה": 'חצי משרה' },
+    {
+      ...ctx,
+      manager: { ...ctx.manager, phone: '03-1234567' },
+      annualEstimate: 4_367_200,
+      contractYears: 2,
+      requestBrief: 'שירותי ניקיון למבנה משרדים',
+      serial: '2026-31',
+    },
+  );
+  assert.equal(out['סכום ערבות להצעה'], '87,000', '2% floored to thousands (87,344 → 87,000)');
+  assert.equal(out.bid_guarantee_amount, '87,000');
+  assert.equal(out.bid_guarantee_amount_words, 'שמונים ושבעה אלף שקלים');
+  assert.equal(out['סכום ערבות ביצוע'], '5', 'the Doc prints it as a rate: "בגובה 5% מגובה ערך הזכייה השנתי"');
+  assert.equal(out.framework_max_amount, '4,367,200', 'the annual estimate, published as the framework amount');
+  assert.equal(out['כתובת מייל של מנהל המכרז'], 'manager@obms.test');
+  assert.equal(out.clarifications_email, 'manager@obms.test');
+  assert.equal(out.phone_number, '03-1234567');
+  assert.equal(out.clarifications_reference, '2026-31');
+  assert.equal(out.service_field_summary, 'שירותי ניקיון למבנה משרדים');
+  assert.equal(out.agreement_service_field, 'שירותי ניקיון למבנה משרדים', "copied from פרק ב'");
+  assert.equal(out.gathering_hour, 'בין 08:00-13:00');
+  assert.equal(out.bank_name, 'אוצר החייל');
+  assert.equal(out["מס' שעות עבודה"], 'חצי משרה', "the requester's answer beats the fixed default");
+  assert.equal(out.option_total_months, 48, '2 years + 2 × 12 option months');
+  // Sunday 1/11/2026: +60 days = 31/12/2026; +90 days = Sat 30/1/2027 → Sun 31/1/2027.
+  assert.equal(out.bid_guarantee_validity_date, '31/12/2026');
+  assert.equal(out.bid_validity_date, '31/01/2027');
+  assert.equal('gathering_date' in out, false, 'not asked, nothing fills it');
+});
+
+test('procurement form: no bid guarantee under ₪1M', async () => {
+  const { withBuiltinFills, bidGuarantee } = await import('@obms/shared');
+  assert.equal(bidGuarantee(999_999), null);
+  assert.equal(bidGuarantee(1_000_000), 20_000);
+  const out = resolveSystemFills(withBuiltinFills(typed), {}, { ...ctx, annualEstimate: 800_000 });
+  assert.equal(out['סכום ערבות להצעה'], undefined);
+  assert.equal(out.bid_guarantee_amount_words, undefined);
+});
+
+test('built-in rules: explicit field metadata wins; keys match case-insensitively', async () => {
+  const { withBuiltinFills } = await import('@obms/shared');
+  const fixedEmail: TemplateParam = { key: 'manager_email', labelHe: 'מייל', type: 'text', required: false, fill: { kind: 'fixed', value: 'x@y' } };
+  assert.deepEqual(withBuiltinFills([fixedEmail])[0].fill, { kind: 'fixed', value: 'x@y' });
+  const lead: TemplateParam = { key: 'BID_LEAD_EMAIL', labelHe: 'BID_LEAD_EMAIL', type: 'text', required: true };
+  assert.deepEqual(withBuiltinFills([lead])[0].fill, { kind: 'formula', formula: 'manager_email' });
+});
+
+test('Israeli working days: weekends and holidays move the date forward', async () => {
+  const { isIsraeliWorkingDay, addDaysToWorkingDay } = await import('@obms/shared');
+  const at = (d: string) => new Date(`${d}T10:00:00Z`);
+  assert.equal(isIsraeliWorkingDay(at('2026-11-03')), true, 'a Tuesday');
+  assert.equal(isIsraeliWorkingDay(at('2026-11-06')), false, 'Friday');
+  assert.equal(isIsraeliWorkingDay(at('2026-09-12')), false, 'Rosh Hashana');
+  assert.equal(isIsraeliWorkingDay(at('2026-09-21')), false, 'Yom Kippur');
+  assert.equal(isIsraeliWorkingDay(at('2026-04-02')), false, 'Pesach');
+  assert.equal(isIsraeliWorkingDay(at('2026-04-22')), false, 'Independence Day 2026');
+  assert.equal(isIsraeliWorkingDay(at('2026-05-22')), false, 'Shavuot');
+  assert.equal(isIsraeliWorkingDay(at('2026-04-23')), true, 'the day after Independence Day');
+  // 90 days after 16/6/2026 is Mon 14/9 — the day after Rosh Hashana (12–13/9): a working day.
+  assert.equal(new Date(addDaysToWorkingDay(at('2026-06-16').getTime(), 90)).toISOString().slice(0, 10), '2026-09-14');
+  // 90 days after 14/6/2026 is Sat 12/9 (Rosh Hashana), then Sun 13/9 (its second day) → Mon 14/9.
+  assert.equal(new Date(addDaysToWorkingDay(at('2026-06-14').getTime(), 90)).toISOString().slice(0, 10), '2026-09-14');
+});
+
+test('bid manager phone and removed tags', async () => {
+  const { withBuiltinFills, askedParams, createInternalUserInput } = await import('@obms/shared');
+  const params: TemplateParam[] = [
+    { key: 'BID_MANAGER_PHONE', labelHe: 'BID_MANAGER_PHONE', type: 'text', required: true },
+    { key: "מס' הטלפון של המזמין כפי שמוגדר", labelHe: "מס' הטלפון של המזמין כפי שמוגדר", type: 'text', required: true },
+    { key: 'SECURITY_APPENDIX', labelHe: 'SECURITY_APPENDIX', type: 'text', required: true },
+  ];
+  const all = withBuiltinFills(params);
+  assert.deepEqual(askedParams(all), [], 'neither is asked in step 2');
+  const out = resolveSystemFills(all, {}, { ...ctx, manager: { ...ctx.manager, phone: '050-0000001' } });
+  assert.equal(out.BID_MANAGER_PHONE, '050-0000001');
+  assert.equal(out["מס' הטלפון של המזמין כפי שמוגדר"], '050-0000001', "the bid manager's phone as defined in the system");
+  assert.equal(out.SECURITY_APPENDIX, undefined);
+  const base = { name: 'מנהל', email: 'm@x.test' };
+  assert.equal(createInternalUserInput.safeParse({ ...base, role: 'tender_manager' }).success, false, 'a bid manager needs a phone');
+  assert.equal(createInternalUserInput.safeParse({ ...base, role: 'tender_manager', phone: '050-1234567' }).success, true);
+  assert.equal(createInternalUserInput.safeParse({ ...base, role: 'legal' }).success, true, 'other roles may omit it');
+  assert.equal(createInternalUserInput.safeParse({ ...base, role: 'legal', phone: 'abc' }).success, false);
+});
+
+test('bid manager details come from the user record under any name; option months; team lead alias', async () => {
+  const { withBuiltinFills, askedParams, fillFromRequestDetails } = await import('@obms/shared');
+  const params: TemplateParam[] = [
+    { key: 'BID_MANAGER_NAME', labelHe: 'BID_MANAGER_NAME', type: 'text', required: true },
+    { key: 'tender_manager_email', labelHe: 'tender_manager_email', type: 'text', required: true },
+    { key: 'שם מנהל המכרז', labelHe: 'שם מנהל המכרז', type: 'text', required: true },
+    { key: 'טלפון נייד של מנהל הבל"מ', labelHe: 'טלפון נייד של מנהל הבל"מ', type: 'text', required: true },
+    { key: "מס' הטלפון של נציג הרכש כפי שמוגדר", labelHe: "מס' הטלפון של נציג הרכש כפי שמוגדר", type: 'text', required: true },
+    { key: 'דוא"ל נציג הרכש', labelHe: 'דוא"ל נציג הרכש', type: 'text', required: true },
+    { key: 'option_periods_count', labelHe: 'מספר תקופות אופציה', type: 'number', required: true },
+    { key: 'תפקיד ראש צוות', labelHe: 'תפקיד ראש צוות', type: 'text', required: true },
+  ];
+  const all = withBuiltinFills(params);
+  assert.deepEqual(askedParams(all), [], 'none of them is a text box in step 2');
+  const asked = fillFromRequestDetails(all, {}, { option_periods_count: 2, team_lead_role: 'ארכיטקט אבטחה' });
+  const out = resolveSystemFills(all, asked, { ...ctx, manager: { ...ctx.manager, phone: '050-0000002' }, optionPeriods: 2 });
+  assert.equal(out.BID_MANAGER_NAME, 'דנה מנהלת');
+  assert.equal(out.tender_manager_email, 'manager@obms.test');
+  assert.equal(out['שם מנהל המכרז'], 'דנה מנהלת');
+  assert.equal(out['טלפון נייד של מנהל הבל"מ'], '050-0000002');
+  assert.equal(out["מס' הטלפון של נציג הרכש כפי שמוגדר"], '050-0000002', 'the procurement representative = the bid manager');
+  assert.equal(out['דוא"ל נציג הרכש'], 'manager@obms.test');
+  assert.equal(out.option_periods_count, 24, '"ועד לסך מצטבר של 24 חודשים נוספים": 2 periods × 12 months');
+  assert.equal(out['תפקיד ראש צוות'], 'ארכיטקט אבטחה', "the requester's answer reaches the template's wording");
+});
+
+test('only hard facts block; everything else becomes a warning', async () => {
+  const { applySeverityPolicy, verdictOf } = await import('@obms/shared');
+  const f = (severity: 'block' | 'warn', source: 'rules' | 'ai', hard?: boolean) => ({ severity, source, hard });
+  const out = applySeverityPolicy([f('block', 'rules', true), f('block', 'rules'), f('block', 'ai'), f('block', 'ai', true), f('warn', 'rules')]);
+  assert.deepEqual(out.map((x) => x.severity), ['block', 'warn', 'warn', 'warn', 'warn']);
+  assert.equal(verdictOf(applySeverityPolicy([f('block', 'ai'), f('block', 'rules')])), 'WARN');
 });

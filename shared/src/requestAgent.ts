@@ -3,6 +3,7 @@
 // The budget (annual_budget) is deliberately absent everywhere in this file (GLOBAL_RULES G6).
 import { z } from 'zod';
 import { BRIEF_MAX_LENGTH } from './schemas.js';
+import { BUDGET_MIN } from './requesterFields.js';
 
 export const SCOPE_MIN_LENGTH = 60;
 export const AGENT_HISTORY_MAX = 20;
@@ -14,6 +15,15 @@ export const agentDetailsSchema = z
     service_name: z.string().trim().min(1).max(200).refine(noPlaceholder).optional(),
     document_classification: z.string().trim().min(1).max(40).refine(noPlaceholder).optional(),
     contract_years: z.number().int().min(1).max(30).optional(),
+    // the optional answers (never the budget)
+    service_location: z.string().trim().min(1).max(200).refine(noPlaceholder).optional(),
+    provider_responsibilities: z.string().trim().min(1).max(1000).refine(noPlaceholder).optional(),
+    team_lead_role: z.string().trim().min(1).max(1000).refine(noPlaceholder).optional(),
+    min_pool_candidates: z.number().int().min(1).max(100000).optional(),
+    service_providers_total: z.number().int().min(1).max(100000).optional(),
+    supplier_equipment: z.string().trim().min(1).max(1000).refine(noPlaceholder).optional(),
+    work_hours: z.string().trim().min(1).max(200).refine(noPlaceholder).optional(),
+    option_periods_count: z.number().int().min(1).max(10).optional(),
   })
   .strict();
 export type AgentDetails = z.infer<typeof agentDetailsSchema>;
@@ -31,8 +41,39 @@ export const assistRequestInput = z
   .strict();
 export type AssistRequestInput = z.infer<typeof assistRequestInput>;
 
-export type AskKey = 'service_name' | 'document_classification' | 'scope' | 'contract_years' | 'quality' | 'done';
-const ASK_KEYS: readonly AskKey[] = ['service_name', 'document_classification', 'scope', 'contract_years', 'quality', 'done'];
+export type OptionalAskKey =
+  | 'service_location'
+  | 'provider_responsibilities'
+  | 'team_lead_role'
+  | 'min_pool_candidates'
+  | 'service_providers_total'
+  | 'supplier_equipment'
+  | 'work_hours'
+  | 'option_periods_count';
+export type AskKey =
+  | 'service_name'
+  | 'document_classification'
+  | 'scope'
+  | 'contract_years'
+  | OptionalAskKey
+  | 'quality'
+  | 'done';
+const ASK_KEYS: readonly AskKey[] = [
+  'service_name',
+  'document_classification',
+  'scope',
+  'contract_years',
+  'service_location',
+  'provider_responsibilities',
+  'team_lead_role',
+  'min_pool_candidates',
+  'service_providers_total',
+  'supplier_equipment',
+  'work_hours',
+  'option_periods_count',
+  'quality',
+  'done',
+];
 
 export interface AssistRequestResult {
   details: AgentDetails;
@@ -52,6 +93,28 @@ export const REQUEST_QUESTIONS: Record<MissingKey, { q: string; chips: string[] 
   document_classification: { q: 'מה סיווג המסמך?', chips: ['רגיל', 'שמור', 'סודי', 'בלמ"ס'] },
   scope: { q: 'תארו בכמה משפטים את עיקרי השירות הנדרש.', chips: [] },
   contract_years: { q: 'מה משך תקופת ההתקשרות בשנים?', chips: ['1', '2', '3', '5'] },
+};
+
+/** Asked in the chat after the mandatory details; each can be skipped. */
+const OPTIONAL_ORDER: readonly OptionalAskKey[] = [
+  'service_location',
+  'provider_responsibilities',
+  'team_lead_role',
+  'min_pool_candidates',
+  'service_providers_total',
+  'supplier_equipment',
+  'work_hours',
+  'option_periods_count',
+];
+export const OPTIONAL_QUESTIONS: Record<OptionalAskKey, { q: string; chips: string[] }> = {
+  service_location: { q: 'מה מקום אספקת השירות?', chips: ['דלג'] },
+  provider_responsibilities: { q: 'מה תחומי האחריות של נותני השירות?', chips: ['דלג'] },
+  team_lead_role: { q: 'מה תפקיד ראש הצוות?', chips: ['דלג'] },
+  min_pool_candidates: { q: 'מה מספר המועמדים המינימלי למאגר?', chips: ['דלג'] },
+  service_providers_total: { q: 'כמה נותני שירות נדרשים?', chips: ['דלג'] },
+  supplier_equipment: { q: 'איזה ציוד הספק מספק לנותני השירות?', chips: ['דלג'] },
+  work_hours: { q: 'מה היקף המשרה, והאם נדרשות גם שעות כוננות?', chips: ['משרה מלאה', 'משרה מלאה + כוננות', 'דלג'] },
+  option_periods_count: { q: 'כמה תקופות אופציה (הארכה) נדרשות?', chips: ['1', '2', '3', '4', 'דלג'] },
 };
 
 export const QUALITY_QUESTIONS: readonly { q: string; chips: string[] }[] = [
@@ -90,6 +153,34 @@ function yearsFrom(text: string): number | undefined {
   return n !== undefined && Number.isInteger(n) && n >= 1 && n <= 30 ? n : undefined;
 }
 
+const OPTIONAL_TEXT = {
+  service_location: 200,
+  provider_responsibilities: 1000,
+  team_lead_role: 1000,
+  supplier_equipment: 1000,
+  work_hours: 200,
+} as const;
+const OPTIONAL_INT = ['min_pool_candidates', 'service_providers_total', 'option_periods_count'] as const;
+const INT_MAX: Partial<Record<string, number>> = { option_periods_count: 10 };
+const intIn = (v: unknown): number | undefined => {
+  const n = typeof v === 'string' && v.trim() === '' ? NaN : Number(v);
+  return Number.isInteger(n) && n >= 1 && n <= 100000 ? n : undefined;
+};
+
+/** The optional answers from a loosely typed source: text bounded and clean, counts whole numbers. */
+function optionalFrom(src: Record<string, unknown>): AgentDetails {
+  const out: Record<string, string | number> = {};
+  for (const [k, max] of Object.entries(OPTIONAL_TEXT)) {
+    const v = cleanText(src[k], max);
+    if (v) out[k] = v;
+  }
+  for (const k of OPTIONAL_INT) {
+    const n = intIn(src[k]);
+    if (n !== undefined && n <= (INT_MAX[k] ?? 100000)) out[k] = n;
+  }
+  return out as AgentDetails;
+}
+
 /** Deterministic extraction (the fallback when no model answers). */
 export function scriptExtract(text: string): AgentDetails {
   const out: AgentDetails = {};
@@ -100,6 +191,14 @@ export function scriptExtract(text: string): AgentDetails {
   if (cls) out.document_classification = cls[0];
   const y = yearsFrom(text);
   if (y !== undefined) out.contract_years = y;
+  const providers = text.match(/(\d{1,5})\s*נותני\s*שירות/);
+  if (providers) Object.assign(out, optionalFrom({ service_providers_total: providers[1] }));
+  const place = text.match(/מקום אספקת השירות\s*[:\-]\s*([^\n,.;]+)/);
+  if (place) Object.assign(out, optionalFrom({ service_location: place[1] }));
+  const hours = text.match(/היקף משרה\s*[:\-]\s*([^\n,.;]+)/) ?? text.match(/משרה (?:מלאה|חלקית)[^\n,.;]*/);
+  if (hours) Object.assign(out, optionalFrom({ work_hours: hours[1] ?? hours[0] }));
+  const pool = text.match(/(\d{1,5})\s*מועמדים/);
+  if (pool) Object.assign(out, optionalFrom({ min_pool_candidates: pool[1] }));
   return out;
 }
 
@@ -119,6 +218,7 @@ export function sanitizeModelOutput(raw: unknown): {
   if (cls) details.document_classification = cls;
   const y = Number(d.contract_years);
   if (Number.isInteger(y) && y >= 1 && y <= 30) details.contract_years = y;
+  Object.assign(details, optionalFrom(d));
   const chips = Array.isArray(r.chips)
     ? [...new Set(r.chips.map((c) => cleanText(c, 40)).filter((c): c is string => !!c))].slice(0, 4)
     : [];
@@ -130,17 +230,24 @@ function nextStep(
   details: AgentDetails,
   brief: string,
   qualityAsked: number,
-  first: boolean,
+  history: AssistRequestInput['history'],
 ): { asking: AskKey; message: string; chips: string[] } {
   const miss = missingKeys(details, brief);
-  const prefix = first ? GREETING : '';
+  const prefix = history.length === 0 ? GREETING : '';
   if (miss.length) {
     const k = miss[0];
     return { asking: k, message: prefix + REQUEST_QUESTIONS[k].q, chips: REQUEST_QUESTIONS[k].chips };
   }
+  const said = (text: string) => history.some((m) => m.role === 'agent' && m.text.includes(text));
+  const intro = said(QUALITY_INTRO.trim()) ? '' : QUALITY_INTRO;
+  // An optional question is asked once: a skipped or answered one is never asked again.
+  const pending = OPTIONAL_ORDER.find((k) => details[k] === undefined && !said(OPTIONAL_QUESTIONS[k].q));
+  if (pending) {
+    return { asking: pending, message: prefix + intro + OPTIONAL_QUESTIONS[pending].q, chips: OPTIONAL_QUESTIONS[pending].chips };
+  }
   if (qualityAsked < QUALITY_QUESTIONS.length) {
     const qq = QUALITY_QUESTIONS[qualityAsked];
-    return { asking: 'quality', message: prefix + (qualityAsked === 0 ? QUALITY_INTRO : '') + qq.q, chips: qq.chips };
+    return { asking: 'quality', message: prefix + intro + qq.q, chips: qq.chips };
   }
   return { asking: 'done', message: DONE, chips: [] };
 }
@@ -152,7 +259,7 @@ export function finishTurn(
   source: 'model' | 'script',
   say?: { asking?: AskKey; message: string; chips: string[] },
 ): AssistRequestResult {
-  const step = nextStep(details, input.brief, input.qualityAsked, input.history.length === 0);
+  const step = nextStep(details, input.brief, input.qualityAsked, input.history);
   const useModel = !!say && say.asking === step.asking && !!say.message;
   return {
     details,
@@ -165,14 +272,22 @@ export function finishTurn(
   };
 }
 
-const askedKeyOf = (agentText: string): MissingKey | 'quality' | null => {
+const askedKeyOf = (agentText: string): MissingKey | OptionalAskKey | 'quality' | null => {
   for (const k of ORDER) if (agentText.includes(REQUEST_QUESTIONS[k].q)) return k;
+  for (const k of OPTIONAL_ORDER) if (agentText.includes(OPTIONAL_QUESTIONS[k].q)) return k;
   return QUALITY_QUESTIONS.some((q) => agentText.includes(q.q)) ? 'quality' : null;
 };
 
-function applyAnswer(key: 'service_name' | 'document_classification' | 'contract_years', text: string): AgentDetails {
+function applyAnswer(
+  key: 'service_name' | 'document_classification' | 'contract_years' | OptionalAskKey,
+  text: string,
+): AgentDetails {
   const t = text.trim();
-  if (!t) return {};
+  if (!t || t === 'דלג') return {};
+  if (key in OPTIONAL_TEXT) return optionalFrom({ [key]: t });
+  if (key === 'min_pool_candidates' || key === 'service_providers_total' || key === 'option_periods_count') {
+    return optionalFrom({ [key]: t.match(/[0-9]{1,6}/)?.[0] });
+  }
   if (key === 'service_name') {
     const v = cleanText(t, 200);
     return v ? { service_name: v } : {};
@@ -193,7 +308,7 @@ export function scriptTurn(input: AssistRequestInput): AssistRequestResult {
   const prev = input.history[input.history.length - 2];
   if (last?.role === 'user' && prev?.role === 'agent') {
     const k = askedKeyOf(prev.text);
-    if (k === 'service_name' || k === 'document_classification' || k === 'contract_years') {
+    if (k && k !== 'scope' && k !== 'quality') {
       details = { ...details, ...applyAnswer(k, last.text) };
     }
   }
@@ -218,7 +333,7 @@ export function requestChecklist(
   return CHECKLIST.map(({ key, label }) => {
     let present: boolean;
     if (key === 'scope') present = scopeOk(brief);
-    else if (key === 'annual_budget') present = Number.isFinite(Number(fields.annual_budget)) && Number(fields.annual_budget) > 0 && text(key);
+    else if (key === 'annual_budget') present = text(key) && Number.isFinite(Number(fields.annual_budget)) && Number(fields.annual_budget) >= BUDGET_MIN;
     else if (key === 'contract_years') {
       const n = Number(fields.contract_years);
       present = text(key) && Number.isInteger(n) && n >= 1 && n <= 30;
@@ -239,5 +354,18 @@ export function agentDetailsFromFields(fields: Record<string, string>, touched: 
   if (cls && touched.has('document_classification') && !cls.includes('{{') && cls.length <= 40) out.document_classification = cls;
   const y = Number(fields.contract_years);
   if ((fields.contract_years ?? '').trim() && Number.isInteger(y) && y >= 1 && y <= 30) out.contract_years = y;
+  Object.assign(out, optionalFrom(fields));
   return out;
+}
+
+/** In the text mode: while the agent still has data to ask for, the main button continues to the agent instead of sending. */
+export const needsAgent = (asking: string): boolean => asking !== 'quality' && asking !== 'done';
+
+/** About 3,000 characters make a page of the request; BRIEF_MAX_LENGTH is five pages. */
+export const SCOPE_PAGE_CHARS = 3000;
+
+/** The length of a text in pages, to one decimal place (a little text is never shown as 0). */
+export function pageCount(text: string): number {
+  if (!text) return 0;
+  return Math.max(0.1, Math.round((text.length / SCOPE_PAGE_CHARS) * 10) / 10);
 }

@@ -141,6 +141,7 @@ export type TenderDoc = z.infer<typeof tenderDocSchema> & {
   documentStatus?: DocumentStatus;
   documentGeneratedAt?: number;
   documentGeneratedBy?: string;
+  replacedDocuments?: string[]; // earlier documents of a draft, kept (not deleted) when it was regenerated
   draftDataHash?: string; // fingerprint of the current draft data (compared with the last check)
 };
 
@@ -221,7 +222,7 @@ export type AuditDoc = z.infer<typeof auditDocSchema>;
 // ---- Callable function payloads ----
 
 /** Longest tender brief accepted (it is stored on the case and sent to the AI draft). */
-export const BRIEF_MAX_LENGTH = 5000;
+export const BRIEF_MAX_LENGTH = 15000; // about five pages of text
 
 export const createTenderInput = z.object({
   title: z.string().optional(), // blank: the system names the case from its type and serial
@@ -263,6 +264,7 @@ export const createBidRequestInput = z.object({
   brief: z.string().trim().min(3).max(BRIEF_MAX_LENGTH),
   details: requesterDetailsInputSchema, // the requester's answers to the phase 1 questions
   requestId: z.string().min(8).max(100).optional(), // one per form: a retried submit returns the same request
+  researchRunId: z.string().min(8).max(100).optional(), // the web research already run on the summary step
 });
 export type CreateBidRequestInput = z.infer<typeof createBidRequestInput>;
 
@@ -286,6 +288,13 @@ export const grantAccessInput = z.object({
   internalUids: z.array(z.string()).default([]),
 });
 export type GrantAccessInput = z.infer<typeof grantAccessInput>;
+
+/** The suppliers the case will be published to (picked before publication; internal until then). */
+export const setPendingSuppliersInput = z.object({
+  tenderId: z.string(),
+  supplierIds: z.array(z.string()).max(200),
+});
+export type SetPendingSuppliersInput = z.infer<typeof setPendingSuppliersInput>;
 
 export const askQuestionInput = z.object({
   tenderId: z.string(),
@@ -359,7 +368,14 @@ export interface ExternalSupplierSuggestion {
   contactEmail?: string;
   country?: string;
   sourceUrl?: string;
+  // Track record with the Government of Israel (ministries, central tenders, government bodies), with
+  // the page it was found on. hasGovRecord is true only when that page was really returned by the search.
+  govRecordHe?: string;
+  govSourceUrl?: string;
+  hasGovRecord?: boolean;
 }
+
+export type ExternalSearchStatus = 'ok' | 'none' | 'no_tags' | 'failed';
 
 export const createSupplierAccountInput = z.object({
   supplierId: z.string(),
@@ -386,6 +402,17 @@ export const createInternalUserInput = z.object({
     .email()
     .optional()
     .or(z.literal('').transform(() => undefined)),
+  // The bid manager's phone is printed in documents (BID_MANAGER_PHONE): required for that role.
+  phone: z
+    .string()
+    .trim()
+    .regex(/^[0-9+\-() ]{7,20}$/, 'מספר טלפון לא תקין')
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+}).superRefine((u, ctx) => {
+  if (u.role === 'tender_manager' && !u.phone) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['phone'], message: 'יש להזין מספר טלפון למנהל מכרז.' });
+  }
 });
 export type CreateInternalUserInput = z.infer<typeof createInternalUserInput>;
 
