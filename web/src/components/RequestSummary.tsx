@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { CHECKLIST, REQUESTER_FIELDS } from '@obms/shared';
+import { CHECKLIST, REQUESTER_FIELDS, pageCount } from '@obms/shared';
 import type { Fields } from '../lib/useRequestAgent';
 
 const nf = new Intl.NumberFormat('en-US');
@@ -31,7 +31,17 @@ export default function RequestSummary({ brief, fields }: { brief: string; field
         </div>
         <div className="mt-3 border-t border-dashed border-black/10 pt-3">
           <div className="text-xs text-tx-soft">{CHECKLIST.find((c) => c.key === 'scope')?.label}</div>
-          <div className="whitespace-pre-wrap text-sm leading-relaxed">{brief.trim() || '—'}</div>
+          {brief.trim().length > 320 ? (
+            <div className="text-sm leading-relaxed">
+              <span className="whitespace-pre-wrap">{brief.trim().slice(0, 300)}…</span>
+              <details className="mt-1.5 text-xs">
+                <summary className="cursor-pointer text-accent">{t('req.showFull', { n: pageCount(brief) })}</summary>
+                <div className="mt-1.5 whitespace-pre-wrap text-sm leading-[1.7]">{brief.trim()}</div>
+              </details>
+            </div>
+          ) : (
+            <div className="whitespace-pre-wrap text-sm leading-relaxed">{brief.trim() || '—'}</div>
+          )}
         </div>
       </div>
       {extras.length > 0 && (

@@ -6,6 +6,25 @@ import BigEditor from './BigEditor';
 
 const SHORT_MAX = 1000; // an ordinary answer; only the principal service may run to five pages
 const CLIP = 400; // a long answer is shown clipped in its bubble
+// Per question: the hint in the input and how long the answer may be (the server caps the name at 200 characters).
+const HINT: Record<string, string> = {
+  service_name: 'req.phName',
+  document_classification: 'req.phClass',
+  scope: 'req.phScope',
+  budget: 'req.phBudget',
+  contract_years: 'req.phYears',
+  quality: 'req.phQuality',
+};
+const LIMIT: Record<string, number> = {
+  service_name: 200,
+  document_classification: 40,
+  budget: 40,
+  contract_years: 30,
+  quality: 300,
+};
+// Numbers and amounts keep their left-to-right order inside Hebrew text.
+const withNumbers = (text: string): ReactNode[] =>
+  text.split(/([₪\d][\d,.]*)/).map((part, i) => (i % 2 ? <bdi key={i}>{part}</bdi> : part));
 
 const Sparkle = () => (
   <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className="h-[55%] w-[55%]">
@@ -62,7 +81,7 @@ export default function RequestChat({
   const composer = useRef<HTMLDivElement>(null);
   const editor = useRef<HTMLDivElement>(null);
   const isScope = asking === 'scope';
-  const max = isScope ? BRIEF_MAX_LENGTH : SHORT_MAX;
+  const max = isScope ? BRIEF_MAX_LENGTH : (LIMIT[asking ?? ''] ?? SHORT_MAX);
   const over = isScope && text.length > BRIEF_MAX_LENGTH;
 
   useEffect(() => {
@@ -131,7 +150,7 @@ export default function RequestChat({
               <Row key={i} ai>
                 <AgentAvatar />
                 <div className="whitespace-pre-wrap rounded-[14px] rounded-ss-[4px] border border-black/5 bg-paper px-3.5 py-[9px] text-sm leading-relaxed">
-                  {m.text}
+                  {withNumbers(m.text)}
                 </div>
               </Row>
             );
@@ -181,7 +200,7 @@ export default function RequestChat({
                 </button>
               )}
               <div className="whitespace-pre-wrap rounded-[14px] rounded-ee-[4px] bg-accent px-3.5 py-[9px] text-sm leading-relaxed text-white">
-                {clip(m.text)}
+                {withNumbers(clip(m.text))}
                 {m.edited && <span className="mt-0.5 block text-end text-[10px] opacity-75">{t('req.chatEdited')}</span>}
               </div>
             </div>
@@ -228,11 +247,16 @@ export default function RequestChat({
             ref={field}
             rows={1}
             className="min-h-0 flex-1 resize-none bg-transparent px-1 py-1.5 text-sm leading-6 outline-none"
-            placeholder={t('req.chatPlaceholder')}
+            placeholder={t(HINT[asking ?? ''] ?? 'req.chatPlaceholder')}
             maxLength={max}
             value={text}
             disabled={disabled || typing}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              const v = e.target.value;
+              // The frame amount gets thousands separators as it is typed.
+              const digits = v.replace(/,/g, '');
+              setText(asking === 'budget' && /^[\d,]+$/.test(v) && digits ? Number(digits).toLocaleString('en-US') : v);
+            }}
             onKeyDown={(e) => {
               if (e.key !== 'Enter') return;
               // Principal service: Enter writes a new line, Ctrl+Enter sends. Other answers: Enter sends.
@@ -273,6 +297,11 @@ export default function RequestChat({
         {isScope && (
           <div className={'text-[11px] ' + (over ? 'text-red-600' : 'text-tx-soft')}>
             {t('req.pagesOf', { n: pageCount(text), max: 5 })} · {t('req.ctrlEnter')}
+          </div>
+        )}
+        {asking === 'service_name' && (
+          <div className={'text-[11px] ' + (text.length >= max ? 'text-red-600' : 'text-tx-soft')}>
+            {t('req.charsOf', { n: text.length, max })}
           </div>
         )}
       </div>

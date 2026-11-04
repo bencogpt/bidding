@@ -20,6 +20,7 @@ export default function RequestRecommendations({
   chosen,
   onChosen,
   onResearch,
+  onStatus,
 }: {
   brief: string;
   details: AgentDetails;
@@ -28,6 +29,7 @@ export default function RequestRecommendations({
   chosen: string[];
   onChosen: (texts: string[]) => void;
   onResearch?: (runId: string | null) => void; // the web research run, linked to the request when it is sent
+  onStatus?: (status: 'idle' | 'loading' | 'done') => void; // the page waits for the list before the request can go
 }) {
   const { t } = useTranslation();
   const [items, setItems] = useState<Recommendation[] | null>(null);
@@ -105,6 +107,11 @@ export default function RequestRecommendations({
     text: w.urls.length ? `${w.label} (מקור: ${w.urls.map(domainOf).join(', ')})` : w.label,
   }));
   const stale = items !== null && loadedFor.current !== key && !locked;
+  const status = busy ? 'loading' : items !== null || failed ? 'done' : 'idle';
+  useEffect(() => {
+    onStatus?.(status);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
   const textOf = (r: Recommendation) => edits[r.text] ?? r.text;
   const toggle = (text: string) =>
     onChosen(chosen.includes(text) ? chosen.filter((c) => c !== text) : [...chosen, text]);

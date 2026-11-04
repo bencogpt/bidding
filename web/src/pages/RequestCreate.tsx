@@ -36,6 +36,7 @@ export default function RequestCreate() {
   const [error, setError] = useState('');
   const [notes, setNotes] = useState('');
   const [chosen, setChosen] = useState<string[]>([]);
+  const [recsStatus, setRecsStatus] = useState<'idle' | 'loading' | 'done'>('idle');
   const [bigText, setBigText] = useState(false); // the large writing window over the free-writing box
   // The web research run on the summary step, linked to the request so it isn't searched again.
   const [researchRunId, setResearchRunId] = useState<string | null>(null);
@@ -153,7 +154,7 @@ export default function RequestCreate() {
           {
             label: t('req.stageB'),
             state: ready ? 'cur' : 'todo',
-            onClick: ready ? () => goTo('step-b') : undefined,
+            onClick: () => goTo('step-b'),
           },
         ]}
       />
@@ -308,6 +309,7 @@ export default function RequestCreate() {
               <RequestSummary brief={a.brief} fields={a.fields} />
               <RequestRecommendations
                 onResearch={setResearchRunId}
+                onStatus={setRecsStatus}
                 brief={a.brief}
                 details={agentView}
                 active={ready}
@@ -329,9 +331,10 @@ export default function RequestCreate() {
                 />
               </div>
               <div className="flex flex-wrap items-center gap-3">
-                <button type="button" className="btn btn-gold" disabled={busy} onClick={submit}>
+                <button type="button" className="btn btn-gold" disabled={busy || recsStatus !== 'done'} onClick={submit}>
                   {busy ? t('req.creating') : t('req.sendToProcurement')}
                 </button>
+                {recsStatus !== 'done' && !busy && <span className="text-xs text-tx-soft">{t('req.recsPending')}</span>}
                 {error && <span className="text-sm text-red-600">{error}</span>}
               </div>
             </div>
@@ -340,6 +343,11 @@ export default function RequestCreate() {
           )}
         </div>
       </SectionCard>
+      <div className="mt-1">
+        <button type="button" className="btn" onClick={() => nav('/')}>
+          {t('req.cancel')}
+        </button>
+      </div>
       {bigText && (
         <BigEditor
           title={t('req.principalService')}
