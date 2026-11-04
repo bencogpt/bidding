@@ -57,6 +57,7 @@ import type {
   ResearchDraftInput,
   ResearchDraftResult,
   ResearchStatus,
+  ExternalSearchStatus,
 } from '@obms/shared';
 
 // The Firebase client gives up after 70 s by default and reports an error — while the server keeps
@@ -156,6 +157,7 @@ export const api = {
     {
       registered: { supplierId: string; name: string; isIsraeli: boolean; matchedTags: string[] }[];
       external: ExternalSupplierSuggestion[];
+      externalStatus: ExternalSearchStatus;
     }
   >('searchSuppliers'),
   createInternalUser: call<CreateInternalUserInput, { email: string; tempPassword: string | null }>(

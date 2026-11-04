@@ -6,6 +6,7 @@ import type {
   TenderType,
   TenderStatus,
   ExternalSupplierSuggestion,
+  ExternalSearchStatus,
 } from '@obms/shared';
 import { isSupplierVisible } from '@obms/shared';
 import { api } from '../lib/api';
@@ -46,6 +47,7 @@ export default function AccessPanel({
   }, [pendingKey, prePublish]);
   const [saved, setSaved] = useState(false);
   const [external, setExternal] = useState<ExternalSupplierSuggestion[] | null>(null);
+  const [externalStatus, setExternalStatus] = useState<ExternalSearchStatus | null>(null);
   const [searching, setSearching] = useState(false);
   const [prefill, setPrefill] = useState<{
     name: string;
@@ -98,6 +100,7 @@ export default function AccessPanel({
     try {
       const res = await api.searchSuppliers({ type: tenderType, domainTags: tenderDomainTags });
       setExternal(res.external);
+      setExternalStatus(res.externalStatus);
     } finally {
       setSearching(false);
     }
@@ -176,9 +179,10 @@ export default function AccessPanel({
               </button>
             </div>
             <p className="mb-2 text-xs text-tx-mute">{t('ws.externalHint')}</p>
-            {external === null ? null : external.length === 0 ? (
-              <div className="text-sm text-tx-mute">{t('ws.noExternal')}</div>
-            ) : (
+            {searching && <div className="text-sm text-tx-soft">{t('ws.externalBusy')}</div>}
+            {!searching && external === null ? null : !searching && external!.length === 0 ? (
+              <div className="text-sm text-tx-mute">{t(`ws.externalStatus.${externalStatus ?? 'none'}`)}</div>
+            ) : searching ? null : (
               <ul className="space-y-2 text-sm">
                 {external.map((c, i) => (
                   <li key={i} className="rounded border border-paper-2 p-2">
@@ -188,6 +192,16 @@ export default function AccessPanel({
                       <span className="chip">{c.domain}</span>
                     </div>
                     <div className="text-tx-soft" dir="auto">{c.rationaleHe}</div>
+                    {c.hasGovRecord ? (
+                      <div className="mt-1 text-xs text-green-700">
+                        🏛 {c.govRecordHe}{' '}
+                        <a href={c.govSourceUrl} target="_blank" rel="noreferrer" className="underline">
+                          {t('ws.govSource')}
+                        </a>
+                      </div>
+                    ) : (
+                      <div className="mt-1 text-xs text-tx-mute">{t('ws.noGovRecord')}</div>
+                    )}
                     {c.contactEmail ? (
                       <div className="text-xs text-teal-600" dir="ltr">
                         ✉ {c.contactEmail}
