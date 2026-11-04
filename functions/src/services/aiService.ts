@@ -11,6 +11,7 @@ import type {
   TenderType,
   BidDraft,
   ExternalSupplierSuggestion,
+  ExternalSearchStatus,
 } from '@obms/shared';
 import { TENDER_TYPE_LABELS_HE, isSystemParam, isConfidentialParam, isFormHidden, templateIdFor } from '@obms/shared';
 import type { LoadedSkill } from './skillsRegistry.js';
@@ -435,69 +436,80 @@ export async function draftBidContent(
  * Suggest real-world candidate suppliers by domain (Israeli-first). AI-proposed & UNVERIFIED —
  * the manager curates before adding to the registry.
  */
+const MAX_SUPPLIERS = 8;
+
+/**
+ * External suppliers to consider, found on the web: Israeli companies with a proven track record with
+ * the Government of Israel come first. Two steps on purpose: step 1 researches with web search (forcing a
+ * tool would stop the model from searching), step 2 structures the findings with a forced tool. Contact
+ * addresses and government-record pages count only when the search actually returned them (grounding).
+ */
 export async function suggestExternalSuppliers(
   domainTags: string[],
   type: TenderType,
-): Promise<ExternalSupplierSuggestion[]> {
-  const client = getClient();
-  if (!client || domainTags.length === 0) return [];
+  client: Pick<Anthropic, 'messages'> | null = getClient(),
+): Promise<{ suppliers: ExternalSupplierSuggestion[]; status: ExternalSearchStatus }> {
+  if (domainTags.length === 0) return { suppliers: [], status: 'no_tags' };
+  if (!client) return { suppliers: [], status: 'failed' };
   try {
-    // Two steps on purpose. Forcing `tool_choice` (as every other call here does) would stop the
-    // model from searching first, but leaving it unforced risks a text-only reply and no data.
-    // So: step 1 researches with web search, step 2 structures the findings with a forced tool.
-    const research = await client.messages.create({
-      model: COMPARE_MODEL,
-      max_tokens: 4000,
-      // Server-side web search: contact addresses must be LOOKED UP, not recalled. A remembered
-      // address is plausible-but-wrong often enough to send bid invitations to a stranger.
-      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 6 }],
-      messages: [
-        {
-          role: 'user',
-          content:
-            `מצא ספקים אפשריים למכרז מסוג ${TENDER_TYPE_LABELS_HE[type]} בתחומים: ` +
-            `${domainTags.join(', ')}. תן עדיפות לחברות ישראליות. עד 8 ספקים.\n` +
-            'לכל ספק חפש באינטרנט: אתר החברה, כתובת דוא״ל אמיתית ליצירת קשר (מכירות/כללי) ' +
-            'מתוך אתר החברה, והדף שבו נמצאה הכתובת. ' +
-            'אם לא מצאת כתובת דוא״ל אמיתית לספק — כתוב במפורש שלא נמצאה. אל תנחש כתובת.',
-        },
-      ],
-    });
-    const findings = research.content
-      .map((b) => (b.type === 'text' ? b.text : ''))
-      .join('\n');
-    if (!findings.trim()) return [];
+    const messages: Anthropic.Messages.MessageParam[] = [
+      {
+        role: 'user',
+        content:
+          `מצא עד ${MAX_SUPPLIERS} ספקים למכרז מסוג ${TENDER_TYPE_LABELS_HE[type]} בתחומים: ${domainTags.join(', ')}.\n` +
+          'עדיפות עליונה: חברות ישראליות בעלות ניסיון מוכח וטוב מול ממשלת ישראל — זכייה במכרזים ממשלתיים או ' +
+          'מרכזיים (מינהל הרכש הממשלתי, mr.gov.il, gov.il), ספק מאושר במכרז מסגרת, או אספקת שירות למשרדי ' +
+          'ממשלה, לצה"ל, למערכת הביטחון או לגופים ציבוריים. חפש ראיות לכך במקורות רשמיים (gov.il, mr.gov.il, ' +
+          'הודעות זכייה, פרוטוקולי ועדות מכרזים) או בעמוד "לקוחות" של החברה.\n' +
+          'לכל ספק: אתר החברה; הראיה לניסיון מול הממשלה (איזה גוף/מכרז ומתי) והעמוד שבו נמצאה; כתובת דוא״ל ' +
+          'אמיתית ליצירת קשר מתוך אתר החברה והעמוד שבו נמצאה. אם משהו לא נמצא — כתוב שלא נמצא. אל תנחש.',
+      },
+    ];
+    const tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }] as unknown as Anthropic.Messages.Tool[];
+    let findings = '';
+    const seen: Anthropic.Messages.ContentBlock[] = [];
+    for (let i = 0; i <= 3; i++) {
+      const r = await client.messages.create({ model: COMPARE_MODEL, max_tokens: 6000, tools, messages });
+      seen.push(...r.content);
+      findings += r.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+      if ((r.stop_reason as string) !== 'pause_turn') break; // a long search turn may pause; resume it
+      messages.push({ role: 'assistant', content: r.content as unknown as Anthropic.Messages.ContentBlockParam[] });
+    }
+    if (!findings.trim()) return { suppliers: [], status: 'none' };
+    const sources = new Set(collectSearchUrls(seen));
 
     const resp = await client.messages.create({
       model: COMPARE_MODEL,
-      max_tokens: 2000,
+      max_tokens: 10000,
       tools: [
         {
           name: 'return_suppliers',
-          description: 'Return candidate suppliers for the given domains, Israeli companies first.',
+          description: 'Candidate suppliers, Israeli companies with a government track record first.',
           input_schema: {
             type: 'object',
             properties: {
               suppliers: {
                 type: 'array',
+                maxItems: MAX_SUPPLIERS,
                 items: {
                   type: 'object',
                   properties: {
                     name: { type: 'string' },
-                    domain: { type: 'string' },
+                    domain: { type: 'string', description: 'The supplier field/domain (short).' },
                     isIsraeli: { type: 'boolean' },
-                    rationaleHe: { type: 'string' },
+                    rationaleHe: { type: 'string', description: 'Why it fits, in Hebrew, at most 2 short sentences.' },
                     website: { type: 'string' },
+                    govRecordHe: {
+                      type: 'string',
+                      description: 'The government track record found (which body/tender, when), in Hebrew, one sentence. Omit if none was found.',
+                    },
+                    govSourceUrl: { type: 'string', description: 'The page that shows the government record. Omit if none.' },
                     contactEmail: {
                       type: 'string',
-                      description:
-                        'Real contact address found during research. OMIT THIS FIELD ENTIRELY if none was found — never guess or construct one.',
+                      description: 'Real contact address found during research. OMIT THIS FIELD ENTIRELY if none was found — never guess or construct one.',
                     },
                     country: { type: 'string', description: 'ISO country code, e.g. IL.' },
-                    sourceUrl: {
-                      type: 'string',
-                      description: 'The page the contact address was found on.',
-                    },
+                    sourceUrl: { type: 'string', description: 'The page the contact address was found on.' },
                   },
                   required: ['name', 'domain', 'isIsraeli', 'rationaleHe'],
                 },
@@ -512,19 +524,44 @@ export async function suggestExternalSuppliers(
         {
           role: 'user',
           content:
-            'המר את ממצאי המחקר הבאים לרשימת ספקים מובנית. חברות ישראליות ראשונות. ' +
-            'העתק כתובות דוא״ל רק אם נמצאו במחקר — אחרת השמט את השדה contactEmail. ' +
-            'הנימוק (rationaleHe) בעברית.\n\n' +
+            'המר את ממצאי המחקר הבאים לרשימת ספקים מובנית. העתק רק עובדות שמופיעות בממצאים: ראיה לניסיון ' +
+            'מול הממשלה, כתובות דוא״ל וקישורים — רק אם נמצאו; אחרת השמט את השדה. הנימוק קצר ובעברית.\n\n' +
             findings,
         },
       ],
     });
-    const out = toolInput<{ suppliers: ExternalSupplierSuggestion[] }>(resp);
-    return (out.suppliers ?? [])
-      .map((sup) => ({ ...sup, contactEmail: sup.contactEmail?.trim() || undefined }))
-      .sort((a, b) => Number(b.isIsraeli) - Number(a.isIsraeli));
+    const out = toolInput<{ suppliers?: ExternalSupplierSuggestion[] }>(resp);
+    const known = (u?: string) => !!u && sources.has(u.trim());
+    const suppliers = (out.suppliers ?? []).slice(0, MAX_SUPPLIERS).map((sup) => {
+      const govOk = known(sup.govSourceUrl) && !!sup.govRecordHe?.trim();
+      return {
+        ...sup,
+        contactEmail: sup.contactEmail?.trim() || undefined,
+        // Only a page the search really returned counts as evidence (no invented records or links).
+        govRecordHe: govOk ? sup.govRecordHe!.trim() : undefined,
+        govSourceUrl: govOk ? sup.govSourceUrl!.trim() : undefined,
+        hasGovRecord: govOk,
+        sourceUrl: known(sup.sourceUrl) ? sup.sourceUrl : undefined,
+      };
+    });
+    suppliers.sort(
+      (a, b) => Number(b.hasGovRecord) - Number(a.hasGovRecord) || Number(b.isIsraeli) - Number(a.isIsraeli),
+    );
+    return { suppliers, status: suppliers.length ? 'ok' : 'none' };
   } catch (err) {
-    console.error('suggestExternalSuppliers: Claude call failed, using fallback', err);
-    return [];
+    console.error('suggestExternalSuppliers: Claude call failed', err);
+    return { suppliers: [], status: 'failed' };
   }
+}
+
+/** Every URL the web search returned (result blocks and citations). */
+function collectSearchUrls(content: Anthropic.Messages.ContentBlock[]): string[] {
+  const urls: string[] = [];
+  for (const b of content as unknown as { type: string; content?: unknown; citations?: { url?: string }[] }[]) {
+    if (b.type === 'web_search_tool_result' && Array.isArray(b.content)) {
+      for (const r of b.content as { url?: string }[]) if (r.url) urls.push(r.url.trim());
+    }
+    for (const c of b.citations ?? []) if (c.url) urls.push(c.url.trim());
+  }
+  return urls;
 }

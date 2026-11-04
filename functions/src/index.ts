@@ -1540,11 +1540,8 @@ export const searchSuppliers = onCall(
     requireInternal(req);
     const input = parseInput(searchSuppliersInput, req.data);
     const tags = input.domainTags ?? [];
-    const [registered, external] = await Promise.all([
-      findCandidates(tags),
-      suggestExternalSuppliers(tags, input.type),
-    ]);
-    return { registered, external };
+    const [registered, ext] = await Promise.all([findCandidates(tags), suggestExternalSuppliers(tags, input.type)]);
+    return { registered, external: ext.suppliers, externalStatus: ext.status };
   },
 );
 
