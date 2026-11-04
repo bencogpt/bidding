@@ -104,6 +104,10 @@ export const comparisonReportSchema = z.object({
       strengthsHe: z.array(z.string()),
       weaknessesHe: z.array(z.string()),
       rationaleHe: z.string(),
+      // Per-criterion scores (each proposal is scored alone); the total is their weighted mean.
+      criteriaScores: z.array(z.object({ name: z.string(), score: z.number() })).optional(),
+      // Instructions found inside the proposal (prompt injection) — for the bid manager only.
+      injection: z.object({ source: z.enum(['rules', 'ai']), evidence: z.string() }).optional(),
     }),
   ),
 });
@@ -296,9 +300,10 @@ export const setPendingSuppliersInput = z.object({
 });
 export type SetPendingSuppliersInput = z.infer<typeof setPendingSuppliersInput>;
 
+export const QUESTION_MAX_LENGTH = 2000;
 export const askQuestionInput = z.object({
   tenderId: z.string(),
-  text: z.string().min(3),
+  text: z.string().trim().min(3).max(QUESTION_MAX_LENGTH),
 });
 export type AskQuestionInput = z.infer<typeof askQuestionInput>;
 
@@ -426,11 +431,49 @@ export const bindTemplateInput = z.object({
 });
 export type BindTemplateInput = z.infer<typeof bindTemplateInput>;
 
+export const SUBMISSION_SUMMARY_MAX_LENGTH = 10000;
 export const saveSubmissionInput = z.object({
   tenderId: z.string(),
-  files: z.array(submissionFileSchema),
-  summary: z.string(),
+  files: z.array(submissionFileSchema).max(30),
+  summary: z.string().max(SUBMISSION_SUMMARY_MAX_LENGTH),
 });
+
+// ---- the supplier's side: functions only (suppliers have no direct database or storage access) ----
+export const supplierTenderInput = z.object({ tenderId: z.string() });
+export const SUBMISSION_FILE_MAX_BYTES = 50 * 1024 * 1024;
+export const SUBMISSION_CONTENT_TYPES = [
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/zip',
+  'application/x-zip-compressed',
+  'image/png',
+  'image/jpeg',
+  'text/plain',
+] as const;
+export const createSubmissionUploadInput = z.object({
+  tenderId: z.string(),
+  fileName: z.string().trim().min(1).max(200),
+  size: z.number().int().positive().max(SUBMISSION_FILE_MAX_BYTES),
+  contentType: z.enum(SUBMISSION_CONTENT_TYPES),
+});
+export type CreateSubmissionUploadInput = z.infer<typeof createSubmissionUploadInput>;
+
+/** What a supplier may see of a tender — never internal fields (team, reports, supervision, …). */
+export interface SupplierTenderView {
+  id: string;
+  serial: string | null;
+  title: string;
+  type: string;
+  status: string;
+  submissionDeadline: number | null;
+  awardDate: number | null;
+  domainTags: string[];
+  evaluationCriteria: { name: string; weight: number }[];
+  awarded: boolean | null; // after award: whether THIS supplier won (never who did)
+}
 export type SaveSubmissionInput = z.infer<typeof saveSubmissionInput>;
 
 export const runComparisonInput = z.object({ tenderId: z.string() });

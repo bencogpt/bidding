@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { QuestionDoc, AnswerDoc } from '@obms/shared';
 import { api } from '../lib/api';
-import { isInternalRole } from '@obms/shared';
+import { isInternalRole, injectionSignals, QUESTION_MAX_LENGTH } from '@obms/shared';
 import { useAuth } from '../auth/AuthProvider';
 import { useQuestionAuthors } from '../lib/hooks';
 
@@ -12,18 +12,25 @@ export default function QuestionsPanel({
   answers,
   canManage,
   canAsk,
+  myQuestionIds,
+  onAsked,
 }: {
   tenderId: string;
   questions: QuestionDoc[];
   answers: AnswerDoc[];
   canManage: boolean;
   canAsk: boolean;
+  myQuestionIds?: string[]; // supplier mode: own questions, from supplierGetTender (no direct reads)
+  onAsked?: () => void;
 }) {
   const { t } = useTranslation();
   const { role, supplierId } = useAuth();
   const isInternal = isInternalRole(role ?? undefined);
-  // Internal users resolve every asker; a supplier resolves only their own question.
-  const authors = useQuestionAuthors(tenderId, isInternal ? null : supplierId);
+  // Internal users resolve every asker (Firestore, internal only); a supplier gets its own question ids
+  // from the supplierGetTender function and never reads authorship directly.
+  const authors = useQuestionAuthors(myQuestionIds ? undefined : tenderId, isInternal ? null : supplierId);
+  const mine = new Set(myQuestionIds ?? []);
+  const [error, setError] = useState('');
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [answerText, setAnswerText] = useState<Record<string, string>>({});
@@ -31,9 +38,13 @@ export default function QuestionsPanel({
   const ask = async () => {
     if (text.trim().length < 3) return;
     setBusy(true);
+    setError('');
     try {
       await api.askQuestion({ tenderId, text });
       setText('');
+      onAsked?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -61,8 +72,7 @@ export default function QuestionsPanel({
   const labelFor = (q: QuestionDoc) => {
     const author = authors[q.id];
     if (isInternal) return author?.supplierName ?? t('q.anonymous');
-    // Supplier: the only author doc they can read is their own, so presence == "mine".
-    return author ? t('q.yourQuestion') : t('q.anonymous');
+    return mine.has(q.id) || author ? t('q.yourQuestion') : t('q.anonymous');
   };
 
   const submitAnswer = async (clusterId: string, questionIds: string[]) => {
@@ -86,11 +96,13 @@ export default function QuestionsPanel({
             className="input min-h-20"
             placeholder={t('q.placeholder')}
             value={text}
+            maxLength={QUESTION_MAX_LENGTH}
             onChange={(e) => setText(e.target.value)}
           />
           <button className="btn btn-gold mt-3" disabled={busy} onClick={ask}>
             {t('q.send')}
           </button>
+          {error && <div className="mt-2 text-sm text-red-600">{error}</div>}
         </div>
       )}
 
@@ -117,6 +129,11 @@ export default function QuestionsPanel({
                       <li key={q.id} className="text-sm">
                         <span className="font-medium text-teal-600">{labelFor(q)}:</span>{' '}
                         {q.text}
+                        {canManage && injectionSignals(q.text).length > 0 && (
+                          <span className="ms-2 badge bg-red-100 text-red-700" title={injectionSignals(q.text)[0].evidence}>
+                            {t('q.injectionFlag')}
+                          </span>
+                        )}
                         {q.answered && (
                           <span className="ms-2 text-xs text-green-600">{t('q.answered')}</span>
                         )}

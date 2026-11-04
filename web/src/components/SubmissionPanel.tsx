@@ -1,22 +1,25 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ref, uploadBytes } from 'firebase/storage';
-import type { TenderDoc, SubmissionDoc } from '@obms/shared';
-import { storage } from '../lib/firebase';
+import type { SubmissionDoc } from '@obms/shared';
+import { SUBMISSION_CONTENT_TYPES, SUBMISSION_FILE_MAX_BYTES, SUBMISSION_SUMMARY_MAX_LENGTH } from '@obms/shared';
 import { api } from '../lib/api';
-import { useMySubmission } from '../lib/hooks';
 import Countdown from './Countdown';
 
-// Supplier's private submission space: upload files + a proposal summary, until the deadline.
+type ContentType = (typeof SUBMISSION_CONTENT_TYPES)[number];
+
+// Supplier's private submission space: upload files + a proposal summary, until the deadline. Files go
+// through a one-time upload link issued by a Cloud Function (no direct Storage access for suppliers).
 export default function SubmissionPanel({
   tender,
-  supplierId,
+  existing,
+  onSaved,
 }: {
-  tender: TenderDoc;
-  supplierId: string;
+  tender: { id: string; submissionDeadline: number | null };
+  existing: Pick<SubmissionDoc, 'files' | 'summary'> | null;
+  onSaved: () => void;
 }) {
   const { t } = useTranslation();
-  const existing = useMySubmission(tender.id, supplierId);
+  const [error, setError] = useState('');
   const [summary, setSummary] = useState<string | null>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
@@ -28,16 +31,24 @@ export default function SubmissionPanel({
   const save = async () => {
     setBusy(true);
     setDone(false);
+    setError('');
     try {
       const uploaded: SubmissionDoc['files'] = existing?.files ? [...existing.files] : [];
       for (const f of files) {
-        const path = `tenders/${tender.id}/submissions/${supplierId}/${f.name}`;
-        await uploadBytes(ref(storage, path), f);
-        uploaded.push({ name: f.name, size: f.size, path });
+        const contentType = (f.type || 'application/octet-stream') as ContentType;
+        if (!SUBMISSION_CONTENT_TYPES.includes(contentType)) throw new Error(t('submission.badType', { name: f.name }));
+        if (f.size > SUBMISSION_FILE_MAX_BYTES) throw new Error(t('submission.tooLarge', { name: f.name }));
+        const link = await api.createSubmissionUpload({ tenderId: tender.id, fileName: f.name, size: f.size, contentType });
+        const res = await fetch(link.url, { method: link.method, headers: link.headers, body: f });
+        if (!res.ok) throw new Error(t('submission.uploadFailed', { name: f.name }));
+        uploaded.push({ name: link.name, size: f.size, path: link.path });
       }
       await api.saveSubmission({ tenderId: tender.id, files: uploaded, summary: summaryValue });
       setFiles([]);
       setDone(true);
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -77,6 +88,7 @@ export default function SubmissionPanel({
         disabled={locked}
         placeholder={t('submission.summaryPlaceholder')}
         value={summaryValue}
+        maxLength={SUBMISSION_SUMMARY_MAX_LENGTH}
         onChange={(e) => setSummary(e.target.value)}
       />
 
@@ -117,6 +129,7 @@ export default function SubmissionPanel({
             {files.length > 0 ? ` (${files.length})` : ''}
           </button>
           {done && <span className="ms-3 text-sm text-green-600">{t('submission.saved')}</span>}
+          {error && <div className="mt-2 text-sm text-red-600">{error}</div>}
         </>
       )}
     </div>

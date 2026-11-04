@@ -11,7 +11,7 @@ import {
   getDoc,
 } from 'firebase/firestore';
 import { db } from './firebase';
-import { api } from './api';
+import { api, type SupplierCase } from './api';
 import { useAuth } from '../auth/AuthProvider';
 import type {
   TenderDoc,
@@ -40,6 +40,7 @@ import type {
   ConversionRun,
 } from '@obms/shared';
 import { DEFAULT_SCORE_TARGETS, DEFAULT_DCI_PARAMS, withBuiltinFills } from '@obms/shared';
+import type { SupplierTenderView, ComparisonReport } from '@obms/shared';
 
 // Managers see every case; other internal roles only the cases whose team they belong to
 // (Firestore rules enforce the same — an unscoped query by a non-manager is denied).
@@ -262,19 +263,6 @@ export function useSubmissions(tenderId: string | undefined) {
 }
 
 // A supplier's own submission (single-doc read; rules forbid listing the whole subcollection).
-export function useMySubmission(tenderId: string | undefined, supplierId: string | null) {
-  const [submission, setSubmission] = useState<SubmissionDoc | null>(null);
-  useEffect(() => {
-    if (!tenderId || !supplierId) return;
-    return onSnapshot(
-      doc(db, 'tenders', tenderId, 'submissions', supplierId),
-      (d) => setSubmission(d.exists() ? (d.data() as SubmissionDoc) : null),
-      () => setSubmission(null),
-    );
-  }, [tenderId, supplierId]);
-  return submission;
-}
-
 export function useAnswers(tenderId: string | undefined) {
   const [answers, setAnswers] = useState<AnswerDoc[]>([]);
   useEffect(() => {
@@ -287,54 +275,57 @@ export function useAnswers(tenderId: string | undefined) {
 }
 
 // Suppliers list only the tenders shared with them, via their access docs (collection group).
+// ---- the supplier's side: data only through Cloud Functions (no direct Firestore access) ----
+
+/** The supplier's cases (safe projection), refreshed every 30 s. */
 export function useSupplierTenders(supplierId: string | null) {
-  const [tenders, setTenders] = useState<TenderDoc[]>([]);
+  const [tenders, setTenders] = useState<SupplierTenderView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   useEffect(() => {
-    if (!supplierId) {
-      setTenders([]);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    setError(false);
-    return onSnapshot(
-      query(collectionGroup(db, 'access'), where('principalId', '==', supplierId)),
-      async (snap) => {
-        try {
-          // allSettled so one denied/failed tender read can't stall the whole list
-          const settled = await Promise.allSettled(
-            snap.docs.map(async (accessDoc) => {
-              const tenderRef = accessDoc.ref.parent.parent;
-              if (!tenderRef) return null;
-              const td = await getDoc(tenderRef);
-              return td.exists() ? (td.data() as TenderDoc) : null;
-            }),
-          );
-          const rows = settled
-            .map((r) => (r.status === 'fulfilled' ? r.value : null))
-            .filter((t): t is TenderDoc => t !== null);
-          setTenders(rows);
-        } catch (e) {
-          console.error('useSupplierTenders: failed to load tenders', e);
-          setError(true);
-        } finally {
-          setLoading(false);
-        }
-      },
-      (e) => {
-        console.error('useSupplierTenders: access query error', e);
-        setTenders([]);
-        setError(true);
-        setLoading(false);
-      },
-    );
+    if (!supplierId) return;
+    let alive = true;
+    const load = () =>
+      api
+        .supplierListTenders({})
+        .then((r) => alive && (setTenders(r.tenders), setError(false)))
+        .catch(() => alive && setError(true))
+        .finally(() => alive && setLoading(false));
+    void load();
+    const timer = setInterval(load, 30_000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
   }, [supplierId]);
   return { tenders, loading, error };
 }
 
-// Internal reporting: all access grants across tenders (rules allow internal read).
+/** One case as the supplier may see it (questions, answers, own submission), refreshed every 30 s. */
+export function useSupplierCase(tenderId: string | undefined) {
+  const [data, setData] = useState<SupplierCase | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!tenderId) return;
+    let alive = true;
+    const load = () =>
+      api
+        .supplierGetTender({ tenderId })
+        .then((r) => alive && (setData(r), setError('')))
+        .catch((e) => alive && setError(e instanceof Error ? e.message : String(e)))
+        .finally(() => alive && setLoading(false));
+    void load();
+    const timer = setInterval(load, 30_000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [tenderId, tick]);
+  return { data, loading, error, reload: () => setTick((n) => n + 1) };
+}
+
 export function useAllAccess() {
   const [rows, setRows] = useState<(AccessDoc & { tenderId: string })[]>([]);
   useEffect(() => {
@@ -409,8 +400,15 @@ export function useTenderInternal(tenderId: string | undefined) {
   const [provenance, setProvenance] = useState<TenderProvenance | null>(null);
   const [params, setParams] = useState<Record<string, string | number>>({});
   const [pendingSuppliers, setPendingSuppliers] = useState<string[]>([]);
+  const [comparison, setComparison] = useState<ComparisonReport | null>(null);
   useEffect(() => {
     if (!tenderId) return;
+    // The AI comparison report is internal (case members only), never on the tender doc.
+    const unsubC = onSnapshot(
+      doc(db, 'tenders', tenderId, 'internal', 'comparison'),
+      (d) => setComparison(d.exists() ? (d.data() as ComparisonReport) : null),
+      () => setComparison(null),
+    );
     // Suppliers picked for publication (internal until the case is published).
     const unsubS = onSnapshot(
       doc(db, 'tenders', tenderId, 'internal', 'suppliers'),
@@ -431,9 +429,10 @@ export function useTenderInternal(tenderId: string | undefined) {
       unsubP();
       unsubI();
       unsubS();
+      unsubC();
     };
   }, [tenderId]);
-  return { provenance, params, pendingSuppliers };
+  return { provenance, params, pendingSuppliers, comparison };
 }
 
 // Success score of one bid case (internal-only by rules).

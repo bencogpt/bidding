@@ -94,9 +94,13 @@ import {
   type TeamRole,
   hebrewLabel,
   stripMarkup,
+  supplierTenderInput,
+  injectionSignals,
+  createSubmissionUploadInput,
+  type SupplierTenderView,
 } from '@obms/shared';
 import { randomBytes } from 'node:crypto';
-import { auth, db, now } from './lib/admin.js';
+import { auth, db, now, storage } from './lib/admin.js';
 import { requireAuth, requireRole, requireManager, requireInternal, requireCaseAccess, type Caller } from './lib/context.js';
 import { parseInput } from './lib/validate.js';
 import {
@@ -1331,9 +1335,16 @@ export const askQuestion = onCall(async (req) => {
   if (caller.role !== 'supplier' || !caller.supplierId) {
     throw new HttpsError('permission-denied', 'רק ספק יכול לשאול שאלות.');
   }
-  const input = parseInput(askQuestionInput, req.data);
-  const access = await accessRepo.get(input.tenderId, caller.supplierId);
-  if (!access) throw new HttpsError('permission-denied', 'אין הרשאה למכרז זה.');
+  const parsed = parseInput(askQuestionInput, req.data);
+  const input = { ...parsed, text: stripMarkup(parsed.text).trim() };
+  if (input.text.length < 3) throw new HttpsError('invalid-argument', 'השאלה קצרה מדי.');
+  const { tender: qTender } = await supplierCase(caller, input.tenderId);
+  if (qTender.submissionDeadline && now() > qTender.submissionDeadline) {
+    throw new HttpsError('failed-precondition', 'מועד ההגשה חלף — לא ניתן לשאול שאלות.');
+  }
+  // A supplier can't flood the case (or the AI clustering) with questions.
+  const allowed = await agentUsageRepo.take(caller.uid, QUESTIONS_PER_HOUR, 3_600_000, Date.now(), `q_${input.tenderId}`);
+  if (!allowed) throw new HttpsError('resource-exhausted', 'הגעת למספר השאלות המותר לשעה. נסה שוב מאוחר יותר.');
 
   const supplier = await suppliersRepo.get(caller.supplierId);
   const supplierName = supplier?.name ?? caller.name;
@@ -1368,6 +1379,104 @@ export const askQuestion = onCall(async (req) => {
   return { id };
 });
 
+// ---- the supplier's side: suppliers reach data only through these functions (no direct database or
+// storage access; see firestore.rules / storage.rules). Each returns a safe projection only.
+
+const QUESTIONS_PER_HOUR = 20;
+
+/** A supplier's access to a published case: access granted and the case visible to suppliers. */
+async function supplierCase(caller: Caller, tenderId: string): Promise<{ tender: TenderDoc; supplierId: string }> {
+  if (caller.role !== 'supplier' || !caller.supplierId) throw new HttpsError('permission-denied', 'גישה לספקים בלבד.');
+  const [tender, access] = await Promise.all([tendersRepo.get(tenderId), accessRepo.get(tenderId, caller.supplierId)]);
+  if (!tender || !access || !isSupplierVisible(tender.status)) {
+    throw new HttpsError('permission-denied', 'אין הרשאה למכרז זה.');
+  }
+  return { tender, supplierId: caller.supplierId };
+}
+
+function supplierView(t: TenderDoc, supplierId: string): SupplierTenderView {
+  return {
+    id: t.id,
+    serial: t.serial ?? null,
+    title: t.title,
+    type: t.type,
+    status: t.status,
+    submissionDeadline: t.submissionDeadline ?? null,
+    awardDate: t.awardDate ?? null,
+    domainTags: t.domainTags ?? [],
+    evaluationCriteria: t.evaluationCriteria ?? [],
+    awarded: t.status === 'awarded' ? t.awardedSupplierId === supplierId : null,
+  };
+}
+
+export const supplierListTenders = onCall(async (req) => {
+  const caller = requireAuth(req);
+  if (caller.role !== 'supplier' || !caller.supplierId) throw new HttpsError('permission-denied', 'גישה לספקים בלבד.');
+  const ids = await accessRepo.tenderIdsFor(caller.supplierId);
+  const tenders = (await Promise.all(ids.map((id) => tendersRepo.get(id)))).filter(
+    (t): t is TenderDoc => !!t && isSupplierVisible(t.status),
+  );
+  return { tenders: tenders.map((t) => supplierView(t, caller.supplierId!)) };
+});
+
+export const supplierGetTender = onCall(async (req) => {
+  const caller = requireAuth(req);
+  const input = parseInput(supplierTenderInput, req.data);
+  const { tender, supplierId } = await supplierCase(caller, input.tenderId);
+  const [questions, answers, mine, submission] = await Promise.all([
+    questionsRepo.list(tender.id),
+    answersRepo.list(tender.id),
+    accessRepo.questionIdsBy(tender.id, supplierId),
+    submissionsRepo.get(tender.id, supplierId),
+  ]);
+  return {
+    tender: supplierView(tender, supplierId),
+    // Questions are anonymous; answers carry no author.
+    questions: questions.map((q) => ({ id: q.id, text: q.text, answered: q.answered, clusterId: q.clusterId, createdAt: q.createdAt })),
+    answers: answers.map((a) => ({ id: a.id, clusterId: a.clusterId, questionIds: a.questionIds, text: a.text, createdAt: a.createdAt })),
+    myQuestionIds: mine,
+    mySubmission: submission
+      ? { files: submission.files, summary: submission.summary, status: submission.status, submittedAt: submission.submittedAt }
+      : null,
+  };
+});
+
+// One file of a proposal: a short-lived signed upload link for exactly this supplier's folder.
+export const createSubmissionUpload = onCall(async (req) => {
+  const caller = requireAuth(req);
+  const input = parseInput(createSubmissionUploadInput, req.data);
+  const { tender, supplierId } = await supplierCase(caller, input.tenderId);
+  if (tender.submissionDeadline && now() > tender.submissionDeadline) {
+    throw new HttpsError('failed-precondition', 'מועד ההגשה חלף — ההגשה נעולה.');
+  }
+  const safeName = input.fileName.replace(/[/\\?%*:|"<>\x00-\x1f]/g, '_').replace(/^\.+/, '_').slice(0, 150);
+  const path = `tenders/${tender.id}/submissions/${supplierId}/${safeName}`;
+  const file = storage.bucket().file(path);
+  if (process.env.FUNCTIONS_EMULATOR === 'true') {
+    // The Storage emulator can't verify signed URLs; tests upload through its admin endpoint.
+    const host = process.env.FIREBASE_STORAGE_EMULATOR_HOST ?? '127.0.0.1:9199';
+    return {
+      url: `http://${host}/upload/storage/v1/b/${storage.bucket().name}/o?uploadType=media&name=${encodeURIComponent(path)}`,
+      method: 'POST',
+      headers: { 'Content-Type': input.contentType, Authorization: 'Bearer owner' },
+      path,
+      name: safeName,
+    };
+  }
+  try {
+    const [url] = await file.getSignedUrl({
+      version: 'v4',
+      action: 'write',
+      expires: Date.now() + 15 * 60_000,
+      contentType: input.contentType,
+    });
+    return { url, method: 'PUT', headers: { 'Content-Type': input.contentType }, path, name: safeName };
+  } catch (err) {
+    console.error('createSubmissionUpload: signing failed', err);
+    throw new HttpsError('failed-precondition', 'העלאת קבצים אינה זמינה כרגע (הרשאת חתימה חסרה). פנה למנהל המכרז.');
+  }
+});
+
 // Cluster a tender's open questions by similarity (Claude) so the manager answers once.
 export const clusterTenderQuestions = onCall(
   { secrets: ['ANTHROPIC_API_KEY'], timeoutSeconds: 300 },
@@ -1381,8 +1490,25 @@ export const clusterTenderQuestions = onCall(
         await questionsRepo.setCluster(input.tenderId, qid, c.clusterId);
       }
     }
-    void caller;
-    return { clusters };
+    // Questions carrying instructions were kept away from the AI; the manager is told (never suppliers).
+    const flagged = questions
+      .map((q) => ({ id: q.id, signal: injectionSignals(q.text)[0] }))
+      .filter((f) => f.signal)
+      .map((f) => ({ id: f.id, evidence: f.signal!.evidence }));
+    if (flagged.length) {
+      await auditRepo.append({
+        entityType: 'tender',
+        entityId: input.tenderId,
+        tenderId: input.tenderId,
+        actorUid: caller.uid,
+        actorName: caller.name,
+        action: 'prompt_injection_suspected',
+        prevState: null,
+        newState: `${flagged.length} שאלות`,
+        detail: flagged.map((f) => f.evidence).join(' | ').slice(0, 500),
+      });
+    }
+    return { clusters, flagged };
   },
 );
 
@@ -1421,13 +1547,20 @@ export const saveSubmission = onCall(async (req) => {
   if (caller.role !== 'supplier' || !caller.supplierId) {
     throw new HttpsError('permission-denied', 'רק ספק יכול להגיש הצעה.');
   }
-  const input = parseInput(saveSubmissionInput, req.data);
-  const tender = await tendersRepo.get(input.tenderId);
-  if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
-  const access = await accessRepo.get(input.tenderId, caller.supplierId);
-  if (!access) throw new HttpsError('permission-denied', 'אין הרשאה למכרז זה.');
+  const parsed = parseInput(saveSubmissionInput, req.data);
+  const input = { ...parsed, summary: stripMarkup(parsed.summary) };
+  const { tender } = await supplierCase(caller, input.tenderId);
   if (tender.submissionDeadline && now() > tender.submissionDeadline) {
     throw new HttpsError('failed-precondition', 'מועד ההגשה חלף — ההגשה נעולה.');
+  }
+  // Files must be the supplier's own uploads (uploaded through createSubmissionUpload).
+  const folder = `tenders/${input.tenderId}/submissions/${caller.supplierId}/`;
+  for (const f of input.files) {
+    if (!f.path.startsWith(folder) || f.path.includes('..')) {
+      throw new HttpsError('permission-denied', 'קובץ שאינו שייך להגשה שלך.');
+    }
+    const [exists] = await storage.bucket().file(f.path).exists();
+    if (!exists) throw new HttpsError('invalid-argument', `הקובץ ${f.name} לא הועלה.`);
   }
 
   const supplier = await suppliersRepo.get(caller.supplierId);
@@ -1483,7 +1616,23 @@ export const runComparison = onCall(
       proposals,
       tender.evaluationCriteria ?? [],
     );
-    await tendersRepo.update(input.tenderId, { comparisonReport: report });
+    // Internal only: the report never goes on the supplier-readable tender doc.
+    await internalRepo.setComparison(input.tenderId, report);
+    await tendersRepo.update(input.tenderId, { comparisonReport: null });
+    const flagged = report.ranking.filter((r) => r.injection);
+    if (flagged.length) {
+      await auditRepo.append({
+        entityType: 'tender',
+        entityId: input.tenderId,
+        tenderId: input.tenderId,
+        actorUid: SYSTEM.uid,
+        actorName: SYSTEM.name,
+        action: 'prompt_injection_suspected',
+        prevState: null,
+        newState: `${flagged.length} הצעות`,
+        detail: flagged.map((r) => `${r.supplierId}: ${r.injection!.evidence}`).join(' | ').slice(0, 500),
+      });
+    }
     if (tender.status === 'responses') {
       await transition(caller, input.tenderId, 'evaluated');
     }
@@ -1501,6 +1650,30 @@ export const runComparison = onCall(
     return report;
   },
 );
+
+// One-time, idempotent: move comparison reports off the supplier-readable tender docs (manager).
+export const migrateComparisonReports = onCall(async (req) => {
+  const caller = requireManager(req);
+  const snap = await db.collection('tenders').where('comparisonReport', '!=', null).get();
+  let moved = 0;
+  for (const d of snap.docs) {
+    const report = d.data().comparisonReport;
+    if (!report) continue;
+    if (!(await internalRepo.getComparison(d.id))) await internalRepo.setComparison(d.id, report);
+    await tendersRepo.update(d.id, { comparisonReport: null });
+    moved++;
+  }
+  await auditRepo.append({
+    entityType: 'system',
+    entityId: 'comparisonReports',
+    actorUid: caller.uid,
+    actorName: caller.name,
+    action: 'migrate_comparison_reports',
+    prevState: null,
+    newState: `${moved} moved`,
+  });
+  return { moved };
+});
 
 // Manager awards the tender to a supplier (final decision).
 export const awardTender = onCall(async (req) => {

@@ -3,11 +3,13 @@ import type { TenderDoc } from '@obms/shared';
 import { useAccess, useSubmissions, useQuestions, useAnswers, useTenderAudit } from '../lib/hooks';
 import StatusBadge from './StatusBadge';
 import ScoreCard from './ScoreCard';
+import { useTenderInternal } from '../lib/hooks';
 import FeedbackSummary from './FeedbackSummary';
 import { useAuth } from '../auth/AuthProvider';
 
 // Consolidated "case file" for one bid: everything about it in one place.
 export default function CasePanel({ tender }: { tender: TenderDoc }) {
+  const report = useTenderInternal(tender.id).comparison ?? tender.comparisonReport ?? null;
   const { t } = useTranslation();
   const access = useAccess(tender.id);
   const submissions = useSubmissions(tender.id);
@@ -98,12 +100,11 @@ export default function CasePanel({ tender }: { tender: TenderDoc }) {
       </div>
 
       {/* Comparison / award */}
-      {tender.comparisonReport && (
+      {report && (
         <div className="card p-5">
           <h4 className="mb-2 font-semibold">{t('case.comparison')}</h4>
           <div className="text-sm">
-            {t('eval.preferred')}: {tender.comparisonReport.preferredSupplierId ?? '—'} ·{' '}
-            {tender.comparisonReport.isStub ? 'stub' : tender.comparisonReport.model}
+            {t('eval.preferred')}: {report.preferredSupplierId ?? '—'} · {report.isStub ? 'stub' : report.model}
           </div>
         </div>
       )}
