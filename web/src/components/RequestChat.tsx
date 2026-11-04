@@ -8,7 +8,7 @@ const SHORT_MAX = 1000; // an ordinary answer; only the principal service may ru
 const CLIP = 400; // a long answer is shown clipped in its bubble
 
 // The guided mode: round bubbles, a typing indicator, quick-reply chips and an input that grows, with a large
-// writing window for long answers.
+// writing window for long answers. An earlier answer is edited in place, in its own bubble.
 export default function RequestChat({
   chat,
   chips,
@@ -16,6 +16,8 @@ export default function RequestChat({
   disabled,
   asking,
   onSay,
+  onEdit,
+  editAsking,
 }: {
   chat: ChatMsg[];
   chips: string[];
@@ -23,10 +25,15 @@ export default function RequestChat({
   disabled: boolean;
   asking: string | null;
   onSay: (text: string) => void;
+  onEdit: (index: number, text: string) => void;
+  editAsking: (index: number) => string | null; // what was asked when that answer was given; null = not editable
 }) {
   const { t } = useTranslation();
   const [text, setText] = useState('');
   const [big, setBig] = useState(false);
+  const [editing, setEditing] = useState<number | null>(null); // the answer being edited inline
+  const [draft, setDraft] = useState('');
+  const [bigEdit, setBigEdit] = useState<number | null>(null); // the principal service is edited in the large window
   const end = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const isScope = asking === 'scope';
@@ -42,11 +49,30 @@ export default function RequestChat({
     el.style.height = '34px';
     el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
   }, [text]);
+  // An edit cannot go on once the agent starts answering or the conversation is rewound.
+  useEffect(() => {
+    if (editing !== null && editAsking(editing) === null) setEditing(null);
+    if (bigEdit !== null && editAsking(bigEdit) === null) setBigEdit(null);
+  }, [chat, typing, editing, bigEdit, editAsking]);
 
   const send = (v: string) => {
     if (!v.trim() || typing || disabled || v.length > max) return;
     onSay(v);
     setText('');
+  };
+  const startEdit = (i: number) => {
+    if (editAsking(i) === 'scope') {
+      setBigEdit(i);
+      return;
+    }
+    setDraft(chat[i].text);
+    setEditing(i);
+  };
+  const saveEdit = (i: number, v: string) => {
+    if (!v.trim()) return;
+    setEditing(null);
+    setBigEdit(null);
+    onEdit(i, v);
   };
   const clip = (m: string) =>
     m.length > CLIP ? `${m.slice(0, CLIP)}… (${t('req.pagesShort', { n: Math.ceil(m.length / SCOPE_PAGE_CHARS) })})` : m;
@@ -58,17 +84,65 @@ export default function RequestChat({
         {t('req.chatName')}
       </div>
       <div className="flex h-72 flex-col gap-3 overflow-auto p-4">
-        {chat.map((m, i) => (
-          <div
-            key={i}
-            className={
-              'max-w-[86%] whitespace-pre-wrap rounded-2xl px-4 py-2 text-sm leading-relaxed ' +
-              (m.role === 'agent' ? 'self-start bg-paper-2' : 'self-end bg-ink-800 text-white')
-            }
-          >
-            {m.role === 'user' ? clip(m.text) : m.text}
-          </div>
-        ))}
+        {chat.map((m, i) => {
+          if (m.role === 'agent') {
+            return (
+              <div key={i} className="max-w-[86%] self-start whitespace-pre-wrap rounded-2xl bg-paper-2 px-4 py-2 text-sm leading-relaxed">
+                {m.text}
+              </div>
+            );
+          }
+          if (editing === i) {
+            return (
+              <div key={i} className="w-full max-w-[86%] min-w-[260px] self-end rounded-2xl border border-gold bg-white p-2">
+                <textarea
+                  autoFocus
+                  className="min-h-[60px] w-full resize-y bg-transparent text-sm leading-relaxed outline-none"
+                  value={draft}
+                  maxLength={SHORT_MAX}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') setEditing(null);
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      saveEdit(i, draft);
+                    }
+                  }}
+                />
+                <div className="mb-2 text-xs text-tx-soft">{t('req.chatEditing')}</div>
+                <div className="flex items-center gap-2">
+                  <button type="button" className="btn btn-sm" disabled={!draft.trim()} onClick={() => saveEdit(i, draft)}>
+                    {t('req.chatEditSave')}
+                  </button>
+                  <button type="button" className="btn btn-sm" onClick={() => setEditing(null)}>
+                    {t('req.chatEditCancel')}
+                  </button>
+                </div>
+              </div>
+            );
+          }
+          return (
+            <div key={i} className="group flex items-center gap-2 self-end">
+              {editAsking(i) !== null && (
+                <button
+                  type="button"
+                  className="grid h-6 w-6 flex-none place-items-center rounded-full border border-black/10 bg-white text-tx-soft opacity-0 transition-opacity hover:border-gold hover:text-gold-deep focus:opacity-100 group-hover:opacity-100"
+                  title={t('req.chatEdit')}
+                  aria-label={t('req.chatEdit')}
+                  onClick={() => startEdit(i)}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z" />
+                  </svg>
+                </button>
+              )}
+              <div className="max-w-[86%] whitespace-pre-wrap rounded-2xl bg-ink-800 px-4 py-2 text-sm leading-relaxed text-white">
+                {clip(m.text)}
+                {m.edited && <span className="mt-0.5 block text-end text-[10px] opacity-75">{t('req.chatEdited')}</span>}
+              </div>
+            </div>
+          );
+        })}
         {typing && <div className="self-start rounded-2xl bg-paper-2 px-4 py-2 text-sm text-tx-soft">…</div>}
         <div ref={end} />
       </div>
@@ -141,6 +215,16 @@ export default function RequestChat({
             setBig(false);
             send(v);
           }}
+        />
+      )}
+      {bigEdit !== null && (
+        <BigEditor
+          title={`${t('req.chatEdit')}: ${t('req.principalService')}`}
+          initial={chat[bigEdit].text}
+          submitLabel={t('req.chatEditSave')}
+          hint={t('req.chatEditing')}
+          onClose={() => setBigEdit(null)}
+          onSubmit={(v) => saveEdit(bigEdit, v)}
         />
       )}
     </div>

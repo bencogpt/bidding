@@ -187,6 +187,8 @@ export default function RequestCreate() {
                     disabled={a.asking === 'done'}
                     asking={a.asking}
                     onSay={a.say}
+                    onEdit={a.edit}
+                    editAsking={a.editAsking}
                   />
                 )}
 
