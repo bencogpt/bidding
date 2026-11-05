@@ -10,6 +10,8 @@ import {
   missingApprovals,
   planApproval,
   sendDenial,
+  sendDenialHe,
+  SEND_DENIAL_HE,
   staleApprovals,
   type ApprovalCase,
   type ApprovalCall,
@@ -140,6 +142,13 @@ test('the send (G-D1, G-D7): document, nothing blocking, the team, then the thre
   assert.equal(sendDenial(s({ blockers: 1, missingRoles: ['legal'] })), 'blocked');
   assert.equal(sendDenial(s({ missingRoles: ['legal'], missingDates: ['qdead'] })), 'team_incomplete');
   assert.equal(sendDenial(s({ missingDates: ['qdead', 'valid'] })), 'dates_missing');
+  // The text says where to assign and names the missing roles; the others are the plain texts.
+  assert.equal(sendDenialHe(s()), null);
+  assert.equal(
+    sendDenialHe(s({ missingRoles: ['legal', 'finance'] })),
+    'יש לשבץ את כל התפקידים בלשונית "סקירה" לפני השליחה לאישור. חסר: משפטי, כספים.',
+  );
+  assert.equal(sendDenialHe(s({ missingDates: ['qdead'] })), SEND_DENIAL_HE.dates_missing);
 });
 
 test('a content change cancels the approvals given before it (G-D4)', () => {
