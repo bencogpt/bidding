@@ -11,6 +11,7 @@
 import type { TenderStatus } from './tender.js';
 import type { CaseApprovals, CaseTeam, TeamApproval, TeamRole } from './team.js';
 import type { SupervisionFinding } from './supervision.js';
+import { ROLE_HE } from './workspaceLabels.js';
 
 /** Approvals are given only once the document was sent for approval (status `internal_review`). */
 export const APPROVAL_OPEN_STATUSES: readonly TenderStatus[] = ['internal_review'];
@@ -170,9 +171,17 @@ export const SEND_DENIAL_HE: Record<SendDenial, string> = {
   not_draft: 'המסמך כבר נשלח לאישור.',
   no_document: 'יש ליצור את המסמך לפני השליחה לאישור.',
   blocked: 'ממצא חוסם מונע שליחה לאישור ופרסום.',
-  team_incomplete: 'יש לשבץ את כל התפקידים לפני השליחה לאישור.', // new — UX to confirm
+  team_incomplete: 'יש לשבץ את כל התפקידים בלשונית "סקירה" לפני השליחה לאישור.', // new — UX to confirm
   dates_missing: 'יש להזין את שלושת תאריכי החובה בלשונית "לוחות זמנים" לפני השליחה לאישור.', // new — UX to confirm
 };
+
+/** Why the send is refused, as the button's hint and the server's error say it: a missing team names its roles. */
+export function sendDenialHe(c: SendCase): string | null {
+  const why = sendDenial(c);
+  if (!why) return null;
+  if (why !== 'team_incomplete') return SEND_DENIAL_HE[why];
+  return `${SEND_DENIAL_HE.team_incomplete} חסר: ${c.missingRoles.map((r) => ROLE_HE[r]).join(', ')}.`;
+}
 
 // ───────────────────────── content changes after an approval (G-D4) ─────────────────────────
 

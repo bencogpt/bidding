@@ -47,8 +47,7 @@ import {
   planApproval,
   APPROVAL_DENIAL_HE,
   APPROVAL_PERMISSION_DENIALS,
-  sendDenial,
-  SEND_DENIAL_HE,
+  sendDenialHe,
   illegalTransitionHe,
   CHAT_MAX_LENGTH,
   missingTimelineDates,
@@ -1113,14 +1112,14 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
 /** "שליחה לאישור" (plan G-D1, G-D7): procurement's approval, which opens everyone else's. */
 async function sendForApproval(caller: Caller, t: TenderDoc) {
   const doc = hasDocument(t);
-  const denial = sendDenial({
+  const denial = sendDenialHe({
     status: t.status,
     hasDocument: doc,
     missingRoles: missingRoles(t.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[t.type], t.team),
     blockers: documentBlockers({ hasDocument: doc, lastSupervision: t.lastSupervision }),
     missingDates: missingTimelineDates(t),
   });
-  if (denial) throw new HttpsError('failed-precondition', SEND_DENIAL_HE[denial]);
+  if (denial) throw new HttpsError('failed-precondition', denial);
   const hash = await currentContentHash(t);
   await transition(caller, t.id, 'internal_review', {
     sentForApproval: { uid: caller.uid, name: caller.name, at: now(), ...(hash ? { docHash: hash } : {}) },
