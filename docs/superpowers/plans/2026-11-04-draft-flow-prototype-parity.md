@@ -191,7 +191,8 @@ The web app is restyled to the prototype's tokens and components, and becomes a 
   - Unit 285/285; typecheck and production build pass.
 - **F2, the contact card, done** (2026-11-05; checked next to the prototype): `RequestSnapshot` opens with the prototype's `.reqsnap > h4` line, "הבקשה של הדורש · נשלחה על ידי {PersonChip} · {time}", and the box takes the prototype's colours. The card shows the requester's name and "דורש".
   - **Deviations:** no unit line (users have no unit field; the prototype's "אגף מערכות מידע" is demo data), and no "פנייה בצ'אט" (D14: the case and its chat don't exist yet; the prototype keeps its demo chat here).
-- **With F2, every task of phases A–F is built.** Open: G20 (template default values) and the UX review pack. The three backend issues of §11 are fixed (2026-11-05, see §11).
+- **With F2, every task of phases A–F is built.** Open: G20 (template default values). The three backend issues of §11 are fixed (2026-11-05, see §11).
+- **UX review pack written** (2026-11-05): `docs/ux-review/2026-11-05-prototype-parity-ux-review.md`, in Hebrew, with screenshots in `docs/ux-review/img/`. It holds the two screens without a prototype design (approve on behalf, the publish dialog, with questions), every new Hebrew text not in the prototype (found from the diff since `c354e60` and checked against the prototype), the 20 proposed finding-type names for UX and legal review, open questions (§10's text items, one name for two approvals, "לחץ" vs. plural, English status codes in an error, English permission names in the publish dialog), and the decided deviations. Answers come back by item number.
 
 ---
 
