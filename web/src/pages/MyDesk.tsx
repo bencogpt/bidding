@@ -6,9 +6,23 @@ import { REQUIRED_ROLES_BY_TYPE, REQUIRE_APPROVALS, missingApprovals } from '@ob
 import FeedbackForm from '../components/FeedbackForm';
 import { useAuth } from '../auth/AuthProvider';
 
-/** dd/mm/yyyy in Israel time. */
-const fmtDate = (ms: number) =>
-  new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', day: '2-digit', month: '2-digit', year: 'numeric' }).format(ms);
+/** hh:mm dd.mm.yyyy in Israel time. */
+const fmtStamp = (ms: number) => {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Jerusalem',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })
+      .formatToParts(ms)
+      .map((x) => [x.type, x.value]),
+  );
+  return `${p.hour}:${p.minute} ${p.day}.${p.month}.${p.year}`;
+};
 
 // "השולחן שלי": what is waiting for the signed-in user, across all tenders.
 export default function MyDesk() {
@@ -102,17 +116,26 @@ export default function MyDesk() {
                 <thead className="bg-paper text-xs text-tx-mute">
                   <tr>
                   <th className="px-5 py-3 text-start font-medium">{t('dashboard.col.serial')}</th>
-                  <th className="px-5 py-3 text-start font-medium">{t('req.col.opened')}</th>
                   <th className="px-5 py-3 text-start font-medium">{t('req.col.name')}</th>
                   <th className="px-5 py-3 text-start font-medium">{t('req.requestedBy')}</th>
-                    <th className="px-5 py-3" />
+                  <th className="px-5 py-3 text-start font-medium">{t('req.col.stage')}</th>
+                    {!isManager && <th className="px-5 py-3" />}
+                  <th className="px-5 py-3 text-start font-medium">{t('req.col.lastUpdate')}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {requests.map((r) => (
                     <tr
                       key={r.serial}
-                      className={'border-t border-paper-2 hover:bg-paper ' + (r.serial === justSent ? 'bg-emerald-50' : '')}
+                      className={
+                        'border-t border-paper-2 hover:bg-paper ' +
+                        (isManager ? 'cursor-pointer ' : '') +
+                        (r.serial === justSent ? 'bg-emerald-50' : '')
+                      }
+                      // The whole row opens the request for the manager; the button at its end is only a label.
+                      onClick={isManager ? () => nav(`/requests/${r.serial}`) : undefined}
+                      onKeyDown={isManager ? (e) => e.key === 'Enter' && nav(`/requests/${r.serial}`) : undefined}
+                      tabIndex={isManager ? 0 : undefined}
                     >
                       <td className="whitespace-nowrap px-5 py-3 font-semibold text-tx-soft">
                         {r.serial === justSent && (
@@ -122,15 +145,15 @@ export default function MyDesk() {
                         )}
                         <span dir="ltr">{r.serial}</span>
                       </td>
-                      <td className="whitespace-nowrap px-5 py-3 text-xs text-tx-mute">{fmtDate(r.createdAt)}</td>
                       <td className="max-w-md truncate px-5 py-3" title={r.brief}>{String((r.details as Record<string, unknown> | undefined)?.service_name ?? '').trim() || r.brief}</td>
                       <td className="whitespace-nowrap px-5 py-3 text-tx-soft">{r.requesterName}</td>
-                      <td className="whitespace-nowrap px-5 py-3 text-end">
-                        {isManager ? (
-                          <Link to={`/requests/${r.serial}`} className="btn btn-gold btn-sm">
-                            {t('req.handle')}
-                          </Link>
-                        ) : (
+                      <td className="whitespace-nowrap px-5 py-3">
+                        <span className="rounded-full bg-[#8a5cf0] px-3 py-0.5 text-xs font-semibold text-white">
+                          {t('req.stageSpec')}
+                        </span>
+                      </td>
+                      {!isManager && (
+                        <td className="whitespace-nowrap px-5 py-3 text-end">
                           <span className="chip">
                             {r.status === 'open'
                               ? r.serial === justSent
@@ -138,7 +161,15 @@ export default function MyDesk() {
                                 : t('req.statusOpen')
                               : t('req.statusConverted')}
                           </span>
-                        )}
+                        </td>
+                      )}
+                      <td className="whitespace-nowrap px-5 py-3">
+                        <div className="font-medium tabular-nums">
+                          <bdi>{fmtStamp(r.createdAt)}</bdi>
+                        </div>
+                        <div className="mt-0.5 text-xs text-tx-soft">
+                          {r.requesterName} · {t('req.lastUpdateWhat')}
+                        </div>
                       </td>
                     </tr>
                   ))}
