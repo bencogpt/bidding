@@ -196,6 +196,53 @@ The web app is restyled to the prototype's tokens and components, and becomes a 
 
 ---
 
+## Phase G — the v22 flow (decided 2026-11-05; replaces D1)
+
+**Sources:** `docs/blm-prototype 22.html` is now the reference (wins on conflicts; photos in `docs/superpowers/people/`), then `docs/superpowers/specs/design-specs 1.md`. The designer's answers to the UX pack: `docs/ux-review/2026-11-05-answers.md`. **Hold:** the pack texts 2.1–2.3 and 2.6.8–2.6.9 wait for the designer's numbered answers; until then the new flow uses v22's own texts. Pending legal review: 2.6.6, 3.16, 3.17, 3.20.
+
+**Decisions (designer and user, 2026-11-05):**
+
+| # | Decision |
+|---|---|
+| G-D1 | "שליחה לאישור" comes back (= status `internal_review`); "אישור סופי של המכרז" is gone. Before the send nobody else can approve ("ממתין לשליחה מהרכש"). The send counts as procurement's approval (v22). |
+| G-D2 | Each role "אישור מסמך"; legal last (after requester and finance). Approve on behalf stays in the approvals card, reason ≥ 10; the participant is told in the case chat and in "לטיפולך". |
+| G-D3 | When all four approved, the final 5-step check runs **before** the lock. Pass → lock, stage "פרסום לספקים" (status `ready`). Fail → stays open (`internal_review`), procurement fixes. |
+| G-D4 | A change in the document's **content** after an approval cancels the approvals given before it; each person whose approval was cancelled gets a "לטיפולך" item. Comments and suggestions don't cancel (pending legal review). The send itself is not cancelled (procurement is expected to edit while the team reviews). |
+| G-D5 | AI unavailable at the final check: procurement may continue with a recorded reason (≥ 10), audited. Other blockers can't be overridden. |
+| G-D6 | Publishing only verifies the document hasn't changed since the final check (no second AI review). Confirm "לפרסם ל-{N} ספקים?"; one button saves the suppliers and publishes; "הרשאות נוכחיות" leaves the dialog. |
+| G-D7 | Timelines: four dates (conf optional; qdead, submit, valid required), editable by procurement until the send; after it only by reopening. "שליחה לאישור" is blocked until the three required dates are set. |
+| G-D8 | Timeline chart v1: real events from the audit log plus the four dates; computed milestones later. |
+| G-D9 | Blocked days: Friday, Saturday, Rosh Hashana, Yom Kippur, Sukkot, Shemini Atzeret, Pesach 1 and 7, Shavuot, Independence Day (computed from the Hebrew calendar, no external service — the production network is air-gapped). Holiday eves and Chol HaMoed: a warning only. To be confirmed with procurement. |
+| G-D10 | Inputs are stored in the system (not Google Docs comments). "אינפוט נדרש" per section: default table 1, 2 → רכש; 6 → דורש, משפטי; 9 → כספים, משפטי; per template later. |
+| G-D11 | Hold the live deploy until the new flow is built (or deploy only the three backend fixes). |
+
+**Implementation choices (Claude, to confirm in review):**
+
+- The final check is a Firestore trigger that fires when the last required approval lands (the approver doesn't wait). Its five steps follow v22's, except step 1, whose v22 text ("מאמת שהמסמך ננעל…") no longer fits check-before-lock: "מאמת שכל הרביעייה אישרה" (new text, for UX).
+- Content fingerprint: the hash of the document text at the send and at each approval. Content changes are detected when the document is read anyway: at each approval, each agent check and the final check. Not in real time (Google Docs has no cheap push); the final check is the backstop.
+- Suggestions: the hash must ignore Google Docs suggestions (read with suggestions hidden). Only verifiable on real Docs.
+- A date changed after the document exists (before the send) is replaced in the Doc only if its old text appears exactly once; otherwise the Doc is left alone and the user is told to update it in Google Docs (the agent's contradiction check also flags it).
+- Reopen ("פתח מחדש (שכפול)") goes back to `draft` (not sent): the send, approvals and lock are cleared, dates editable again.
+
+**Tasks (in order):**
+
+- **G1 shared rules** (pure, tested): stage label "פרסום לספקים"; approval rules (open only when sent, legal last, denial texts from the answers 2.9.3/2.9.5/2.9.6); the send gate; content-change invalidation; final-check states; header button, approvals card and "לטיפולך" rows per v22 (§5.1–5.3, `stateActs`); activity sentences per v22; NEXT_ACTION per v22.
+- **G2 backend:** send (`transitionTender → internal_review` with the gates), approvals only when sent with a fingerprint, invalidation, the final-check trigger and its five steps, lock on pass, the AI-outage override, publish (unchanged-since-final check, suppliers in the same call), reopen → `draft`, FSM edges, on-behalf notification (system message in the chat). e2e.
+- **G3 web:** header, approvals card, "לטיפולך" redesign, final-check thinking (5 steps), the document banner after the send, publish dialog (confirm, one button, no permissions list), agent tab avatar 44px.
+- **G4 inputs panel** (§6.5): collection, rules, side panel after the send, section marks.
+- **G5 timelines tab** (§6.7, §8.6): dates model and template fields, date picker, summary, chart (audit events + dates), toast with the link to the section, the send gate; holidays with eves and Chol HaMoed as warnings.
+- **G6 texts** from the answers (except the held and legal items), and the pack's §4 answers (4.1 "זה עשוי לקחת עד דקה", 4.4 "לחצו", 4.5 Hebrew stage names, 4.6 "יחידת אבטחת המידע").
+
+**Progress (2026-11-05): G1–G6 built.**
+
+- **G1 shared:** `approvalRules.ts` rewritten (approvals only when sent; `sendDenial`; `staleApprovals`; `allApproved`; `finalCheckOutcome`); `timeline.ts` (fields, `missingTimelineDates`, `checkTimelineDay` with eves / Chol HaMoed via `israeliHalfDay`, typing mask and parse, `timelineParamValues`); `FLOW_HE` holds every flow text (the held 2.1–2.3 / 2.6.8–2.6.9 areas use v22's own wording; "new" marks texts not in v22); header, approvals card, "לטיפולך" and activity sentences per v22; `finalCheckViewOf`; the stage "פרסום לספקים"; the timelines tab; FSM: draft → internal_review → ready (system) → published, internal_review → draft (the send taken back), ready → draft (reopen). Illegal moves name the statuses in Hebrew (UX 4.5).
+- **G2 backend:** `sendForApproval` / `publishToSuppliers` in `transitionTender`; fingerprints (`approvalGuard.ts`, read without suggestions: `readTenderContentText`); `finalCheck.ts` + the `finalCheckOnApprovals` trigger (skips while waiting on an AI outage decision); `continueWithoutAiCheck`, `rerunFinalCheck`, `setTimeline` (blocked days refused; dates into the template fields before the document, a once-only replacement in it after); `reopenTender` → draft; on-behalf notice as a system line in the team chat; `lastSupervision.warnings`; overrides in the case score count `final_check_override`; `inputs` collection with rules.
+- **G3–G5 web:** header and card wiring, the reason dialog for continuing without AI, publish dialog (one button, confirm, no permissions list), the document banner by state, the final check's five steps, agent tab avatar 44px and state line, "לטיפולך" v22 design, system chat lines, `InputsPanel` (role filters, colours, sections, "אינפוט נדרש" marks as a block in the panel — the document is a frame), `TimelineTab` + `DatePicker`.
+- **Verification:** unit 304/304, rules 23/23, e2e (send gates, dates, legal last, on-behalf notice, a content change cancelling earlier approvals, final check → lock, reopen, one-step publish, a change behind the lock refused, continuing without AI, case score).
+- **Deviations / to confirm:** final-check step 1 text; "אינפוט נדרש" marks in the panel, not inside the document; the timelines chart v1 has log events and the four dates only; a date that appears more than once in an existing document is not replaced; new texts marked "new" in `FLOW_HE`, `SEND_DENIAL_HE`, `TIMELINE_DAY_HE` and the callables.
+
+---
+
 ## 0. Scope
 
 **In scope:**

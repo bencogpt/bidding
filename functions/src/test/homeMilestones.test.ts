@@ -40,26 +40,29 @@ test('a request waits for procurement and opens its own page', () => {
   assert.equal(m.at, null);
 });
 
-test('in עריכה it waits for the team members who have not approved, then procurement', () => {
-  const [none] = upcomingMilestones([row({})], NOW);
-  assert.equal(none.nextLabel, 'פרסום');
-  assert.deepEqual(none.waiting, ['דורש', 'רכש', 'משפטי', 'כספים']);
-  assert.equal(none.tab, 'overview');
+test('in עריכה it waits for procurement to send, then for the team members who have not approved', () => {
+  const [unsent] = upcomingMilestones([row({})], NOW);
+  assert.equal(unsent.nextLabel, 'פרסום לספקים');
+  assert.deepEqual(unsent.waiting, ['רכש'], 'procurement sends first (v22)');
+  assert.equal(unsent.tab, 'overview');
 
-  const [some] = upcomingMilestones([row({ approvals: { requester: approved('r'), finance: approved('f') } })], NOW);
-  assert.deepEqual(some.waiting, ['רכש', 'משפטי']);
+  const [none] = upcomingMilestones([row({ sent: true })], NOW);
+  assert.deepEqual(none.waiting, ['דורש', 'משפטי', 'כספים']);
+
+  const [some] = upcomingMilestones([row({ sent: true, approvals: { requester: approved('r'), finance: approved('f') } })], NOW);
+  assert.deepEqual(some.waiting, ['משפטי']);
 
   // An approval from someone who no longer holds the role does not count.
-  const [stale] = upcomingMilestones([row({ approvals: { requester: approved('old') } })], NOW);
-  assert.deepEqual(stale.waiting, ['דורש', 'רכש', 'משפטי', 'כספים']);
+  const [stale] = upcomingMilestones([row({ sent: true, approvals: { requester: approved('old') } })], NOW);
+  assert.deepEqual(stale.waiting, ['דורש', 'משפטי', 'כספים']);
 });
 
-test('security is not waited for: it does not block the final approval', () => {
+test('security is not waited for, and once everyone approved the final check runs by itself', () => {
   const [m] = upcomingMilestones(
-    [row({ approvals: { requester: approved('r'), legal: approved('l'), finance: approved('f') } })],
+    [row({ sent: true, approvals: { requester: approved('r'), legal: approved('l'), finance: approved('f') } })],
     NOW,
   );
-  assert.deepEqual(m.waiting, ['רכש']);
+  assert.deepEqual(m.waiting, []);
 });
 
 test('after the final approval procurement publishes; in הבהרות nobody holds it up', () => {

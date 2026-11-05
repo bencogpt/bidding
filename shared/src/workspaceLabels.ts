@@ -4,11 +4,11 @@
 import type { FindingCode } from './supervision.js';
 import type { TeamRole } from './team.js';
 
-/** The stages of a בל"מ (prototype line 1741). The stage bar shows the first STAGE_BAR_COUNT of them. */
+/** The stages of a בל"מ (prototype v22). The stage bar shows the first STAGE_BAR_COUNT of them. */
 export const STAGES_HE = [
   'אפיון',
   'עריכה',
-  'פרסום',
+  'פרסום לספקים',
   'פרוטוקול כנס ספקים',
   'הבהרות',
   'הצעות',
@@ -56,7 +56,7 @@ export const STAGE_APPROVERS: Record<number, readonly ApprovalRole[]> = {
 export const ROLE_UNIT_HE: Partial<Record<TeamRole, string>> = {
   legal: 'היחידה המשפטית',
   finance: 'גוף הכספים',
-  security: 'גוף אבטחת המידע', // new — the prototype asks only legal and finance
+  security: 'יחידת אבטחת המידע', // UX answer 4.6 (the prototype asks only legal and finance)
 };
 
 /** Finding type labels. The first six are the prototype's (line 2519); the rest are proposals (plan §9, D12). */
@@ -134,14 +134,114 @@ export const AGENT_STEPS_HE = [
   'מכין הצעות תיקון',
 ] as const;
 
+/** Role colours of the inputs panel (v22 ROLE_COLOR). */
+export const ROLE_COLOR: Record<ApprovalRole, string> = {
+  requester: '#7c5cff',
+  manager: '#0e9aa7',
+  legal: '#e08a2e',
+  finance: '#2f6fe0',
+  security: '#8a8fa3',
+};
+
+/**
+ * Who is expected to give input on which section (plan G-D10): the default until templates define it — v22
+ * SEC_ROLES. Section numbers as the document numbers them.
+ */
+export const INPUT_REQUIRED_DEFAULT: Readonly<Record<string, readonly QuartetRole[]>> = {
+  '1': ['manager'],
+  '2': ['manager'],
+  '6': ['requester', 'legal'],
+  '9': ['finance', 'legal'],
+};
+
+/**
+ * The final check's steps (v22 AG_STEPS_FINAL). Step 1 is adapted: v22 says "מאמת שהמסמך ננעל אחרי אישור כל
+ * הרביעייה", but the check now runs before the lock (plan G-D3) — new text, UX to confirm.
+ */
+export const AGENT_STEPS_FINAL_HE = [
+  'מאמת שכל הרביעייה אישרה',
+  'משווה לגרסה שאושרה על ידי כל אחד מהם',
+  'בודק שלא נוספו שינויים אחרי האישורים',
+  'מריץ שוב את המיומנויות הנדרשות',
+  'מוודא שאין ממצא חוסם',
+] as const;
+
+/**
+ * Texts of the v22 approval flow (plan Phase G). Most are v22's own; the UX pack items 2.1–2.3 and 2.6.8–2.6.9
+ * are held for the designer's numbered answers, so every text of those areas lives here, to swap in one place.
+ * "new" = not in v22, UX to confirm.
+ */
+export const FLOW_HE = {
+  // header button (v22 renderApr / syncNext, spec §5.2–5.3)
+  send: 'שליחה לאישור',
+  waitingFor: (roles: string) => `ממתין ל: ${roles}`,
+  sent: 'נשלח לאישור',
+  waitingForSend: 'ממתין לשליחה מהרכש',
+  waitingForSendTitle: 'האישור ייפתח אחרי שהרכש ישלח את המסמך לאישור',
+  approve: 'אישור מסמך',
+  approveExtra: 'אישור מסמך (משתתף נוסף)',
+  legalWaits: (roles: string) => `הכפתור שלך יפעל אחרי שהדורש, הרכש והכספים יאשרו. נותר: ${roles}.`,
+  yourApproval: 'האישור שלך נרשם',
+  finalRunning: 'בדיקה סופית של הסוכן…',
+  finalRunningTitle: 'הסוכן המפקח בודק את המסמך לפני הפרסום לספקים',
+  publish: 'פרסום לספקים',
+  waitingForPublish: 'ממתין לפרסום מהרכש',
+  waitingForPublishTitle: 'הרכש מפרסם לספקים אחרי שכל הרביעייה אישרה',
+  blockedTitle: 'ממצא חוסם מונע שליחה לאישור ופרסום', // UX answer 2.9.5
+  continueWithoutAi: 'המשך בלי בדיקת AI', // new
+  continueWithoutAiTitle: 'בדיקת ה-AI אינה זמינה. אפשר להמשיך לפרסום לספקים עם סיבה מתועדת.', // new
+  // approvals card (v22 renderApr)
+  cardTitle: 'אישור מסמך',
+  noteLocked: 'המסמך נעול ומוכן לפרסום.',
+  noteLockedOthers: ' רק הרכש יכול לפתוח מחדש.',
+  noteSent: (at: string) => `נשלח לאישור · ${at}`,
+  noteYours: (at: string) => `האישור שלך נרשם · ${at}`,
+  noteLegalLast: 'כולם אישרו. אחרי האישור שלך תתבצע בדיקה סופית של הסוכן המפקח.', // v22's "…ינעל את המסמך" contradicts G-D3; the designer's 2.2.2 wording
+  noteExtra: 'משתתף נוסף: האישור נרשם ואינו חוסם נעילה.',
+  noteSendHint: 'לחצו על "שליחה לאישור" כשסיימתם לעבוד על המסמך.', // v22, plural per UX answer 4.4
+  noteApproveHint: 'לחצו על "אישור מסמך" כשסיימתם לעבוד על המסמך.', // v22, plural per UX answer 4.4
+  noteAllApproved: 'כולם אישרו. הסוכן המפקח מבצע בדיקה סופית לפני הפרסום לספקים.', // v22 chat text
+  noteFinalBlocked: 'הבדיקה הסופית מצאה ממצא חוסם. המכרז לא עבר לפרסום לספקים', // v22 chat text
+  noteAiUnavailable: 'בדיקת ה-AI אינה זמינה, ולכן הבדיקה הסופית לא הושלמה.', // new
+  noteCancelled: (roles: string) => `המסמך השתנה אחרי האישור, ולכן בוטלו האישורים של: ${roles}.`, // new
+  withdraw: 'בטל את האישור שלי',
+  reopen: 'פתח מחדש (שכפול)',
+  // the document banner after the send (v22 renderDoc)
+  bannerSent: 'המסמך נשלח לאישור. אפשר לערוך אותו, להעיר ולהציע שינויים.',
+  bannerFinal: 'כל הרביעייה אישרה. הסוכן המפקח מבצע בדיקה סופית לפני הפרסום לספקים…',
+  // "לטיפולך" rows (v22 stateActs; the final-check and cancelled rows have no v22 text — new)
+  piDraftChecked: (n: number) =>
+    n ? `${n} ממצאים ממתינים להחלטתך, ואפשר גם ליצור את המסמך` : 'אין ממצאים, אפשר ליצור את המסמך',
+  piDocBlocked: 'מונע שליחה לאישור ופרסום', // v22 "מונע אישור סופי ופרסום"; "אישור סופי" is gone (UX 2.9.5)
+  piDocCreated: 'המסמך נוצר:',
+  piCanSend: 'אפשר לשלוח לאישור',
+  piWaitingForSend: 'ממתין לשליחת הרכש לאישור',
+  piSent: 'נשלח לאישור:',
+  piWaitingForApprovals: (roles: string) => `ממתין לאישור של ${roles}`,
+  piReadyForYou: 'המסמך מוכן לעיון, לעריכה ולאישור שלך',
+  piPreparing: 'הרכש מכין את המסמך:',
+  piPreparingText: (agent: 'none' | 'running' | 'done', n: number) =>
+    agent === 'done' ? (n ? `הסוכן המפקח מצא ${n} ממצאים להחלטת הרכש` : 'הטיוטה נבדקה') : 'הטיוטה בבדיקה',
+  piFinalRunning: 'כל הרביעייה אישרה:', // new
+  piFinalRunningText: 'הסוכן המפקח מבצע בדיקה סופית', // new
+  piFinalPassed: 'הבדיקה הסופית עברה:', // new
+  piFinalPassedText: 'אפשר לפרסם לספקים', // new
+  piAiUnavailable: 'הבדיקה הסופית לא הושלמה:', // new
+  piAiUnavailableText: 'בדיקת ה-AI אינה זמינה', // new
+  piCancelled: 'המסמך השתנה אחרי האישור שלך:', // new
+  piCancelledText: 'נדרש אישור מחדש', // new
+  piOnBehalf: 'אושר בשמך:', // new (UX answer 1.1.C)
+  piOnBehalfText: (by: string) => `${by} אישר את המסמך בשמך`, // new
+} as const;
+
 /**
  * What to do next per stage, its button label and the tab it opens (prototype NEXT_ACT, line 2261).
  * The header shows `${text} ←` from stage פרסום on; the overview card shows the text and the button.
  */
 export const NEXT_ACTION_HE: readonly { text: string; button: string; tab: WorkspaceTabKey }[] = [
   { text: 'השלמת קלט הדורש', button: 'פתח את המסמך', tab: 'document' },
-  { text: 'אישור סופי של המכרז', button: 'פתח את המסמך', tab: 'document' },
-  { text: 'אישור סופי ופרסום לספקים', button: 'פתח את המסמך', tab: 'document' },
+  { text: 'אישור מסמך', button: 'פתח את המסמך', tab: 'document' },
+  { text: 'פרסום לספקים', button: 'פתח את המסמך', tab: 'document' },
   { text: 'העלאה ופרסום של פרוטוקול כנס הספקים', button: 'עבור לפרוטוקול', tab: 'conference' },
   { text: 'אישור איחוד שאלות הבהרה', button: 'עבור לשאלות הבהרה', tab: 'questions' },
   { text: 'השוואת הצעות הספקים', button: 'עבור להשוואה', tab: 'bids' },
@@ -153,6 +253,7 @@ export const NEXT_ACTION_HE: readonly { text: string; button: string; tab: Works
 export type WorkspaceTabKey =
   | 'overview'
   | 'document'
+  | 'timelines'
   | 'agent'
   | 'conference'
   | 'questions'

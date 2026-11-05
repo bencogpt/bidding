@@ -2,19 +2,24 @@ import { useState } from 'react';
 import { ON_BEHALF_REASON_MIN, firstName } from '@obms/shared';
 
 /**
- * The tender manager approves on a participant's behalf (plan D1d): a reason is required and is recorded in
- * the activity log. Not in the prototype — this layout is provisional until UX supplies a mock.
+ * A recorded reason (at least ON_BEHALF_REASON_MIN characters, kept in the activity log). By default the tender
+ * manager approving on a participant's behalf (plan D1d; approved by UX 1.1); with title / confirmLabel, any other
+ * such step, e.g. continuing without the AI review (plan G-D5).
  */
 export default function OnBehalfDialog({
-  name,
-  roleHe,
+  name = '',
+  roleHe = '',
+  title,
+  confirmLabel,
   busy,
   error,
   onConfirm,
   onCancel,
 }: {
-  name: string;
-  roleHe: string;
+  name?: string;
+  roleHe?: string;
+  title?: string;
+  confirmLabel?: string;
   busy?: boolean;
   error?: string;
   onConfirm: (reason: string) => void;
@@ -33,7 +38,7 @@ export default function OnBehalfDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <h2 id="on-behalf-title" className="mb-3 text-base font-semibold">
-          אישור בשם {name} · {roleHe}
+          {title ?? `אישור בשם ${name} · ${roleHe}`}
         </h2>
         <label className="label" htmlFor="on-behalf-reason">
           סיבה (תירשם ביומן הפעילות)
@@ -61,7 +66,7 @@ export default function OnBehalfDialog({
             ביטול
           </button>
           <button type="button" className="btn btn-primary" disabled={!ok || busy} onClick={() => onConfirm(reason.trim())}>
-            אשר בשם {firstName(name)}
+            {confirmLabel ?? `אשר בשם ${firstName(name)}`}
           </button>
         </div>
       </div>

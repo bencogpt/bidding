@@ -47,6 +47,7 @@ import {
 import { COMPARE_MODEL, getClient, toolInput } from './aiService.js';
 import { lastEditorName, readTenderDocText, readVersionSnapshot, renderDraftText, saveVersionSnapshot } from './docsService.js';
 import { summarizeChange } from './versionDiff.js';
+import { cancelStaleApprovals, currentContentHash } from './approvalGuard.js';
 import { draftDataHash } from './draftCalc.js';
 import { changeRatio } from './scoreCalc.js';
 import { SUPERVISOR_SKILLS, currentSkillHash, loadGlobalRules, loadSkill } from './skillsRegistry.js';
@@ -506,6 +507,11 @@ export async function superviseTender(
 
     // Versions track the real document; a draft's preview is not a version.
     if (docText !== null && !isDraft) await recordVersion(tender, docText, docHash(docText), stage);
+    // While the document is out for approval, a content change since an approval cancels it (plan G-D4).
+    // The final check does this itself, before it decides.
+    if (!isDraft && stage !== 'final' && tender.status === 'internal_review') {
+      await cancelStaleApprovals(tender, await currentContentHash(tender));
+    }
 
     let aiModel: string | null = null;
     let aiFindings: SupervisionFinding[] = [];
@@ -574,6 +580,8 @@ export async function superviseTender(
         verdict: report.verdict,
         stage,
         blockers,
+        // For the home's "N ממצאים ממתינים להחלטתך" (v22 stateActs), without loading the report.
+        warnings: findings.filter((f) => f.severity === 'warn').length,
         at: report.at,
         basis: report.basis,
         dataHash,

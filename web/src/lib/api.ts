@@ -124,6 +124,13 @@ export const api = {
   decideFinding: call<DecideFindingInput, { ok: true }>('decideFinding'),
   // Reopen a locked case: a new editable copy of the document, a clean round of approvals (plan B5).
   reopenTender: call<ReopenTenderInput, { ok: true; docsSkipped: string[] }>('reopenTender'),
+  // The v22 flow (plan Phase G).
+  continueWithoutAiCheck: call<{ tenderId: string; reason: string }, { ok: true }>('continueWithoutAiCheck'),
+  rerunFinalCheck: call<{ tenderId: string }, { ok: true }>('rerunFinalCheck'),
+  setTimeline: call<
+    { tenderId: string; dates: Partial<Record<'conf' | 'qdead' | 'submit' | 'valid', string | null>> },
+    { ok: true; timeline: Record<string, string | null>; submissionDeadline: number | null; docUpdated: boolean | null }
+  >('setTimeline'),
   // A stored version of the document, or its comparison with the current one (the versions tab).
   getVersionView: call<GetVersionViewInput, VersionView>('getVersionView'),
   recomputeCaseScore: call<RecomputeCaseScoreInput, CaseScore>('recomputeCaseScore'),

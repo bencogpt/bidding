@@ -44,6 +44,8 @@ const PAGE_PX = 1123; // an A4 page at 96 dpi: the page counter is an estimate f
 
 export interface DocViewHandle {
   jumpTo: (f: FindingView) => void;
+  /** The first heading or paragraph numbered "{n}." (an input's section, plan G-D10). */
+  jumpToSection: (n: string) => void;
 }
 
 /**
@@ -52,8 +54,11 @@ export interface DocViewHandle {
  * run inside); the page can still scroll and mark it, so jumping to a finding scrolls only the document.
  * Suppliers keep the plain DocumentViewer.
  */
-const DocView = forwardRef<DocViewHandle, { tenderId: string; googleDocId?: string | null; internal: boolean; locked?: boolean }>(
-  function DocView({ tenderId, googleDocId, internal, locked = false }, ref) {
+const DocView = forwardRef<
+  DocViewHandle,
+  { tenderId: string; googleDocId?: string | null; internal: boolean; locked?: boolean; banner?: string }
+>(
+  function DocView({ tenderId, googleDocId, internal, locked = false, banner }, ref) {
     const [html, setHtml] = useState<string | null>(null);
     const [error, setError] = useState('');
     const [zoom, setZoom] = useState(1);
@@ -105,7 +110,28 @@ const DocView = forwardRef<DocViewHandle, { tenderId: string; googleDocId?: stri
       w.scrollTo({ top: Math.max(0, r.top + w.scrollY - w.innerHeight / 2 + r.height / 2), behavior: 'smooth' });
     };
 
+    const flash = (el: HTMLElement) => {
+      scrollToEl(el);
+      const before = el.style.background;
+      el.style.transition = 'background .3s';
+      el.style.background = '#fff3b0';
+      setTimeout(() => {
+        el.style.background = before;
+      }, 2200);
+    };
+
     useImperativeHandle(ref, () => ({
+      jumpToSection: (n: string) => {
+        const d = doc();
+        if (!d) return;
+        // "6. תנאי סף", "6) …" or "6 …" — the section's own number, not 6.1 or 60.
+        const numbered = (text: string) => {
+          const t = text.trim();
+          return t.startsWith(`${n}.`) ? !/^\d/.test(t.slice(n.length + 1)) : t.startsWith(`${n})`) || t.startsWith(`${n} `);
+        };
+        const el = [...d.querySelectorAll<HTMLElement>('h1, h2, h3, h4, p, li')].find((b) => numbered(b.textContent ?? ''));
+        if (el) flash(el);
+      },
       jumpTo: (f: FindingView) => {
         const d = doc();
         if (!d) return;
@@ -139,11 +165,12 @@ const DocView = forwardRef<DocViewHandle, { tenderId: string; googleDocId?: stri
           className="flex items-center justify-between gap-3 px-4 py-2.5 text-[13px]"
           style={{ background: 'var(--warn-soft)', color: 'var(--warn)' }}
         >
-          {/* After the final approval the document is locked (new text; the prototype shows only the first). */}
+          {/* v22 renderDoc: the line follows the flow (sent, the final check); locked is new. */}
           <span>
-            {locked
-              ? 'המסמך נעול לאחר האישור הסופי. רק מנהל המכרז יכול לפתוח אותו מחדש.'
-              : 'ניתן להעיר ולהציע שינויים במסמך. רק מנהל המכרז מאשר שינויים.'}
+            {banner ??
+              (locked
+                ? 'המסמך נעול לאחר הבדיקה הסופית. רק מנהל המכרז יכול לפתוח אותו מחדש.'
+                : 'ניתן להעיר ולהציע שינויים במסמך. רק מנהל המכרז מאשר שינויים.')}
           </span>
           {docUrl && (
             <a

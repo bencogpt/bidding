@@ -93,7 +93,10 @@ test('A1 progressPct follows the prototype at the writing stages', () => {
 
 test('A1 visibleTabs: the draft tab is "טיוטה" until the document exists', () => {
   const draft = visibleTabs({ stageIdx: 1, ds: 'draft' });
-  assert.deepEqual(draft.map((t) => t.key), ['overview', 'document', 'agent', 'activity', 'versions']);
+  // v22: "לוחות זמנים" after the draft / document, from stage עריכה on (spec §6.1).
+  assert.deepEqual(draft.map((t) => t.key), ['overview', 'document', 'timelines', 'agent', 'activity', 'versions']);
+  assert.equal(draft[2].label, 'לוחות זמנים');
+  assert.ok(!visibleTabs({ stageIdx: 0, ds: 'draft' }).some((t) => t.key === 'timelines'), 'not at אפיון');
   assert.equal(draft[1].label, 'טיוטה');
   assert.equal(visibleTabs({ stageIdx: 1, ds: 'creating' })[1].label, 'טיוטה');
   assert.equal(visibleTabs({ stageIdx: 1, ds: 'doc' })[1].label, 'מסמך');
@@ -125,7 +128,7 @@ test('A1 resolveTab: a tab that has not joined yet falls back to the overview', 
 
 test('A1 stageBar: five stages and the no-conference note; six with a conference', () => {
   const { items, note } = stageBar({ stageIdx: 1 });
-  assert.deepEqual(items.map((s) => s.label), ['אפיון', 'עריכה', 'פרסום', 'הבהרות', 'הצעות']);
+  assert.deepEqual(items.map((s) => s.label), ['אפיון', 'עריכה', 'פרסום לספקים', 'הבהרות', 'הצעות']); // v22 stage name
   assert.deepEqual(items.map((s) => s.state), ['done', 'current', 'upcoming', 'upcoming', 'upcoming']);
   assert.equal(note, 'ללא כנס ספקים בבל"מ זה');
   const conf = stageBar({ stageIdx: 1, hasConference: true });
@@ -244,39 +247,56 @@ test('A3 before the workspace (a request) there is no header button', () => {
   assert.equal(headerAction(ctx({ stageIdx: 0 })), null);
 });
 
-// ───────── A3: document (D1) ─────────
+// ───────── A3: document — the v22 flow (plan Phase G) ─────────
+
+const sent = { sent: true, sentAt: T(9) };
 
 test('A3 document: a blocking finding stops every role and opens the agent tab', () => {
-  for (const c of [ctx({ isManager: true }), ctx({ myRoles: ['legal'] }), ctx({ stageIdx: 2, isManager: true })]) {
+  for (const c of [ctx({ isManager: true }), ctx({ myRoles: ['legal'], ...sent }), ctx({ isManager: true, ...sent })]) {
     assert.deepEqual(headerAction({ ...c, blockingCount: 1 }), {
       label: 'טפל בממצא חוסם',
       kind: 'open_tab',
       tab: 'agent',
       enabled: true,
-      title: 'ממצא חוסם מונע אישור סופי ופרסום',
+      title: 'ממצא חוסם מונע שליחה לאישור ופרסום',
     });
   }
 });
 
-test('A3 document: the manager acts last — disabled until requester, legal and finance approved', () => {
-  const none = headerAction(ctx({ isManager: true }))!;
-  assert.equal(none.kind, 'final_approve');
-  assert.equal(none.enabled, false);
-  assert.equal(none.title, 'הכפתור שלך יפעל אחרי שהדורש, המשפטי והכספים יאשרו. נותר: דורש, משפטי, כספים.');
-  const two = headerAction(ctx({ isManager: true, approvals: approvals('requester', 'finance') }))!;
-  assert.equal(two.title, 'הכפתור שלך יפעל אחרי שהדורש, המשפטי והכספים יאשרו. נותר: משפטי.');
-  // Security does not block (D2).
-  assert.deepEqual(headerAction(ctx({ isManager: true, approvals: approvals('requester', 'finance', 'legal') })), {
-    label: 'אישור סופי של המכרז',
-    kind: 'final_approve',
-    enabled: true,
+test('A3 document: procurement sends; until then the others wait ("ממתין לשליחה מהרכש")', () => {
+  assert.deepEqual(headerAction(ctx({ isManager: true })), { label: 'שליחה לאישור', kind: 'send', enabled: true });
+  assert.deepEqual(headerAction(ctx({ isManager: true, sendBlockedTitle: 'יש להזין את שלושת תאריכי החובה' })), {
+    label: 'שליחה לאישור',
+    kind: 'send',
+    enabled: false,
+    title: 'יש להזין את שלושת תאריכי החובה',
+  });
+  for (const r of ['requester', 'legal', 'finance', 'security'] as const) {
+    assert.deepEqual(headerAction(ctx({ myRoles: [r] })), {
+      label: 'ממתין לשליחה מהרכש',
+      kind: null,
+      enabled: false,
+      title: 'האישור ייפתח אחרי שהרכש ישלח את המסמך לאישור',
+    });
+  }
+  assert.equal(headerAction(ctx({ myRoles: [] })), null, 'not on the team');
+});
+
+test('A3 document: after the send procurement waits for the team, the list shrinking as they approve', () => {
+  assert.deepEqual(headerAction(ctx({ isManager: true, ...sent })), { label: 'ממתין ל: דורש, משפטי, כספים', kind: null, enabled: false });
+  assert.equal(headerAction(ctx({ isManager: true, ...sent, approvals: approvals('requester', 'finance') }))!.label, 'ממתין ל: משפטי');
+  // Security does not block (D2): with the three approved, the final check runs by itself.
+  assert.deepEqual(headerAction(ctx({ isManager: true, ...sent, approvals: approvals('requester', 'finance', 'legal') })), {
+    label: 'נשלח לאישור',
+    kind: null,
+    enabled: false,
   });
 });
 
-test('A3 document: requester and finance approve at once; then "האישור שלך נרשם"', () => {
-  assert.deepEqual(headerAction(ctx({ myRoles: ['requester'] })), { label: 'אישור סופי של המכרז', kind: 'approve', enabled: true });
-  assert.deepEqual(headerAction(ctx({ myRoles: ['finance'] })), { label: 'אישור סופי של המכרז', kind: 'approve', enabled: true });
-  assert.deepEqual(headerAction(ctx({ myRoles: ['requester'], approvals: { requester: ok('requester', T(11, 7)) } })), {
+test('A3 document: "אישור מסמך" — requester and finance at once, then "האישור שלך נרשם"', () => {
+  assert.deepEqual(headerAction(ctx({ myRoles: ['requester'], ...sent })), { label: 'אישור מסמך', kind: 'approve', enabled: true });
+  assert.deepEqual(headerAction(ctx({ myRoles: ['finance'], ...sent })), { label: 'אישור מסמך', kind: 'approve', enabled: true });
+  assert.deepEqual(headerAction(ctx({ myRoles: ['requester'], ...sent, approvals: { requester: ok('requester', T(11, 7)) } })), {
     label: 'האישור שלך נרשם',
     kind: null,
     enabled: false,
@@ -285,48 +305,58 @@ test('A3 document: requester and finance approve at once; then "האישור ש�
   assert.equal(fmtStamp(T(11, 7)), '04.11 11:07');
 });
 
-test('A3 document: legal waits for requester and finance (D1a)', () => {
-  const a = headerAction(ctx({ myRoles: ['legal'] }))!;
+test('A3 document: legal last — waits for requester and finance', () => {
+  const a = headerAction(ctx({ myRoles: ['legal'], ...sent }))!;
+  assert.equal(a.label, 'אישור מסמך');
   assert.equal(a.enabled, false);
-  assert.equal(a.title, 'הכפתור שלך יפעל אחרי שהדורש והכספים יאשרו. נותר: דורש, כספים.');
-  assert.equal(headerAction(ctx({ myRoles: ['legal'], approvals: approvals('requester') }))!.title, 'הכפתור שלך יפעל אחרי שהדורש והכספים יאשרו. נותר: כספים.');
-  assert.deepEqual(headerAction(ctx({ myRoles: ['legal'], approvals: approvals('requester', 'finance') })), {
-    label: 'אישור סופי של המכרז',
+  assert.equal(a.title, 'הכפתור שלך יפעל אחרי שהדורש, הרכש והכספים יאשרו. נותר: דורש, כספים.');
+  assert.equal(headerAction(ctx({ myRoles: ['legal'], ...sent, approvals: approvals('requester') }))!.title, 'הכפתור שלך יפעל אחרי שהדורש, הרכש והכספים יאשרו. נותר: כספים.');
+  assert.deepEqual(headerAction(ctx({ myRoles: ['legal'], ...sent, approvals: approvals('requester', 'finance') })), {
+    label: 'אישור מסמך',
     kind: 'approve',
     enabled: true,
   });
 });
 
-test('A3 document: security approves as an extra participant; non-members get no button', () => {
-  assert.deepEqual(headerAction(ctx({ myRoles: ['security'] })), { label: 'אישור (משתתף נוסף)', kind: 'approve', enabled: true });
-  assert.equal(headerAction(ctx({ myRoles: [] })), null);
+test('A3 document: security approves as an extra participant', () => {
+  assert.deepEqual(headerAction(ctx({ myRoles: ['security'], ...sent })), { label: 'אישור מסמך (משתתף נוסף)', kind: 'approve', enabled: true });
 });
 
 test('A3 document: an approval by a previous slot holder no longer counts; one given on behalf does', () => {
   const stale: Approvals = { ...approvals('requester', 'finance'), legal: { uid: 'u-old', name: 'קודם', at: T(9) } };
-  assert.equal(headerAction(ctx({ isManager: true, approvals: stale }))!.enabled, false);
+  assert.equal(headerAction(ctx({ isManager: true, ...sent, approvals: stale }))!.label, 'ממתין ל: משפטי');
   const onBehalf: Approvals = { ...approvals('requester', 'finance'), legal: { ...ok('legal'), onBehalf: true, byName: 'דנה כהן', reason: 'בחופשה, אישרה בטלפון' } };
-  assert.equal(headerAction(ctx({ isManager: true, approvals: onBehalf }))!.enabled, true);
+  assert.equal(headerAction(ctx({ isManager: true, ...sent, approvals: onBehalf }))!.label, 'נשלח לאישור');
 });
 
-test('A3 document: a manager who also holds the requester slot approves it before the final action', () => {
+test('A3 document: a manager who also holds the requester slot approves it after the send', () => {
   const holders = { ...H, requester: { uid: 'u-mgr', name: 'דנה כהן' } };
-  assert.equal(headerAction(ctx({ isManager: true, myRoles: ['requester'], holders }))!.kind, 'approve');
-  const after = headerAction(ctx({ isManager: true, myRoles: ['requester'], holders, approvals: { requester: { uid: 'u-mgr', name: 'דנה כהן', at: T(9) } } }))!;
-  assert.equal(after.kind, 'final_approve');
+  assert.equal(headerAction(ctx({ isManager: true, myRoles: ['requester'], holders }))!.kind, 'send', 'first the send');
+  assert.equal(headerAction(ctx({ isManager: true, myRoles: ['requester'], holders, ...sent }))!.kind, 'approve');
+  const after = headerAction(ctx({ isManager: true, myRoles: ['requester'], holders, ...sent, approvals: { requester: { uid: 'u-mgr', name: 'דנה כהן', at: T(9) } } }))!;
+  assert.equal(after.label, 'ממתין ל: משפטי, כספים');
 });
 
-test('A3 from publication on: the stage\'s work; procurement publishes', () => {
-  assert.deepEqual(headerAction(ctx({ stageIdx: 2, isManager: true })), {
-    label: 'אישור סופי ופרסום לספקים ←',
-    kind: 'publish',
+test('A3 document: the final check runs; with the AI down procurement may continue with a reason (G-D5)', () => {
+  const running = { label: 'בדיקה סופית של הסוכן…', kind: null, enabled: false, title: 'הסוכן המפקח בודק את המסמך לפני הפרסום לספקים' };
+  assert.deepEqual(headerAction(ctx({ isManager: true, ...sent, finalCheck: 'running' })), running);
+  assert.deepEqual(headerAction(ctx({ myRoles: ['legal'], ...sent, finalCheck: 'running', blockingCount: 1 })), running, 'it comes first');
+  assert.deepEqual(headerAction(ctx({ isManager: true, ...sent, finalCheck: 'ai_unavailable', approvals: approvals('requester', 'finance', 'legal') })), {
+    label: 'המשך בלי בדיקת AI',
+    kind: 'continue_without_ai',
     enabled: true,
+    title: 'בדיקת ה-AI אינה זמינה. אפשר להמשיך לפרסום לספקים עם סיבה מתועדת.',
   });
+  assert.equal(headerAction(ctx({ myRoles: ['requester'], ...sent, finalCheck: 'ai_unavailable', approvals: approvals('requester') }))!.label, 'האישור שלך נרשם');
+});
+
+test('A3 "פרסום לספקים": procurement publishes, the others wait; later stages point to their work', () => {
+  assert.deepEqual(headerAction(ctx({ stageIdx: 2, isManager: true })), { label: 'פרסום לספקים', kind: 'publish', enabled: true });
   assert.deepEqual(headerAction(ctx({ stageIdx: 2, myRoles: ['requester'] })), {
-    label: 'אישור סופי ופרסום לספקים ←',
-    kind: 'open_tab',
-    tab: 'document',
-    enabled: true,
+    label: 'ממתין לפרסום מהרכש',
+    kind: null,
+    enabled: false,
+    title: 'הרכש מפרסם לספקים אחרי שכל הרביעייה אישרה',
   });
   assert.deepEqual(headerAction(ctx({ stageIdx: 4 })), { label: 'אישור איחוד שאלות הבהרה ←', kind: 'open_tab', tab: 'questions', enabled: true });
   assert.equal(headerAction(ctx({ stageIdx: 7 }))!.tab, 'activity');
@@ -340,15 +370,15 @@ test('A4 approvals: hidden until the document exists', () => {
   assert.equal(approvalsView(actx()).visible, true);
 });
 
-test('A4 approvals: four segments, procurement green only at the lock', () => {
-  const v = approvalsView(actx({ approvals: approvals('requester', 'finance', 'legal') }));
-  assert.deepEqual(v.segments.map((s) => s.approved), [true, false, true, true]);
-  assert.equal(v.count, 3);
+test('A4 approvals: four segments, procurement green once it sent (v22)', () => {
+  const unsent = approvalsView(actx({ approvals: approvals('requester') }));
+  assert.deepEqual(unsent.segments.map((s) => s.approved), [true, false, false, false]);
+  const v = approvalsView(actx({ ...sent, approvals: approvals('requester', 'finance', 'legal') }));
+  assert.deepEqual(v.segments.map((s) => s.approved), [true, true, true, true]);
+  assert.equal(v.count, 4);
   assert.equal(v.total, 4);
-  assert.equal(v.title, 'אישור סופי של המכרז');
-  const locked = approvalsView(actx({ stageIdx: 2, approvals: approvals('requester', 'finance', 'legal'), lockedAt: T(15) }));
-  assert.equal(locked.count, 4);
-  assert.equal(locked.rows.find((r) => r.role === 'manager')!.tagTitle, fmtStamp(T(15)));
+  assert.equal(v.title, 'אישור מסמך');
+  assert.equal(v.rows.find((r) => r.role === 'manager')!.tagTitle, fmtStamp(T(9)), 'when it was sent');
 });
 
 test('A4 approvals: rows, the non-blocking security row, and tag titles', () => {
@@ -356,7 +386,7 @@ test('A4 approvals: rows, the non-blocking security row, and tag titles', () => 
     requester: ok('requester', T(10, 5)),
     finance: { ...ok('finance', T(12)), onBehalf: true, byName: 'דנה כהן', reason: 'אורי בחופשה' },
   };
-  const v = approvalsView(actx({ approvals: ap }));
+  const v = approvalsView(actx({ ...sent, approvals: ap }));
   assert.deepEqual(v.rows.map((r) => r.roleHe), ['דורש', 'רכש', 'משפטי', 'כספים', 'אבטחת מידע']);
   assert.equal(v.rows[4].nonBlocking, true);
   assert.equal(v.rows[0].tagLabel, 'אושר');
@@ -368,17 +398,34 @@ test('A4 approvals: rows, the non-blocking security row, and tag titles', () => 
   assert.equal(approvalsView(actx({ securityInvolved: false, holders: { ...H, security: undefined } })).rows.length, 4);
 });
 
-test('A4 approvals: notes and actions per role', () => {
+test('A4 approvals: notes and actions per role (v22 renderApr)', () => {
   const note = (o: Partial<ApprovalsCtx>) => approvalsView(actx(o)).note;
-  assert.equal(note({ isManager: true }), 'הכפתור שלך יפעל אחרי שהדורש, המשפטי והכספים יאשרו. נותר: דורש, משפטי, כספים.');
-  assert.equal(note({ isManager: true, approvals: approvals('requester', 'legal', 'finance') }), 'כולם אישרו. לחץ על "אישור סופי של המכרז" כדי לנעול את המסמך.');
-  assert.equal(note({ myRoles: ['legal'] }), 'הכפתור שלך יפעל אחרי שהדורש והכספים יאשרו. נותר: דורש, כספים.');
-  assert.equal(note({ myRoles: ['legal'], approvals: approvals('requester', 'finance') }), 'הדורש והכספים אישרו. אחרי האישור שלך הרכש יוכל לתת אישור סופי.');
-  assert.equal(note({ myRoles: ['security'] }), 'משתתף נוסף: האישור נרשם ואינו חוסם נעילה.');
-  assert.equal(note({ myRoles: ['requester'] }), 'לחץ על "אישור סופי של המכרז" כשסיימת לעבוד על המסמך.');
-  const mine = approvalsView(actx({ myRoles: ['requester'], approvals: { requester: ok('requester', T(10, 5)) } }));
+  assert.equal(note({ isManager: true }), 'לחצו על "שליחה לאישור" כשסיימתם לעבוד על המסמך.');
+  assert.equal(note({ myRoles: ['requester'] }), 'האישור ייפתח אחרי שהרכש ישלח את המסמך לאישור');
+  assert.equal(note({ myRoles: ['requester'], ...sent }), 'לחצו על "אישור מסמך" כשסיימתם לעבוד על המסמך.');
+  assert.equal(note({ myRoles: ['legal'], ...sent }), 'הכפתור שלך יפעל אחרי שהדורש, הרכש והכספים יאשרו. נותר: דורש, כספים.');
+  assert.equal(note({ myRoles: ['legal'], ...sent, approvals: approvals('requester', 'finance') }), 'כולם אישרו. אחרי האישור שלך תתבצע בדיקה סופית של הסוכן המפקח.');
+  assert.equal(note({ myRoles: ['security'], ...sent }), 'משתתף נוסף: האישור נרשם ואינו חוסם נעילה.');
+  const mgr = approvalsView(actx({ isManager: true, ...sent }));
+  assert.equal(mgr.note, `נשלח לאישור · ${fmtStamp(T(9))}`);
+  assert.deepEqual(mgr.actions, [{ kind: 'withdraw', label: 'בטל את האישור שלי' }], 'procurement takes the send back');
+  const mine = approvalsView(actx({ myRoles: ['requester'], ...sent, approvals: { requester: ok('requester', T(10, 5)) } }));
   assert.equal(mine.note, 'האישור שלך נרשם · 04.11 10:05');
   assert.deepEqual(mine.actions, [{ kind: 'withdraw', label: 'בטל את האישור שלי' }]);
+  // the final check and its outcomes
+  assert.equal(note({ isManager: true, ...sent, finalCheck: 'running' }), 'כולם אישרו. הסוכן המפקח מבצע בדיקה סופית לפני הפרסום לספקים.');
+  const minePending = approvalsView(
+    actx({ myRoles: ['requester'], ...sent, approvals: { requester: ok('requester', T(10, 5)) }, finalCheck: 'running' }),
+  );
+  assert.deepEqual(minePending.actions, [], 'no withdrawing during the check');
+  assert.equal(note({ isManager: true, ...sent, finalCheck: 'blocked' }), 'הבדיקה הסופית מצאה ממצא חוסם. המכרז לא עבר לפרסום לספקים');
+  assert.equal(note({ isManager: true, ...sent, finalCheck: 'ai_unavailable' }), 'בדיקת ה-AI אינה זמינה, ולכן הבדיקה הסופית לא הושלמה.');
+  // cancelled by a content change (G-D4)
+  assert.equal(
+    note({ myRoles: ['requester'], ...sent, cancelled: ['requester'] }),
+    'המסמך השתנה אחרי האישור, ולכן בוטלו האישורים של: דורש. לחצו על "אישור מסמך" כשסיימתם לעבוד על המסמך.',
+  );
+  // locked
   const lockedOther = approvalsView(actx({ stageIdx: 2, myRoles: ['requester'], approvals: approvals('requester') }));
   assert.equal(lockedOther.note, 'המסמך נעול ומוכן לפרסום. רק הרכש יכול לפתוח מחדש.');
   assert.deepEqual(lockedOther.actions, []);
@@ -387,27 +434,26 @@ test('A4 approvals: notes and actions per role', () => {
   assert.deepEqual(lockedMgr.actions, [{ kind: 'reopen', label: 'פתח מחדש (שכפול)' }]);
 });
 
-test('A4 on behalf (D1d): the owner, assigned slots, in turn, before the lock', () => {
-  const owner = { isManager: true, isOwner: true };
+test('A4 on behalf (D1d): the owner, assigned slots, in turn, after the send and before the lock', () => {
+  const owner = { isManager: true, isOwner: true, ...sent };
   const rows = approvalsView(actx(owner)).rows;
   const act = (role: string) => rows.find((r) => r.role === role)!.action;
   assert.deepEqual(act('requester'), { kind: 'approve_on_behalf', role: 'requester', label: 'אישור בשם דני', enabled: true });
   assert.equal(act('legal'), undefined); // not legal's turn yet
   assert.equal(act('manager'), undefined);
+  assert.equal(approvalsView(actx({ isManager: true, isOwner: true })).rows[0].action, undefined, 'not before the send');
   const inTurn = approvalsView(actx({ ...owner, approvals: approvals('requester', 'finance') })).rows;
   assert.equal(inTurn.find((r) => r.role === 'legal')!.action!.label, 'אישור בשם יעל');
-  // unassigned slot: no approving on behalf
   const empty = approvalsView(actx({ ...owner, holders: { ...H, finance: undefined } })).rows.find((r) => r.role === 'finance')!;
   assert.deepEqual(empty.action, { kind: 'approve_on_behalf', role: 'finance', label: 'אישור בשם', enabled: false, title: 'יש לשייך איש קשר לפני אישור בשמו' });
-  // a blocking finding
   const blocked = approvalsView(actx({ ...owner, blockingCount: 1 })).rows.find((r) => r.role === 'requester')!;
   assert.equal(blocked.action!.enabled, false);
-  // withdraw an approval given on behalf
+  assert.equal(blocked.action!.title, 'ממצא חוסם מונע שליחה לאישור ופרסום');
   const given = approvalsView(actx({ ...owner, approvals: { requester: { ...ok('requester'), onBehalf: true, byName: 'דנה כהן' } } }));
   assert.deepEqual(given.rows[0].action, { kind: 'withdraw_on_behalf', role: 'requester', label: 'בטל את האישור בשם דני', enabled: true });
-  // not the owner, or locked: nothing
-  assert.equal(approvalsView(actx({ isManager: true, isOwner: false })).rows[0].action, undefined);
+  assert.equal(approvalsView(actx({ isManager: true, isOwner: false, ...sent })).rows[0].action, undefined);
   assert.equal(approvalsView(actx({ ...owner, stageIdx: 2 })).rows[0].action, undefined);
+  assert.equal(approvalsView(actx({ ...owner, finalCheck: 'running' })).rows[0].action, undefined, 'not during the final check');
 });
 
 // ───────── A5 ─────────
@@ -430,20 +476,25 @@ const tender = (o: Partial<PendingTenderInput> = {}): PendingTenderInput => ({
 const pctx = (o: Partial<PendingCtx> = {}): PendingCtx => ({ uid: 'u-mgr', isManager: true, requests: [], tenders: [], ...o });
 const lines = (c: PendingCtx) => pendingItems(c).map((i) => `${i.bold} ${i.text} | ${i.button}`);
 
-test('A5 procurement: draft and document states of its own cases', () => {
+test('A5 procurement: draft and document states of its own cases (v22 stateActs)', () => {
   assert.deepEqual(lines(pctx({ tenders: [tender()] })), ['טיוטה חדשה: ממתינה להרצת הסוכן המפקח | הרץ סוכן מפקח']);
   assert.deepEqual(lines(pctx({ tenders: [tender({ agent: 'running' })] })), []);
-  assert.deepEqual(lines(pctx({ tenders: [tender({ agent: 'done', blockingCount: 1 })] })), ['ממצא חוסם בטיוטה: יש לטפל לפני יצירת המסמך | טפל בממצא']);
-  assert.deepEqual(lines(pctx({ tenders: [tender({ agent: 'done' })] })), ['הטיוטה נבדקה: אין ממצא חוסם, אפשר ליצור את המסמך | יצירת מסמך']);
-  assert.deepEqual(lines(pctx({ tenders: [tender({ ds: 'doc', blockingCount: 2 })] })), ['ממצא חוסם בדוח הסוכן המפקח: מונע אישור סופי ופרסום | טפל בממצא']);
-  assert.deepEqual(lines(pctx({ tenders: [tender({ ds: 'doc', approvals: approvals('requester', 'legal', 'finance') })] })), [
-    'כל הצוות אישר: ממתין לאישור הסופי שלך | אישור סופי של המכרז',
-  ]);
+  assert.deepEqual(lines(pctx({ tenders: [tender({ agent: 'done', blockingCount: 1 })] })), ['ממצא חוסם בטיוטה: יש לטפל בו לפני יצירת המסמך | טפל בממצא']);
+  assert.deepEqual(lines(pctx({ tenders: [tender({ agent: 'done' })] })), ['הטיוטה נבדקה: אין ממצאים, אפשר ליצור את המסמך | יצירת מסמך']);
+  assert.deepEqual(lines(pctx({ tenders: [tender({ agent: 'done', openCount: 3 })] })), ['הטיוטה נבדקה: 3 ממצאים ממתינים להחלטתך, ואפשר גם ליצור את המסמך | יצירת מסמך']);
+  const doc = tender({ ds: 'doc', agent: 'done' });
+  assert.deepEqual(lines(pctx({ tenders: [{ ...doc, blockingCount: 2 }] })), ['ממצא חוסם בדוח הסוכן המפקח: מונע שליחה לאישור ופרסום | טפל בממצא']);
+  assert.deepEqual(lines(pctx({ tenders: [doc] })), ['המסמך נוצר: אפשר לשלוח לאישור | שליחה לאישור']);
+  assert.deepEqual(lines(pctx({ tenders: [{ ...doc, sent: true, approvals: approvals('finance') }] })), ['נשלח לאישור: ממתין לאישור של דורש · משפטי | צפה בבל"מ']);
+  assert.deepEqual(lines(pctx({ tenders: [{ ...doc, sent: true, finalCheck: 'running' }] })), ['כל הרביעייה אישרה: הסוכן המפקח מבצע בדיקה סופית | צפה בבל"מ']);
+  assert.deepEqual(lines(pctx({ tenders: [{ ...doc, sent: true, finalCheck: 'ai_unavailable' }] })), ['הבדיקה הסופית לא הושלמה: בדיקת ה-AI אינה זמינה | המשך בלי בדיקת AI']);
+  assert.deepEqual(lines(pctx({ tenders: [tender({ stageIdx: 2, ds: 'doc' })] })), ['הבדיקה הסופית עברה: אפשר לפרסם לספקים | פרסום לספקים']);
   assert.deepEqual(lines(pctx({ tenders: [tender({ ownerUid: 'someone-else' })] })), []);
-  const [item] = pendingItems(pctx({ tenders: [tender({ agent: 'done', blockingCount: 1 })] }));
-  assert.deepEqual(item.target, { kind: 'tender', id: 't1', tab: 'agent' });
+  const [item] = pendingItems(pctx({ tenders: [tender({ agent: 'done', blockingCount: 1, updatedAt: T(14, 5) })] }));
+  assert.deepEqual(item.target, { kind: 'tender', id: 't1', tab: 'document' });
   assert.equal(item.tone, 'r');
-  assert.equal(item.meta, '2026-71');
+  assert.equal(item.meta, 'עודכן 04.11 14:05', 'v22 meta line');
+  assert.equal(pendingItems(pctx({ tenders: [tender()] }))[0].meta, '2026-71', 'no update time: the number');
 });
 
 test('A5 procurement: new requests and missing unit contacts', () => {
@@ -462,7 +513,7 @@ test('A5 procurement: new requests and missing unit contacts', () => {
   assert.equal(items[0].stageIdx, 0);
 });
 
-test('A5 requester: own request, the draft being prepared, the draft ready (first) until opened', () => {
+test('A5 requester: own request, the draft, the document before and after the send', () => {
   const req = { serial: 's1', ref: '2026-72', name: 'בקשה', status: 'open' as const, requesterUid: 'u-req', sentByName: 'דני כהן', sentAt: T(8) };
   const base = { uid: 'u-req', isManager: false };
   assert.deepEqual(lines(pctx({ ...base, requests: [req] })), ['בל"מ חדש בטיפול הרכש: ממתין לבחירת סוג ולאישור | צפה בבל"מ']);
@@ -470,24 +521,37 @@ test('A5 requester: own request, the draft being prepared, the draft ready (firs
   const ready = pendingItems(pctx({ ...base, requests: [req], tenders: [tender()] }));
   assert.equal(ready[0].bold, 'הטיוטה מוכנה:');
   assert.equal(ready[0].meta, 'אושר על ידי דנה כהן · 04.11 09:30');
-  assert.deepEqual(lines(pctx({ ...base, tenders: [tender({ draftSeen: true })] })), []);
+  assert.deepEqual(lines(pctx({ ...base, tenders: [tender({ draftSeen: true })] })), ['הרכש מכין את המסמך: הטיוטה בבדיקה | צפה בטיוטה']);
+  assert.deepEqual(lines(pctx({ ...base, tenders: [tender({ draftSeen: true, agent: 'done', openCount: 2 })] })), ['הרכש מכין את המסמך: הסוכן המפקח מצא 2 ממצאים להחלטת הרכש | צפה בטיוטה']);
+  const doc = tender({ ds: 'doc', agent: 'done' });
+  assert.deepEqual(lines(pctx({ ...base, tenders: [doc] })), ['המסמך נוצר: ממתין לשליחת הרכש לאישור | צפה במסמך']);
+  assert.deepEqual(lines(pctx({ ...base, tenders: [{ ...doc, sent: true }] })), ['נשלח לאישור: המסמך מוכן לעיון, לעריכה ולאישור שלך | פתח את המסמך']);
 });
 
-test('A5 legal / finance: assign the unit contact, then approve in turn', () => {
+test('A5 legal / finance: assign the unit contact, then approve once the document was sent', () => {
   const assign = pendingItems(pctx({ uid: 'u-leg2', isManager: false, unitRole: 'legal', unassigned: [tender({ holders: { ...H, legal: undefined } })] }));
   assert.equal(assign[0].text, 'בל"מ חדש ממתין לאיש קשר מטעם היחידה המשפטית');
   assert.equal(assign[0].button, 'שייך');
   assert.deepEqual(assign[0].select, { role: 'legal' });
-  // the colleague select is keyed by the case, so the item's target names the case and the role
-  assert.deepEqual(assign[0].target, { kind: 'assign', tenderId: 't1', role: 'legal' });
   assert.deepEqual(assign[0].target, { kind: 'assign', tenderId: 't1', role: 'legal' }, 'the button assigns, it does not open the case');
   const doc = tender({ ds: 'doc' });
-  assert.deepEqual(lines(pctx({ uid: 'u-leg', isManager: false, tenders: [doc] })), []); // not legal's turn
-  assert.deepEqual(lines(pctx({ uid: 'u-leg', isManager: false, tenders: [{ ...doc, approvals: approvals('requester', 'finance') }] })), [
-    'אישור סופי של המכרז: המסמך מוכן לאישורך | פתח את המסמך',
-  ]);
-  assert.deepEqual(lines(pctx({ uid: 'u-fin', isManager: false, tenders: [doc] })), ['אישור סופי של המכרז: המסמך מוכן לאישורך | פתח את המסמך']);
-  assert.deepEqual(lines(pctx({ uid: 'u-fin', isManager: false, tenders: [{ ...doc, blockingCount: 1 }] })), []);
+  assert.deepEqual(lines(pctx({ uid: 'u-fin', isManager: false, tenders: [doc] })), [], 'not sent yet');
+  const ready = ['נשלח לאישור: המסמך מוכן לעיון, לעריכה ולאישור שלך | פתח את המסמך'];
+  assert.deepEqual(lines(pctx({ uid: 'u-fin', isManager: false, tenders: [{ ...doc, sent: true }] })), ready);
+  assert.deepEqual(lines(pctx({ uid: 'u-leg', isManager: false, tenders: [{ ...doc, sent: true }] })), ready, 'v22: legal sees it right away');
+  assert.deepEqual(lines(pctx({ uid: 'u-fin', isManager: false, tenders: [{ ...doc, sent: true, blockingCount: 1 }] })), []);
+  assert.deepEqual(lines(pctx({ uid: 'u-fin', isManager: false, tenders: [{ ...doc, sent: true, finalCheck: 'running' }] })), []);
+});
+
+test('A5 an approval cancelled by a content change comes first; one given on your behalf is told (G-D4, UX 1.1.C)', () => {
+  const doc = tender({ ds: 'doc', sent: true });
+  const items = pendingItems(pctx({ uid: 'u-fin', isManager: false, tenders: [tender({ id: 't0', ds: 'doc', sent: true }), { ...doc, cancelled: ['finance'] }] }));
+  assert.equal(`${items[0].bold} ${items[0].text}`, 'המסמך השתנה אחרי האישור שלך: נדרש אישור מחדש');
+  assert.equal(items[0].key, 't1:reapprove');
+  const behalf = pendingItems(
+    pctx({ uid: 'u-fin', isManager: false, tenders: [{ ...doc, approvals: approvals('finance'), onBehalfUnseenBy: 'דנה כהן' }] }),
+  );
+  assert.deepEqual(behalf.map((i) => `${i.bold} ${i.text}`), ['אושר בשמך: דנה כהן אישר את המסמך בשמך']);
 });
 
 test('A5 stage chip counts', () => {
@@ -502,16 +566,14 @@ test('A5 stage chip counts', () => {
 
 test('approver roles: while security still blocks on the server (D2 pending), the UI waits for it too', () => {
   const roles = ['requester', 'legal', 'finance', 'security'] as const;
-  const mgr = headerAction(ctx({ isManager: true, approverRoles: roles, approvals: approvals('requester', 'finance', 'legal') }))!;
-  assert.equal(mgr.enabled, false);
-  assert.equal(mgr.title, 'הכפתור שלך יפעל אחרי שהדורש, המשפטי והכספים יאשרו. נותר: אבטחת מידע.');
-  // security approves as a regular approver then, not as an extra participant
-  assert.deepEqual(headerAction(ctx({ myRoles: ['security'], approverRoles: roles })), { label: 'אישור סופי של המכרז', kind: 'approve', enabled: true });
+  const mgr = headerAction(ctx({ isManager: true, ...sent, approverRoles: roles, approvals: approvals('requester', 'finance', 'legal') }))!;
+  assert.equal(mgr.label, 'ממתין ל: אבטחת מידע');
+  assert.deepEqual(headerAction(ctx({ myRoles: ['security'], ...sent, approverRoles: roles })), { label: 'אישור מסמך', kind: 'approve', enabled: true });
   const v = approvalsView(actx({ approverRoles: roles }));
   assert.equal(v.rows.find((r) => r.role === 'security')!.nonBlocking, false);
-  assert.equal(approvalsView(actx({ myRoles: ['security'], approverRoles: roles })).note, 'לחץ על "אישור סופי של המכרז" כשסיימת לעבוד על המסמך.');
-  const items = pendingItems(pctx({ tenders: [tender({ ds: 'doc', approverRoles: roles, approvals: approvals('requester', 'legal', 'finance') })] }));
-  assert.equal(items.length, 0);
+  assert.equal(approvalsView(actx({ myRoles: ['security'], ...sent, approverRoles: roles })).note, 'לחצו על "אישור מסמך" כשסיימתם לעבוד על המסמך.');
+  const items = pendingItems(pctx({ tenders: [tender({ ds: 'doc', sent: true, approverRoles: roles, approvals: approvals('requester', 'legal', 'finance') })] }));
+  assert.deepEqual(items.map((i) => i.bold), ['נשלח לאישור:']);
 });
 
 test('D2 stage hover card: done / current / upcoming', () => {
