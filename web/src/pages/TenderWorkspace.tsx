@@ -43,7 +43,8 @@ import {
   type WorkspaceCtx,
   type WorkspaceTabKey,
 } from '@obms/shared';
-import ChatPanel from '../components/ChatPanel';
+import ChatPanel, { type ChatSeed } from '../components/ChatPanel';
+import { ChatDockProvider } from '../components/agent/ChatDock';
 import { api } from '../lib/api';
 import DocView, { type DocViewHandle } from '../components/agent/DocView';
 import DraftPanel from '../components/DraftPanel';
@@ -89,6 +90,8 @@ export default function TenderWorkspace() {
   const canvasRef = useRef<HTMLDivElement>(null);
   const docRef = useRef<DocViewHandle>(null);
   const [chatOpen, setChatOpen] = useState(false);
+  // Text a person card asked to start the message with ("@דני ").
+  const [chatSeed, setChatSeed] = useState<ChatSeed | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   // Set when the supervisor blocked publication — offers the audited manager override.
@@ -344,7 +347,21 @@ export default function TenderWorkspace() {
       }
     : null;
 
+  // The chat header's avatars, in the prototype's order: requester, procurement (the owner), legal, finance,
+  // security; each person once (renderTeam, line 2240).
+  const chatPeople = [holders.requester?.name, ownerName, holders.legal?.name, holders.finance?.name, holders.security?.name]
+    .filter((n): n is string => !!n)
+    .filter((n, i, all) => all.indexOf(n) === i)
+    .map((name) => ({ name }));
+  const chatDock = {
+    openWith: (text: string) => {
+      setChatOpen(true);
+      setChatSeed((s) => ({ text, n: (s?.n ?? 0) + 1 }));
+    },
+  };
+
   return (
+    <ChatDockProvider value={chatDock}>
     <div>
       <TenderHeader
         tender={tender}
@@ -630,34 +647,33 @@ export default function TenderWorkspace() {
         />
       )}
 
-      {/* Case team chat: floats over every tab; the button shows the unread count while it is closed. */}
+      {/* Case team chat (plan D12): floats over every tab; the button shows the unread count while it is closed. */}
       {chatOpen && (
-        <div className="fixed bottom-24 left-6 z-40 flex h-[min(560px,calc(100vh-8rem))] w-[400px] max-w-[calc(100vw-3rem)] flex-col overflow-hidden rounded-lg border border-paper-2 bg-surface shadow-lg">
-          <ChatPanel
-            tenderId={tender.id}
-            title={tender.title}
-            messages={chat.messages}
-            onClose={() => setChatOpen(false)}
-          />
-        </div>
+        <ChatPanel
+          tenderId={tender.id}
+          title={tender.title}
+          number={tender.serial}
+          people={chatPeople}
+          messages={chat.messages}
+          seed={chatSeed}
+          onClose={() => setChatOpen(false)}
+        />
       )}
       <button
-        className="fixed bottom-6 left-6 z-40 grid h-14 w-14 place-items-center rounded-full bg-accent text-white shadow-lg transition hover:bg-accent-hover"
+        type="button"
+        className="tdock-fab"
         onClick={() => setChatOpen((o) => !o)}
-        title={t('chat.open')}
-        aria-label={t('chat.open')}
+        title={t('chat.title')}
+        aria-label={t('chat.title')}
         aria-expanded={chatOpen}
       >
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z" />
-          <path d="M8.5 12h.01M12 12h.01M15.5 12h.01" />
+          <path d="M9 11h.01M12 11h.01M15 11h.01" />
         </svg>
-        {!chatOpen && chat.unread > 0 && (
-          <span className="absolute -right-1 -top-1 grid min-h-5 min-w-5 place-items-center rounded-full bg-gold px-1 text-xs font-bold text-ink-900">
-            {chat.unread}
-          </span>
-        )}
+        {!chatOpen && chat.unread > 0 && <span className="tdock-bd">{chat.unread}</span>}
       </button>
     </div>
+    </ChatDockProvider>
   );
 }

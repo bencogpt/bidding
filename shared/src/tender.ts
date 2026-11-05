@@ -53,6 +53,26 @@ export function canTransition(from: TenderStatus, to: TenderStatus): boolean {
   return TENDER_TRANSITIONS[from]?.includes(to) ?? false;
 }
 
+/**
+ * The statuses a manager may ask for directly (transitionTender). The later ones follow only from their own
+ * action, which checks what the step needs: the first supplier submission (→ responses), the bid comparison
+ * (→ evaluated) and choosing the winner (→ awarded). So no case reaches "awarded" without a winner.
+ */
+export const MANUAL_TRANSITION_TARGETS: readonly TenderStatus[] = ['draft', 'internal_review', 'ready', 'published'];
+
+const ACTION_ONLY_STATUS_HE: Partial<Record<TenderStatus, string>> = {
+  responses: 'שלב ההצעות מתחיל מעצמו עם ההגשה הראשונה של ספק.',
+  evaluated: 'שלב ההערכה מתחיל בהרצת השוואת ההצעות.',
+  awarded: 'הזכייה נקבעת בבחירת הספק הזוכה.',
+};
+
+/** Why a manager can't move the case from `from` to `to` directly, or null when the move is allowed. */
+export function manualTransitionDenial(from: TenderStatus, to: TenderStatus): string | null {
+  if (from === to) return null; // nothing changes
+  if (!MANUAL_TRANSITION_TARGETS.includes(to)) return ACTION_ONLY_STATUS_HE[to] ?? `מעבר סטטוס לא חוקי: ${from} → ${to}`;
+  return canTransition(from, to) ? null : `מעבר סטטוס לא חוקי: ${from} → ${to}`;
+}
+
 // Statuses in which the bid document is public to (granted) suppliers.
 export const SUPPLIER_VISIBLE_STATUSES: TenderStatus[] = ['published', 'responses', 'evaluated', 'awarded'];
 

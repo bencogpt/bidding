@@ -5,7 +5,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { db, now } from './lib/admin.js';
 import { nextUsage, type UsageWindow } from './lib/rateWindow.js';
 import { isInternalRole, formatSerial, withBuiltinFills, SUPERVISION_RUN_STALE_MS } from '@obms/shared';
-import type { TeamRole, TeamApproval, SupervisionRunState, FindingDecisionRecord } from '@obms/shared';
+import type { TeamRole, TeamApproval, SupervisionRunState, FindingDecisionRecord, TenderStatus } from '@obms/shared';
 import type {
   TenderDoc,
   AccessDoc,
@@ -342,6 +342,27 @@ export const tendersRepo = {
   async update(id: string, patch: Partial<TenderDoc>): Promise<void> {
     await db.collection('tenders').doc(id).set(stripUndefined({ ...patch, updatedAt: now() }), {
       merge: true,
+    });
+  },
+  /**
+   * Change the status in a transaction: re-read the case, let `check` refuse the move (it may run more than
+   * once, so it must not have side effects), then write the new status together with the fields that belong
+   * to it, e.g. the winner. Nothing is written when the case already has that status. Returns the case as it
+   * was before the change.
+   */
+  async changeStatus(
+    id: string,
+    to: TenderStatus,
+    check: (t: TenderDoc) => void,
+    extra: Partial<TenderDoc> = {},
+  ): Promise<TenderDoc> {
+    const ref = db.collection('tenders').doc(id);
+    return db.runTransaction(async (tx) => {
+      const t = (await tx.get(ref)).data() as TenderDoc | undefined;
+      if (!t) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+      check(t);
+      if (t.status !== to) tx.update(ref, stripUndefined({ ...extra, status: to, updatedAt: now() }));
+      return t;
     });
   },
   /** Record (or, with null, withdraw) one role's approval. Written by path so the others stay. */

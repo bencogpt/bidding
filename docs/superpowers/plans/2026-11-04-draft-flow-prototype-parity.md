@@ -163,7 +163,35 @@ The web app is restyled to the prototype's tokens and components, and becomes a 
   - New callable `getVersionView` (internal case members only; suppliers are refused).
   - **"שחזר" is not offered** (writing an old text back into a live Google Doc has no safe backend yet).
   - **Limits:** versions are recorded when the agent checks the document, so edits made in Google Docs between two checks appear as one version; a reopened document starts with the same text as the locked one, so it adds no version until it is edited.
-  - **Verification:** unit 272/272; e2e: version summaries, creator, view, compare and the supplier refusal passed; the run then failed only on the known late leftover-data assertion (the dev emulator already held an awarded tender from the previous run). **A full clean e2e has not been run since B6** — run it on a fresh emulator (`emulators:exec`).
+  - **Verification:** unit 272/272; e2e: version summaries, creator, view, compare and the supplier refusal passed; the run then failed only on the known late leftover-data assertion (the dev emulator already held an awarded tender from the previous run). ~~A full clean e2e has not been run since B6.~~ **2026-11-05: the full e2e passed on a fresh emulator** (`emulators:exec`), the versions checks included.
+- **D12, the team chat dock, done** (2026-11-05; checked next to the prototype, open and closed):
+  - `ChatPanel` is the prototype's dock: header "צ'אט פנימי" with "{name} · {number}" and the participants' avatars (requester, procurement, legal, finance, security; each person once), the "−" minimise button;
+  - a day separator before each day's first message: "היום", "אתמול", or the date (`shared/src/teamChat.ts`, 6 tests); the bubble shows hh:mm;
+  - other people's messages with avatar, name and role; the caller's own on the other side, without them;
+  - `@mention` highlight (the prototype's rule: up to a space or punctuation), white and underlined in the caller's own bubble;
+  - the floating button and the red unread badge as in the prototype; the placeholder "כתבו לצוות. אפשר לתייג עם @…".
+  - `ChatDockProvider` is now provided by the workspace: "פנייה בצ'אט" in a person card opens the dock with "@first-name " typed and the cursor after it.
+  - **Deviations:** the button sits 24px from the bottom (the prototype lifts it to 64px to clear its demo bar, which the product doesn't have); Shift+Enter still adds a line (the prototype's input is one line); the messages are the real case chat, so there are no seeded demo messages.
+  - Unit 278/278.
+- **E2 finding (2026-11-05):** prototype v19 defines a KPI strip (`PERS.*.strip`) and a role subtitle (`PERS.*.sub`) for each role but **renders neither on the home**: the strip data is unused, the subtitle only labels the demo role switcher, and the only `.kpis` element is on the reports screen. Prototype wins, so E2 leaves both out. The `split(/s+/)` bug of §11 is already fixed in `MyDesk.tsx` and `InternalLayout.tsx`.
+- **E2, the rest of the home, done** (2026-11-05; checked next to the prototype as procurement and as a requester):
+  - **"מועדים קרובים"** (`UpcomingPanel`, 340px beside "לטיפולך", the list scrolls inside the row's height): per active case and open request, the next stage (an outlined stage tag; the conference is skipped), its date, and "ממתין:" with who still holds it up. Rules in `shared/src/homeMilestones.ts` (7 tests):
+    - a request waits for רכש; in עריכה the team members who haven't approved (security doesn't block), then רכש; after the lock רכש publishes; in הבהרות nobody (bids start at the deadline); in הצעות רכש;
+    - **only the submission deadline is a real date** (the date "הצעות" starts); every other row shows "טרם נקבע" (new text) and comes after the dated ones;
+    - a date within 3 days is red; the risk icon ("קיים סיכון: עיכוב") needs someone to wait for.
+    - The footer "כל המועדים (n)" is left out: it opens the schedule screen, which is out of scope.
+  - **"הבל"מים שלי"** (`HomeTenders`), replacing the separate "בקשות ממתינות" table: the open requests as אפיון rows, then the cases (up to הצעות in the list, everything but סגור in the cards).
+    - Procurement: count, "רשימה" / "לפי שלב". The list: מספר (with "חדש" right after sending), שם, מנהל מכרז ("טרם שויך" for a request), שלב, רביעייה, עדכון אחרון. "לפי שלב": six columns, three cases each, "עוד n ‹" (to the all-tenders list), "אין בל"מים בשלב זה".
+    - Everyone else: cards (number, type or "טרם נבחר", name, stage and %, the bar, manager and date) and "לכל הבל"מים ‹".
+  - **Deviations:**
+    - The "רביעייה" bar is the quartet's approval of the document, as in the workspace header. The prototype changes the roles per stage (`STAGE_APPR`) and has an "in review" state; real data records only the document approvals.
+    - Under the last-update date only requests show "{who} · {what}": the prototype's who/what is generated demo data, and a case records only `updatedAt`.
+    - No hover card on the bar or the date; the prototype's request row avatar for "טרם שויך" is dropped.
+    - Non-managers can't read the users directory, so their cards show no manager name (as in `TenderList`).
+  - Unit 285/285; typecheck and production build pass.
+- **F2, the contact card, done** (2026-11-05; checked next to the prototype): `RequestSnapshot` opens with the prototype's `.reqsnap > h4` line, "הבקשה של הדורש · נשלחה על ידי {PersonChip} · {time}", and the box takes the prototype's colours. The card shows the requester's name and "דורש".
+  - **Deviations:** no unit line (users have no unit field; the prototype's "אגף מערכות מידע" is demo data), and no "פנייה בצ'אט" (D14: the case and its chat don't exist yet; the prototype keeps its demo chat here).
+- **With F2, every task of phases A–F is built.** Open: G20 (template default values) and the UX review pack. The three backend issues of §11 are fixed (2026-11-05, see §11).
 
 ---
 
@@ -1116,8 +1144,7 @@ The prototype names 6 codes (line 2519); the other 19 are proposals that need UX
   - "apply all" is not gated on the manager role (D7);
   - it uses `scrollIntoView` (D8).
 - Tailwind palette fallbacks (`teal-200`, `violet-*`, `emerald-*`) render default Tailwind colours (C1).
-- `transitionTender` lets a manager jump straight to post-publish statuses, e.g. `awarded` without a winner.
-- `awardTender` writes the award fields before the transition (`functions/src/index.ts:1687-1691`).
-
-  Both are outside this plan's stages; file them as separate tickets.
+- ~~`transitionTender` lets a manager jump straight to post-publish statuses, e.g. `awarded` without a winner.~~ **Fixed 2026-11-05** (user decision: fix here, not tickets): `manualTransitionDenial` (`shared/src/tender.ts`) lets the manager move only up to publication (draft, internal_review, ready, published); responses, evaluated and awarded follow only from a submission, the comparison and the award. 4 tests (`manualTransitions.test.ts`); e2e: "evaluated" and "awarded" are refused through `transitionTender`.
+- ~~`awardTender` writes the award fields before the transition.~~ **Fixed 2026-11-05:** everything is checked first (status, the supplier, and that the supplier submitted a proposal, which is new), then `transition(…, 'awarded', { awardedSupplierId, awardDate })` writes the winner and the status together. `transition()` now re-reads, checks and writes in one Firestore transaction (`tendersRepo.changeStatus`), so two concurrent moves can't both pass; a move with fields refuses to be a no-op, so a second award is refused. e2e: no award before the comparison, to a non-bidder, or twice; a refused award writes no winner.
+- **AI failure became a warning (found 2026-11-04, fixed 2026-11-05):** `aiReview` fails closed (`SUPERVISOR_UNAVAILABLE`, block), but `applySeverityPolicy` downgraded every non-rules block to a warning, so with the AI down the publish gate passed. Now, at the publish gates (`prepublish`, `refresh` — `PUBLISH_GATE_STAGES`), a review that could not run keeps blocking: suppliers get an unchecked document only after a re-check or the manager's audited override. In the draft and during approvals it stays a warning, as the finding's own text says ("פרסום מחייב בדיקה חוזרת או אישור חריגה"). 2 tests (`serviceFields.test.ts`).
 - The stale `createTender` comment (`functions/src/index.ts:574-580`) and the button label (`he.json:218`) (F1).

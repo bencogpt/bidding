@@ -537,11 +537,12 @@ export async function superviseTender(
       const m = /^params\.(.+)$/.exec(f.location);
       return m && !f.paramKey ? { ...f, paramKey: m[1] } : f;
     });
-    // Only hard facts block; everything else is a warning for the manager to weigh. Each finding gets a
+    // Only hard facts block (and, at the publish gate, an AI review that could not run); everything else is a
+    // warning for the manager to weigh. Each finding gets a
     // Hebrew location, its "הצעת הסוכן" and a stable key (plan B2).
     const labelOf = (k: string) => template.params.find((p) => p.key === k)?.labelHe;
     const findings: SupervisionFinding[] = withFindingKeys(
-      applySeverityPolicy([...taggedRules, ...aiFindings]).map((f) => ({
+      applySeverityPolicy([...taggedRules, ...aiFindings], stage).map((f) => ({
         ...f,
         location: f.source === 'rules' ? humanLocation(f.location, labelOf) : f.location,
         fix: f.fix ?? RULE_FIX_HE[f.code] ?? '',

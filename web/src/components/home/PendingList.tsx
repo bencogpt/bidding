@@ -60,7 +60,7 @@ export default function PendingList({
   };
 
   return (
-    <div className="mb-6 border" style={{ background: 'var(--panel)', borderColor: 'var(--line)' }}>
+    <div className="min-w-0 border" style={{ background: 'var(--panel)', borderColor: 'var(--line)' }}>
       <div className="flex items-center justify-between px-[22px] pb-1 pt-3">
         <h2 className="m-0 flex items-center text-lg font-semibold">
           לטיפולך

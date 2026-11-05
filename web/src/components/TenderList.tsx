@@ -42,7 +42,7 @@ const TYPE_ICON: Record<TenderType, string> = {
 };
 
 /** The tender type as plain text with a small icon (pills are kept for states). */
-function TypeCell({ type }: { type: TenderType }) {
+export function TypeCell({ type }: { type: TenderType }) {
   const { t } = useTranslation();
   return (
     <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-tx-soft">

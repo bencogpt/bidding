@@ -332,8 +332,27 @@ test('bid manager details come from the user record under any name; option month
 
 test('only hard facts block; everything else becomes a warning', async () => {
   const { applySeverityPolicy, verdictOf } = await import('@obms/shared');
-  const f = (severity: 'block' | 'warn', source: 'rules' | 'ai', hard?: boolean) => ({ severity, source, hard });
+  const f = (severity: 'block' | 'warn', source: 'rules' | 'ai', hard?: boolean) =>
+    ({ severity, source, hard, code: 'UNSOURCED_VALUE' }) as const;
   const out = applySeverityPolicy([f('block', 'rules', true), f('block', 'rules'), f('block', 'ai'), f('block', 'ai', true), f('warn', 'rules')]);
   assert.deepEqual(out.map((x) => x.severity), ['block', 'warn', 'warn', 'warn', 'warn']);
   assert.equal(verdictOf(applySeverityPolicy([f('block', 'ai'), f('block', 'rules')])), 'WARN');
+  // The publish gate doesn't make an ordinary AI finding block.
+  assert.equal(verdictOf(applySeverityPolicy([f('block', 'ai')], 'prepublish')), 'WARN');
+});
+
+test('fail-closed: an AI review that could not run blocks at the publish gate, and only there', async () => {
+  const { applySeverityPolicy, verdictOf, PUBLISH_GATE_STAGES } = await import('@obms/shared');
+  const unavailable = { code: 'SUPERVISOR_UNAVAILABLE', severity: 'block', source: 'ai' } as const;
+  assert.deepEqual([...PUBLISH_GATE_STAGES], ['prepublish', 'refresh']);
+  for (const stage of PUBLISH_GATE_STAGES) {
+    assert.equal(verdictOf(applySeverityPolicy([unavailable], stage)), 'BLOCK', `${stage}: needs a re-check or the override`);
+  }
+  for (const stage of ['created', 'manual', 'review', 'ready', 'edit'] as const) {
+    assert.equal(verdictOf(applySeverityPolicy([unavailable], stage)), 'WARN', `${stage}: a warning, the work goes on`);
+  }
+  assert.equal(verdictOf(applySeverityPolicy([unavailable])), 'WARN', 'no stage given: the old behaviour');
+  // The emulator's planned skip is not a failure.
+  const skipped = { code: 'AI_REVIEW_SKIPPED', severity: 'warn', source: 'ai' } as const;
+  assert.equal(verdictOf(applySeverityPolicy([skipped], 'prepublish')), 'WARN');
 });

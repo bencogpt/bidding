@@ -13,6 +13,11 @@ import {
   isUnitRole,
   pendingItems,
   stageIndexOf,
+  progressPct,
+  isApproved,
+  QUARTET_ROLES,
+  upcomingMilestones,
+  type Milestone,
   type Approvals,
   type Holders,
   type PendingItem,
@@ -24,29 +29,13 @@ import {
 import { api } from '../lib/api';
 import { isDraftSeen } from '../lib/seen';
 import PendingList from '../components/home/PendingList';
+import UpcomingPanel from '../components/home/UpcomingPanel';
+import HomeTenders, { type HomeRow } from '../components/home/HomeTenders';
 import FeedbackForm from '../components/FeedbackForm';
 import { useAuth } from '../auth/AuthProvider';
 
 // The participant-feedback card is hidden for now (the data and the form stay, turn it back on here).
 const SHOW_FEEDBACK_REQUESTS = false;
-
-/** hh:mm dd.mm.yyyy in Israel time. */
-const fmtStamp = (ms: number) => {
-  const p = Object.fromEntries(
-    new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Asia/Jerusalem',
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    })
-      .formatToParts(ms)
-      .map((x) => [x.type, x.value]),
-  );
-  return `${p.hour}:${p.minute} ${p.day}.${p.month}.${p.year}`;
-};
 
 // "השולחן שלי": what is waiting for the signed-in user, across all tenders.
 export default function MyDesk() {
@@ -95,17 +84,25 @@ export default function MyDesk() {
 
   // "לטיפולך": what waits for the signed-in user, from the shared rules (plan A5, E1).
   const nameOfUid = (uid: string) => users.find((u) => u.uid === uid)?.displayName ?? '';
+  const holdersOf = (td: TenderDoc): Holders => {
+    const holders: Holders = {};
+    for (const r of TEAM_ROLES) {
+      const uid = td.team?.[r];
+      if (uid) holders[r] = { uid, name: nameOfUid(uid) };
+    }
+    return holders;
+  };
+  const approverRolesOf = (td: TenderDoc) =>
+    REQUIRE_APPROVALS ? blockingApproverRoles(td.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[td.type]) : [];
+  const requestName = (r: (typeof requests)[number]) =>
+    String((r.details as Record<string, unknown> | undefined)?.service_name ?? '').trim() || r.brief;
   const toPending = (td: TenderDoc): PendingTenderInput => {
     const ds = draftStateOf(td);
     const run = td.supervisionRun;
     const last = td.lastSupervision;
     const running = run?.state === 'running' && Date.now() - run.startedAt < SUPERVISION_RUN_STALE_MS;
     const fresh = !!last && (ds === 'doc' ? last.basis !== 'draft' : last.basis === 'draft' && last.dataHash === td.draftDataHash);
-    const holders: Holders = {};
-    for (const r of TEAM_ROLES) {
-      const uid = td.team?.[r];
-      if (uid) holders[r] = { uid, name: nameOfUid(uid) };
-    }
+    const holders = holdersOf(td);
     return {
       id: td.id,
       ref: td.serial ?? td.id,
@@ -117,7 +114,7 @@ export default function MyDesk() {
       blockingCount: fresh && last ? last.blockers : 0,
       holders,
       approvals: (td.approvals ?? {}) as Approvals,
-      approverRoles: REQUIRE_APPROVALS ? blockingApproverRoles(td.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[td.type]) : [],
+      approverRoles: approverRolesOf(td),
       approvedByName: nameOfUid(td.ownerUid),
       approvedAt: td.createdAt,
       draftSeen: user ? isDraftSeen(td.id, user.uid) : false,
@@ -131,7 +128,7 @@ export default function MyDesk() {
         requests: requests.map((r) => ({
           serial: r.serial,
           ref: r.serial,
-          name: String((r.details as Record<string, unknown> | undefined)?.service_name ?? '').trim() || r.brief,
+          name: requestName(r),
           status: r.status,
           requesterUid: r.requesterUid,
           sentByName: r.requesterName,
@@ -158,6 +155,79 @@ export default function MyDesk() {
   const openItem = (item: PendingItem) => {
     if (item.target.kind === 'tender') nav(`/tenders/${item.target.id}?tab=${item.target.tab}`);
     else if (item.target.kind === 'request') nav(isManager ? `/requests/${item.target.serial}` : '/all');
+  };
+  // "מועדים קרובים" (plan E2): the next stage of each active case, its date and who it waits for.
+  const milestones = upcomingMilestones(
+    [
+      ...requests
+        .filter((r) => r.status === 'open')
+        .map((r) => ({ id: r.serial, ref: r.serial, name: requestName(r), kind: 'request' as const, stageIdx: 0 })),
+      ...tenders.map((td) => ({
+        id: td.id,
+        ref: td.serial ?? td.id,
+        name: td.title,
+        kind: 'tender' as const,
+        stageIdx: stageIndexOf(td.status),
+        holders: holdersOf(td),
+        approvals: (td.approvals ?? {}) as Approvals,
+        approverRoles: approverRolesOf(td),
+        submissionDeadline: td.submissionDeadline,
+      })),
+    ],
+    Date.now(),
+  );
+  const openMilestone = (m: Milestone) => {
+    if (m.kind === 'tender') nav(`/tenders/${m.id}?tab=${m.tab}`);
+    else nav(isManager ? `/requests/${m.id}` : '/all');
+  };
+  // "הבל"מים שלי" (plan E2): the requests still at אפיון, then the cases. The bar is the quartet's approval of
+  // the document, as in the workspace header; a request has only the requester's (it was sent) and procurement's.
+  const homeRows: HomeRow[] = [
+    ...requests
+      .filter((r) => r.status === 'open')
+      .map(
+        (r): HomeRow => ({
+          key: `r-${r.serial}`,
+          kind: 'request',
+          id: r.serial,
+          ref: r.serial,
+          name: requestName(r),
+          stageIdx: 0,
+          isNew: r.serial === justSent,
+          updatedAt: r.createdAt,
+          lastWhat: `${r.requesterName} · ${t('req.lastUpdateWhat')}`,
+          segments: [
+            { role: 'requester', approved: true },
+            { role: 'manager', approved: false },
+          ],
+          pct: progressPct(0, 'draft'),
+        }),
+      ),
+    ...tenders.map((td): HomeRow => {
+      const stageIdx = stageIndexOf(td.status);
+      const holders = holdersOf(td);
+      const approvals = (td.approvals ?? {}) as Approvals;
+      return {
+        key: `t-${td.id}`,
+        kind: 'tender',
+        id: td.id,
+        ref: td.serial ?? td.id,
+        name: td.title,
+        stageIdx,
+        type: td.type,
+        ownerName: nameOfUid(td.ownerUid) || undefined,
+        updatedAt: td.updatedAt,
+        segments: QUARTET_ROLES.map((role) => ({
+          role,
+          approved: role === 'manager' ? stageIdx >= 2 : isApproved(holders, approvals, role),
+        })),
+        pct: progressPct(stageIdx, draftStateOf(td)),
+      };
+    }),
+  ];
+  const openRow = (r: HomeRow) => {
+    if (r.kind === 'tender') nav(`/tenders/${r.id}`);
+    else nav(isManager ? `/requests/${r.id}` : '/all');
   };
   const assign = async (item: PendingItem, uid: string) => {
     if (item.target.kind !== 'assign') return;
@@ -203,85 +273,15 @@ export default function MyDesk() {
       )}
 
       {deskError && <div className="mb-3 text-sm text-red-600">{deskError}</div>}
-      <PendingList items={pendingList} candidates={candidates} busy={assigning} onOpen={openItem} onAssign={assign} />
+      <div className="home-grid">
+        <PendingList items={pendingList} candidates={candidates} busy={assigning} onOpen={openItem} onAssign={assign} />
+        <UpcomingPanel items={milestones} onOpen={openMilestone} />
+      </div>
 
-      {(requests.length > 0 || isManager) && (
-        <div className="mb-6">
-          <h2 className="mb-3 font-semibold">{isManager ? t('req.pendingTitle') : t('req.myRequests')}</h2>
-          {requests.length === 0 ? (
-            <div className="card p-5 text-sm text-tx-mute">{t('req.pendingEmpty')}</div>
-          ) : (
-            <div className="card overflow-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-paper text-xs text-tx-mute">
-                  <tr>
-                  <th className="px-5 py-3 text-start font-medium">{t('dashboard.col.serial')}</th>
-                  <th className="px-5 py-3 text-start font-medium">{t('req.col.name')}</th>
-                  <th className="px-5 py-3 text-start font-medium">{t('req.requestedBy')}</th>
-                  <th className="px-5 py-3 text-start font-medium">{t('req.col.stage')}</th>
-                    {!isManager && <th className="px-5 py-3" />}
-                  <th className="px-5 py-3 text-start font-medium">{t('req.col.lastUpdate')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {requests.map((r) => (
-                    <tr
-                      key={r.serial}
-                      className={
-                        'border-t border-paper-2 hover:bg-paper ' +
-                        (isManager ? 'cursor-pointer ' : '') +
-                        (r.serial === justSent ? 'bg-emerald-50' : '')
-                      }
-                      // The whole row opens the request for the manager; the button at its end is only a label.
-                      onClick={isManager ? () => nav(`/requests/${r.serial}`) : undefined}
-                      onKeyDown={isManager ? (e) => e.key === 'Enter' && nav(`/requests/${r.serial}`) : undefined}
-                      tabIndex={isManager ? 0 : undefined}
-                    >
-                      <td className="whitespace-nowrap px-5 py-3 font-semibold text-tx-soft">
-                        {r.serial === justSent && (
-                          <span className="ml-2 rounded-full bg-emerald-600 px-2 text-[10px] leading-4 text-white">
-                            {t('req.newTag')}
-                          </span>
-                        )}
-                        <span dir="ltr">{r.serial}</span>
-                      </td>
-                      <td className="max-w-md truncate px-5 py-3" title={r.brief}>{String((r.details as Record<string, unknown> | undefined)?.service_name ?? '').trim() || r.brief}</td>
-                      <td className="whitespace-nowrap px-5 py-3 text-tx-soft">{r.requesterName}</td>
-                      <td className="whitespace-nowrap px-5 py-3">
-                        <span className="rounded-full bg-[#8a5cf0] px-3 py-0.5 text-xs font-semibold text-white">
-                          {t('req.stageSpec')}
-                        </span>
-                      </td>
-                      {!isManager && (
-                        <td className="whitespace-nowrap px-5 py-3 text-end">
-                          <span className="chip">
-                            {r.status === 'open'
-                              ? r.serial === justSent
-                                ? t('req.inProcurement')
-                                : t('req.statusOpen')
-                              : t('req.statusConverted')}
-                          </span>
-                        </td>
-                      )}
-                      <td className="whitespace-nowrap px-5 py-3">
-                        <div className="font-medium tabular-nums">
-                          <bdi>{fmtStamp(r.createdAt)}</bdi>
-                        </div>
-                        <div className="mt-0.5 text-xs text-tx-soft">
-                          {r.requesterName} · {t('req.lastUpdateWhat')}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
+      <HomeTenders rows={homeRows} layout={isManager ? 'table' : 'cards'} onOpen={openRow} />
 
       {!SHOW_FEEDBACK_REQUESTS || pending.length === 0 ? (
-        requests.length === 0 && !isManager && <div className="card p-6 text-tx-soft">{t('desk.empty')}</div>
+        null
       ) : (
         <div className="card p-5">
           <h2 className="mb-1 font-semibold">{t('fb.waitingTitle', { count: pending.length })}</h2>

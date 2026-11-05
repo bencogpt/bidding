@@ -816,6 +816,27 @@ async function main() {
     'responses',
     'first submission advances published → responses',
   );
+  // The refusal's message, or null when the call went through.
+  const refusal = async (fn: () => Promise<unknown>) => {
+    try {
+      await fn();
+      return null;
+    } catch (e) {
+      return (e as Error).message;
+    }
+  };
+  // Before the comparison there is no award, and a refused award leaves no winner behind.
+  assert.match(
+    (await refusal(() => call('awardTender')({ tenderId, supplierId: 'sup_aegis' }))) ?? '',
+    /רק לאחר השוואת ההצעות/,
+    'no award before the comparison',
+  );
+  assert.equal((await getDoc(doc(db, 'tenders', tenderId))).data()!.awardedSupplierId ?? null, null, 'the refused award wrote no winner');
+  assert.match(
+    (await refusal(() => call('transitionTender')({ tenderId, to: 'evaluated' }))) ?? '',
+    /השוואת ההצעות/,
+    'the manager cannot skip the comparison',
+  );
   const cmp = (await call('runComparison')({ tenderId })) as { data: { ranking: { injection?: unknown }[] } };
   assert.ok(cmp.data.ranking.length >= 1, 'comparison produced a ranking');
   assert.ok(cmp.data.ranking[0].injection, 'the injection attempt is flagged to the manager');
@@ -827,11 +848,30 @@ async function main() {
     'evaluated',
     'comparison advances → evaluated',
   );
+  // "awarded" only comes with a winner, and the winner is one of the bidders.
+  assert.match(
+    (await refusal(() => call('transitionTender')({ tenderId, to: 'awarded' }))) ?? '',
+    /בבחירת הספק הזוכה/,
+    'no award without a winner through transitionTender',
+  );
+  assert.match(
+    (await refusal(() => call('awardTender')({ tenderId, supplierId: 'sup_meridian' }))) ?? '',
+    /לא הגיש הצעה/,
+    'a supplier that did not bid cannot win',
+  );
+  const notYet = (await getDoc(doc(db, 'tenders', tenderId))).data()!;
+  assert.equal(notYet.status, 'evaluated', 'the refused moves left the status');
+  assert.equal(notYet.awardedSupplierId ?? null, null, 'and wrote no winner');
   await call('awardTender')({ tenderId, supplierId: 'sup_aegis' });
   const awarded = (await getDoc(doc(db, 'tenders', tenderId))).data()!;
   assert.equal(awarded.status, 'awarded', 'award advances → awarded');
   assert.equal(awarded.awardedSupplierId, 'sup_aegis', 'winner recorded');
-  console.log('✓ lifecycle: published → submitted → compared → awarded');
+  assert.match(
+    (await refusal(() => call('awardTender')({ tenderId, supplierId: 'sup_aegis' }))) ?? '',
+    /כבר נבחר זוכה/,
+    'a second award is refused',
+  );
+  console.log('✓ lifecycle: published → submitted → compared → awarded (no award before the comparison, without a winner, or to a non-bidder)');
 
   // ---- participant feedback (publish + award rounds) ----
   const reqs = await getDocs(query(collection(db, 'feedbackRequests'), where('tenderId', '==', tenderId)));

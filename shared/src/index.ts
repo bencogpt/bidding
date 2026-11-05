@@ -25,3 +25,5 @@ export * from './workspaceView.js';
 export * from './approvalRules.js';
 export * from './autoRun.js';
 export * from './activityFeed.js';
+export * from './teamChat.js';
+export * from './homeMilestones.js';
