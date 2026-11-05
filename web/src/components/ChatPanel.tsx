@@ -151,6 +151,14 @@ export default function ChatPanel({
             );
           }
           const m = it.m;
+          // A system line (plan G-D2, e.g. an approval on someone's behalf): a grey pill, as v22 renders them.
+          if (m.uid === 'system') {
+            return (
+              <div key={it.key} className="chat-day sys">
+                {m.text} · <span dir="ltr">{chatTime(m.at)}</span>
+              </div>
+            );
+          }
           const time = <span className="cm-t" dir="ltr">{chatTime(m.at)}</span>;
           if (m.uid === user?.uid) {
             return (

@@ -8,7 +8,7 @@ const E = (o: Partial<ActivityEntry>): ActivityEntry => ({ action: 'x', actorNam
 const s = (o: Partial<ActivityEntry>, labelOf?: (k: string) => string | undefined) => activitySentence(E(o), labelOf);
 
 test('approvals: the team, on behalf with the reason, withdrawn', () => {
-  assert.equal(s({ action: 'approve_tender', actorName: 'יעל לוי', newState: 'legal' }), 'אישור סופי: יעל לוי · משפטי');
+  assert.equal(s({ action: 'approve_tender', actorName: 'יעל לוי', newState: 'legal' }), 'אישור מסמך: יעל לוי · משפטי');
   assert.equal(s({ action: 'withdraw_approval', actorName: 'אורי מזרחי', newState: 'finance' }), 'האישור בוטל: אורי מזרחי · כספים');
   assert.equal(
     s({ action: 'approve_on_behalf', newState: 'finance', detail: 'אורי מזרחי · אורי בחופשה, אישר בטלפון' }),
@@ -17,11 +17,18 @@ test('approvals: the team, on behalf with the reason, withdrawn', () => {
   assert.equal(s({ action: 'withdraw_on_behalf', newState: 'finance' }), 'דנה כהן ביטל את האישור שניתן בשם כספים');
 });
 
-test('the lock, publication and the reopen', () => {
-  assert.equal(s({ action: 'status_change', prevState: 'draft', newState: 'ready' }), 'אישור סופי: דנה כהן · רכש. המכרז ננעל ומוכן לפרסום');
-  assert.equal(s({ action: 'status_change', newState: 'published' }), 'דנה כהן פרסם את הבל"מ לספקים');
+test('the send, the final check, publication and the reopen (v22 wording)', () => {
+  assert.equal(s({ action: 'status_change', prevState: 'draft', newState: 'internal_review' }), 'נשלח לאישור: דנה כהן · רכש');
+  assert.equal(s({ action: 'status_change', prevState: 'internal_review', newState: 'draft' }), 'דנה כהן ביטל את השליחה לאישור');
+  assert.equal(s({ action: 'final_check_started', actorName: 'מערכת' }), 'כל הרביעייה אישרה. הסוכן המפקח מבצע בדיקה סופית לפני הפרסום לספקים');
+  assert.equal(s({ action: 'final_check_blocked', actorName: 'מערכת' }), 'הבדיקה הסופית מצאה ממצא חוסם. המכרז לא עבר לפרסום לספקים');
+  assert.equal(s({ action: 'final_check_ai_unavailable', actorName: 'מערכת' }), 'הבדיקה הסופית לא הושלמה: בדיקת ה-AI אינה זמינה');
+  assert.equal(s({ action: 'final_check_override', detail: 'השירות לא זמין, אושר מול המשפטי' }), 'דנה כהן המשיך לפרסום לספקים בלי בדיקת AI · סיבה: השירות לא זמין, אושר מול המשפטי');
+  assert.equal(s({ action: 'status_change', prevState: 'internal_review', newState: 'ready', actorName: 'מערכת' }), 'הבדיקה הסופית עברה: המסמך עדיין תקין. הרכש יכול לפרסם לספקים');
+  assert.equal(s({ action: 'approvals_cancelled', actorName: 'מערכת', newState: 'requester,finance' }), 'המסמך השתנה אחרי האישור, ולכן בוטלו האישורים של: דורש, כספים');
+  assert.equal(s({ action: 'status_change', newState: 'published' }), 'פורסם לספקים: דנה כהן · רכש');
   assert.equal(s({ action: 'status_change', newState: 'awarded' }), 'דנה כהן הכריז על זוכה');
-  assert.equal(s({ action: 'status_change', newState: 'internal_review' }), null, 'reopen has its own sentence');
+  assert.equal(s({ action: 'status_change', prevState: 'ready', newState: 'draft' }), null, 'reopen has its own sentence');
   assert.equal(
     s({ action: 'tender_reopened', detail: 'נוצרה גרסה חדשה מקושרת. המקור נשאר נעול' }),
     'דנה כהן פתח מחדש: נוצרה גרסה חדשה מקושרת. המקור נשאר נעול',

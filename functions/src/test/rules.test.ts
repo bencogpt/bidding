@@ -190,6 +190,21 @@ test('chat: members read and post with enforced identity + server time; immutabl
   await assertFails(setDoc(doc(legal(), 'tenders/t1/chatReads/mgr'), { lastReadAt: serverTimestamp() }));
 });
 
+test('inputs (plan G-D10): members read and add, with a section or none; immutable; no suppliers', async () => {
+  const input = (over: Record<string, unknown>) => ({
+    id: 'i1', uid: 'ul', name: 'עו"ד', role: 'legal', text: 'סעיף 6 מחייב תיקון', section: '6', createdAt: serverTimestamp(), ...over,
+  });
+  await assertSucceeds(setDoc(doc(legal(), 'tenders/t1/inputs/i1'), input({})));
+  await assertSucceeds(setDoc(doc(legal(), 'tenders/t1/inputs/i2'), input({ id: 'i2', section: null })));
+  await assertSucceeds(getDoc(doc(manager(), 'tenders/t1/inputs/i1')));
+  await assertFails(getDoc(doc(supplierA(), 'tenders/t1/inputs/i1')));
+  await assertFails(setDoc(doc(legal(), 'tenders/t1/inputs/i3'), input({ id: 'i3', uid: 'mgr' }))); // impersonation
+  await assertFails(setDoc(doc(legal(), 'tenders/t1/inputs/i4'), input({ id: 'i4', createdAt: 5 }))); // client time
+  await assertFails(setDoc(doc(legal(), 'tenders/t1/inputs/i5'), input({ id: 'i5', text: '' })));
+  await assertFails(setDoc(doc(legal(), 'tenders/t1/inputs/i6'), input({ id: 'i6', extra: 1 })));
+  await assertFails(setDoc(doc(legal(), 'tenders/t1/inputs/i1'), input({ text: 'נערך' }))); // no edits
+});
+
 test('unauthenticated cannot read a tender', async () => {
   const db = env.unauthenticatedContext().firestore();
   await assertFails(getDoc(doc(db, 'tenders/t1')));

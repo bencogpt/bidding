@@ -13,6 +13,9 @@ import {
   isUnitRole,
   pendingItems,
   stageIndexOf,
+  firstName as sharedFirstName,
+  finalCheckViewOf,
+  type TeamRole,
   progressPct,
   isApproved,
   QUARTET_ROLES,
@@ -27,7 +30,7 @@ import {
   type UnitRole,
 } from '@obms/shared';
 import { api } from '../lib/api';
-import { isDraftSeen } from '../lib/seen';
+import { isBehalfSeen, isDraftSeen } from '../lib/seen';
 import PendingList from '../components/home/PendingList';
 import UpcomingPanel from '../components/home/UpcomingPanel';
 import HomeTenders, { type HomeRow } from '../components/home/HomeTenders';
@@ -45,7 +48,8 @@ export default function MyDesk() {
   const { requests } = useBidRequests();
   const { tenders } = useTenders();
   const isManager = role === 'tender_manager';
-  const firstName = (user?.displayName ?? '').trim().split(/\s+/)[0];
+  // A title before the name ("עו״ד פריה") is not the first name: the shared firstName skips it.
+  const firstName = sharedFirstName((user?.displayName ?? '').trim());
   const [open, setOpen] = useState<string | null>(null);
   // Right after "שלח לרכש" the create page brings us here: a green notice and the new request marked for a few seconds.
   const location = useLocation();
@@ -103,6 +107,14 @@ export default function MyDesk() {
     const running = run?.state === 'running' && Date.now() - run.startedAt < SUPERVISION_RUN_STALE_MS;
     const fresh = !!last && (ds === 'doc' ? last.basis !== 'draft' : last.basis === 'draft' && last.dataHash === td.draftDataHash);
     const holders = holdersOf(td);
+    const approvals = (td.approvals ?? {}) as Approvals;
+    // Open findings: the run's blockers and warnings less the warnings already decided (plan B2).
+    const openCount =
+      fresh && last ? Math.max(0, last.blockers + (last.warnings ?? 0) - Object.keys(td.findingDecisions ?? {}).length) : 0;
+    // An approval given on the signed-in user's behalf they haven't seen yet (UX 1.1.C).
+    const behalf = user
+      ? Object.values(approvals).find((a) => a?.onBehalf && a.uid === user.uid && !isBehalfSeen(td.id, user.uid, a.at))
+      : undefined;
     return {
       id: td.id,
       ref: td.serial ?? td.id,
@@ -112,12 +124,19 @@ export default function MyDesk() {
       ds,
       agent: running || autoRunPending(td, Date.now()) ? 'running' : fresh ? 'done' : 'none',
       blockingCount: fresh && last ? last.blockers : 0,
+      openCount,
       holders,
-      approvals: (td.approvals ?? {}) as Approvals,
+      approvals,
       approverRoles: approverRolesOf(td),
       approvedByName: nameOfUid(td.ownerUid),
       approvedAt: td.createdAt,
       draftSeen: user ? isDraftSeen(td.id, user.uid) : false,
+      // The v22 flow (plan Phase G).
+      sent: td.status === 'internal_review',
+      finalCheck: finalCheckViewOf(td),
+      cancelled: Object.keys(td.cancelledApprovals ?? {}) as TeamRole[],
+      onBehalfUnseenBy: behalf?.byName ?? null,
+      updatedAt: td.updatedAt,
     };
   };
   const pendingList = user
@@ -172,6 +191,7 @@ export default function MyDesk() {
         approvals: (td.approvals ?? {}) as Approvals,
         approverRoles: approverRolesOf(td),
         submissionDeadline: td.submissionDeadline,
+        sent: td.status === 'internal_review',
       })),
     ],
     Date.now(),

@@ -595,6 +595,37 @@ export function useSkillsCatalog() {
   return { catalog, error };
 }
 
+/** One "אינפוט" on the document (plan G-D10). */
+export interface InputDoc {
+  id: string;
+  uid: string;
+  name: string;
+  role: string;
+  text: string;
+  section: string | null;
+  at: number;
+}
+
+// The inputs of a case after it was sent for approval, oldest first (members only, by rules).
+export function useInputs(tenderId: string | undefined) {
+  const [rows, setRows] = useState<InputDoc[]>([]);
+  useEffect(() => {
+    if (!tenderId) return;
+    return onSnapshot(
+      query(collection(db, 'tenders', tenderId, 'inputs'), orderBy('createdAt', 'asc')),
+      (snap) =>
+        setRows(
+          snap.docs.map((d) => {
+            const x = d.data() as Omit<InputDoc, 'at'> & { createdAt: { toMillis?: () => number } | null };
+            return { ...x, section: x.section ?? null, at: x.createdAt?.toMillis?.() ?? Date.now() };
+          }),
+        ),
+      () => setRows([]),
+    );
+  }, [tenderId]);
+  return rows;
+}
+
 // Internal chat of a case team, oldest first, plus the caller's unread count.
 export function useChat(tenderId: string | undefined, uid: string | undefined) {
   const [messages, setMessages] = useState<(ChatMessage & { at: number })[]>([]);

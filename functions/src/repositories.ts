@@ -298,6 +298,21 @@ export const tendersRepo = {
       return true;
     });
   },
+  /**
+   * Start the final check (plan G-D3) unless one is already running (a re-delivered trigger, two approvals
+   * landing together). Only while the case is out for approval.
+   */
+  async claimFinalCheck(id: string, at: number): Promise<boolean> {
+    const ref = db.collection('tenders').doc(id);
+    return db.runTransaction(async (tx) => {
+      const t = (await tx.get(ref)).data() as TenderDoc | undefined;
+      if (!t || t.status !== 'internal_review') return false;
+      const cur = t.finalCheck;
+      if (cur?.state === 'running' && at - cur.at < SUPERVISION_RUN_STALE_MS) return false;
+      tx.update(ref, { finalCheck: { state: 'running', at }, updatedAt: at });
+      return true;
+    });
+  },
   /** Move the run's thinking step forward, or close it — only if it is still the same run. */
   async updateSupervisionRun(id: string, runId: string, patch: Partial<Pick<SupervisionRunState, 'step' | 'state'>>): Promise<void> {
     const ref = db.collection('tenders').doc(id);
@@ -378,6 +393,27 @@ export const tendersRepo = {
   /** Start a clean round of approvals (a review begins). */
   async clearApprovals(id: string): Promise<void> {
     await db.collection('tenders').doc(id).update({ approvals: FieldValue.delete() });
+  },
+  /**
+   * Approvals a content change made stale (plan G-D4): removed, and their roles marked as cancelled — in one
+   * write, so "לטיפולך" never shows a removed approval without its reason.
+   */
+  async cancelApprovals(id: string, roles: readonly TeamRole[], at: number): Promise<void> {
+    if (!roles.length) return;
+    const patch: Record<string, unknown> = { updatedAt: now() };
+    for (const r of roles) {
+      patch[`approvals.${r}`] = FieldValue.delete();
+      patch[`cancelledApprovals.${r}`] = at;
+    }
+    await db.collection('tenders').doc(id).update(patch);
+  },
+  /** A role approved again: its "approval cancelled" mark goes. */
+  async clearCancelled(id: string, roles: readonly TeamRole[]): Promise<void> {
+    if (!roles.length) return;
+    await db
+      .collection('tenders')
+      .doc(id)
+      .update(Object.fromEntries(roles.map((r) => [`cancelledApprovals.${r}`, FieldValue.delete()])));
   },
 };
 

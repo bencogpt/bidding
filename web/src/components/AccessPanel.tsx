@@ -21,6 +21,7 @@ export default function AccessPanel({
   suppliers,
   canManage,
   pendingSupplierIds = [],
+  onSelect,
 }: {
   tenderId: string;
   tenderType: TenderType;
@@ -30,6 +31,8 @@ export default function AccessPanel({
   suppliers: SupplierDoc[];
   canManage: boolean;
   pendingSupplierIds?: string[];
+  /** Inside the publish dialog (plan G-D6): report the pick; no save button and no permissions list there. */
+  onSelect?: (supplierIds: string[]) => void;
 }) {
   const { t } = useTranslation();
   const [selSuppliers, setSelSuppliers] = useState<Set<string>>(new Set());
@@ -45,6 +48,10 @@ export default function AccessPanel({
     if (prePublish) setSelSuppliers(new Set(pendingSupplierIds));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingKey, prePublish]);
+  useEffect(() => {
+    onSelect?.([...selSuppliers]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selSuppliers]);
   const [saved, setSaved] = useState(false);
   const [external, setExternal] = useState<ExternalSupplierSuggestion[] | null>(null);
   const [externalStatus, setExternalStatus] = useState<ExternalSearchStatus | null>(null);
@@ -141,6 +148,7 @@ export default function AccessPanel({
             ))}
           </div>
 
+          {!onSelect && (
           <button
             className="btn btn-gold mt-5"
             disabled={busy || !canShareSuppliers || (!prePublish && selSuppliers.size === 0)}
@@ -148,12 +156,14 @@ export default function AccessPanel({
           >
             {prePublish ? t('ws.savePublishSuppliers', { n: selSuppliers.size }) : t('ws.grant')}
           </button>
+          )}
           {saved && <div className="mt-2 text-sm text-green-700">{t('ws.publishSuppliersSaved')}</div>}
           {error && <div className="mt-2 text-sm text-red-600">{error}</div>}
         </div>
       )}
 
       <div className="space-y-4">
+        {!onSelect && (
         <div className="card p-5">
           <h3 className="mb-3 font-semibold">{t('ws.currentAccess')}</h3>
           {access.length === 0 ? (
@@ -169,6 +179,7 @@ export default function AccessPanel({
             </ul>
           )}
         </div>
+        )}
 
         {canManage && (
           <div className="card p-5">

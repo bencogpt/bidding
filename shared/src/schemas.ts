@@ -139,6 +139,28 @@ export const tenderDocSchema = z.object({
   createdAt: z.number(),
   updatedAt: z.number(),
 });
+/** The final check of an approval round (plan G-D3, G-D5). */
+export interface FinalCheckRecord {
+  // changed: the content changed after approvals, which were cancelled; error: the check itself failed (rerun).
+  state: 'running' | 'passed' | 'blocked' | 'ai_unavailable' | 'overridden' | 'changed' | 'error';
+  at: number;
+  runId?: string;
+  /** Fingerprint of the content the check passed (publishing verifies it is unchanged — G-D6). */
+  docHash?: string | null;
+  /** Continuing without the AI check (G-D5): who and why. */
+  by?: string;
+  byName?: string;
+  reason?: string;
+}
+
+/** The four dates of the "לוחות זמנים" tab, yyyy-mm-dd (Israel date). conf is optional. */
+export interface TimelineDates {
+  conf?: string | null;
+  qdead?: string | null;
+  submit?: string | null;
+  valid?: string | null;
+}
+
 export type TenderDoc = z.infer<typeof tenderDocSchema> & {
   lastSupervision?: SupervisionSummary;
   publishedDocHash?: string | null;
@@ -150,7 +172,15 @@ export type TenderDoc = z.infer<typeof tenderDocSchema> & {
   publishedAt?: number; // when the case was published to suppliers
   // Earlier, locked documents of the case, kept when it was reopened (plan B5): the original stays as approved.
   lockedDocuments?: LockedDocument[];
-  lockedAt?: number | null; // the manager's final approval (→ "ready"): the document is locked
+  lockedAt?: number | null; // the final check passed (→ "ready"): the document is locked
+  // "שליחה לאישור" (plan G-D1): procurement's approval, which opens the team's approvals. Cleared by reopening.
+  sentForApproval?: { uid: string; name: string; at: number; docHash?: string } | null;
+  // The latest final check of this approval round (plan G-D3, G-D5).
+  finalCheck?: FinalCheckRecord | null;
+  // Approvals cancelled by a content change after them (plan G-D4): role → when. Cleared when they approve again.
+  cancelledApprovals?: Partial<Record<TeamRole, number>>;
+  // The four dates of the "לוחות זמנים" tab (plan G-D7), as yyyy-mm-dd; submit mirrors submissionDeadline.
+  timeline?: TimelineDates;
   // The supervising agent's current run, shared by everyone viewing the case (plan B1).
   supervisionRun?: SupervisionRunState;
   // Units asked to assign their own contact (plan D3): their home lists the case until the slot is filled.
@@ -341,10 +371,31 @@ export type SetUserRoleInput = z.infer<typeof setUserRoleInput>;
 export const transitionTenderInput = z.object({
   tenderId: z.string(),
   to: tenderStatusSchema,
-  // Manager override of a BLOCK supervisor verdict at publish. Audited.
+  // Kept for older clients; publishing no longer runs the AI review (plan G-D6), so there is nothing to override.
   overrideReason: z.string().trim().min(10).optional(),
+  // Publishing: the suppliers picked in the dialog, saved and published in one step (plan G-D6).
+  supplierIds: z.array(z.string()).max(500).optional(),
 });
 export type TransitionTenderInput = z.infer<typeof transitionTenderInput>;
+
+/** Continue to "פרסום לספקים" without the AI review when it was unavailable at the final check (plan G-D5). */
+export const continueWithoutAiInput = z.object({
+  tenderId: z.string(),
+  reason: z.string().trim().min(10).max(500),
+});
+
+/** Run the final check again after it failed to complete (state "error"). */
+export const rerunFinalCheckInput = z.object({ tenderId: z.string() });
+
+const isoDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .nullable();
+/** The "לוחות זמנים" dates (plan G-D7); null clears a date. Only fields present change. */
+export const setTimelineInput = z.object({
+  tenderId: z.string(),
+  dates: z.object({ conf: isoDate.optional(), qdead: isoDate.optional(), submit: isoDate.optional(), valid: isoDate.optional() }),
+});
 
 export const upsertSupplierInput = z.object({
   id: z.string().optional(),

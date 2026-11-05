@@ -187,15 +187,29 @@ export async function createTemplateDoc(
 }
 
 /** Read a system-owned template Doc's text via the Docs API (drive.file — no public sharing). */
-export async function readTemplateDocText(googleDocId: string): Promise<string> {
+export async function readTemplateDocText(
+  googleDocId: string,
+  suggestions: 'accepted' | 'without' = 'accepted',
+): Promise<string> {
   const { docs } = googleClients();
-  // All tabs, and pending suggestions as if accepted (see docText.ts).
+  // All tabs. Pending suggestions as if accepted (the supervisor checks the text as it would become, see
+  // docText.ts), or left out (the content that was approved: a suggestion doesn't change it — plan G-D4).
   const doc = await docs.documents.get({
     documentId: googleDocId,
     includeTabsContent: true,
-    suggestionsViewMode: 'PREVIEW_SUGGESTIONS_ACCEPTED',
+    suggestionsViewMode: suggestions === 'accepted' ? 'PREVIEW_SUGGESTIONS_ACCEPTED' : 'PREVIEW_WITHOUT_SUGGESTIONS',
   });
   return docPlainText(doc.data);
+}
+
+/**
+ * The document's content as it stands, without pending suggestions: what an approval fingerprints (plan G-D4).
+ * Comments never appear in the text. Dev mode has no suggestions: the stored HTML.
+ */
+export async function readTenderContentText(tender: TenderDoc): Promise<string> {
+  if (!realMode()) return readTenderDocText(tender);
+  if (!tender.googleDocId) throw new Error('Tender has no googleDocId to read.');
+  return readTemplateDocText(tender.googleDocId, 'without');
 }
 
 /**
@@ -453,6 +467,28 @@ export async function replaceInDoc(
   const { docs } = googleClients();
   const res = await docs.documents.batchUpdate({ documentId: googleDocId, requestBody: { requests } });
   return (res.data.replies ?? []).map((r) => r.replaceAllText?.occurrencesChanged ?? 0);
+}
+
+/**
+ * Replace a value in an existing document only when it appears exactly once (plan G-D7: a timeline date
+ * changed after the document was created). Anything else is left for the user to edit in Google Docs: the
+ * same date may legitimately appear for two fields. Returns whether the document changed.
+ */
+export async function replaceOnceInDocument(tender: TenderDoc, from: string, to: string): Promise<boolean> {
+  if (!from || from === to) return false;
+  const count = (s: string) => s.split(from).length - 1;
+  if (!realMode()) {
+    const file = storage.bucket().file(htmlPath(tender.id));
+    const [buf] = await file.download();
+    const html = buf.toString('utf8');
+    if (count(html) !== 1) return false;
+    await file.save(html.replace(from, to), { contentType: 'text/html' });
+    return true;
+  }
+  if (!tender.googleDocId) return false;
+  if (count(await readTenderContentText(tender)) !== 1) return false;
+  const [n] = await replaceInDoc(tender.googleDocId, [{ replaceAllText: { containsText: { text: from, matchCase: true }, replaceText: to } }]);
+  return n === 1;
 }
 
 /** Remove a user's Google Docs permission (when they leave the case team). Best-effort. */

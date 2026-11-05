@@ -80,7 +80,7 @@ export function activitySentence(e: ActivityEntry, labelOf: (key: string) => str
       return `${who} השאיר ${count(n, 'ממצא אחד', 'ממצאים')} כמו שהם`;
     }
     case 'approve_tender':
-      return `אישור סופי: ${who} · ${roleHe(e.newState)}`;
+      return `אישור מסמך: ${who} · ${roleHe(e.newState)}`; // v22 (pack 2.6.8 held)
     case 'withdraw_approval':
       return `האישור בוטל: ${who} · ${roleHe(e.newState)}`;
     case 'approve_on_behalf': {
@@ -103,20 +103,36 @@ export function activitySentence(e: ActivityEntry, labelOf: (key: string) => str
       return `${who} הסיר את השיבוץ של ${roleHe(e.newState)}`;
     case 'suppliers_selected':
       return `${who} בחר ספקים לפרסום${e.newState ? ` (${e.newState})` : ''}`;
+    // The final check (plan G-D3–G-D5), in v22's chat wording (pack 2.6.9 held).
+    case 'final_check_started':
+      return 'כל הרביעייה אישרה. הסוכן המפקח מבצע בדיקה סופית לפני הפרסום לספקים';
+    case 'final_check_blocked':
+      return 'הבדיקה הסופית מצאה ממצא חוסם. המכרז לא עבר לפרסום לספקים';
+    case 'final_check_ai_unavailable':
+      return 'הבדיקה הסופית לא הושלמה: בדיקת ה-AI אינה זמינה'; // new
+    case 'final_check_override':
+      return `${who} המשיך לפרסום לספקים בלי בדיקת AI · סיבה: ${e.detail ?? ''}`; // new
+    case 'approvals_cancelled':
+      return `המסמך השתנה אחרי האישור, ולכן בוטלו האישורים של: ${(e.newState ?? '').split(',').map(roleHe).join(', ')}`; // new
     case 'status_change':
       switch (e.newState) {
+        case 'internal_review':
+          return `נשלח לאישור: ${who} · ${ROLE_HE.manager}`;
         case 'ready':
-          return `אישור סופי: ${who} · ${ROLE_HE.manager}. המכרז ננעל ומוכן לפרסום`;
+          return 'הבדיקה הסופית עברה: המסמך עדיין תקין. הרכש יכול לפרסם לספקים';
         case 'published':
-          return `${who} פרסם את הבל"מ לספקים`;
+          return `פורסם לספקים: ${who} · ${ROLE_HE.manager}`;
         case 'responses':
           return 'התקבלה הצעה ראשונה: הבל"מ עבר לשלב ההצעות';
         case 'evaluated':
           return `${who} הפעיל את השוואת ההצעות`;
         case 'awarded':
           return `${who} הכריז על זוכה`;
+        case 'draft':
+          // Taking the send back (v22 cancelApproval for procurement); reopening has a sentence of its own.
+          return e.prevState === 'internal_review' ? `${who} ביטל את השליחה לאישור` : null; // new
         default:
-          return null; // draft / internal_review: reopen and the older review step have sentences of their own
+          return null;
       }
     default:
       return null;

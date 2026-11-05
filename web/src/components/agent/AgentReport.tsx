@@ -12,6 +12,7 @@ import {
   type TenderDoc,
 } from '@obms/shared';
 import { useTenderInternal } from '../../lib/hooks';
+import AgentAvatar from './AgentAvatar';
 import ThinkingBox, { usePacedStep } from './ThinkingBox';
 import { AgentChip, SeverityChip } from './Chips';
 
@@ -30,6 +31,7 @@ export default function AgentReport({
   view,
   agent,
   serverStep,
+  final = false,
   on,
   creating,
   lastAt,
@@ -46,6 +48,8 @@ export default function AgentReport({
   view: FindingsView;
   agent: AgentRunState;
   serverStep?: number | null;
+  /** The final check before the lock is running (plan G-D3). */
+  final?: boolean;
   on: 'draft' | 'document';
   creating: boolean;
   lastAt?: number | null;
@@ -58,7 +62,7 @@ export default function AgentReport({
   onEditField: (paramKey: string) => void;
 }) {
   const [filter, setFilter] = useState<Filter>('');
-  const step = usePacedStep(agent === 'running', serverStep);
+  const step = usePacedStep(agent === 'running', final ? null : serverStep, final);
   const { provenance } = useTenderInternal(tender.id);
   const where = on === 'draft' ? 'בטיוטה' : 'במסמך';
   const chip = agentChip(agent, view);
@@ -101,12 +105,22 @@ export default function AgentReport({
   return (
     <div className="border px-6 py-5" style={{ background: 'var(--panel)', borderColor: 'var(--line)' }}>
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h2 className="m-0 flex items-center gap-2 text-lg font-semibold">
-            דוח הסוכן המפקח <AgentChip tone={chip.tone}>{chip.label}</AgentChip>
-          </h2>
-          <div className="mt-1 text-[13px]" style={{ color: 'var(--muted)' }}>
-            בודק שהמסמך נוצר מהתבנית הנכונה, עם המיומנויות הנדרשות, וללא ערכים שאין להם מקור. ממצא חוסם מונע פרסום לספקים.
+        {/* v22 renderAgent: the agent's 44px avatar (a halo while it checks) and a one-line state. */}
+        <div className="flex items-center gap-3">
+          <AgentAvatar size={44} busy={agent === 'running'} />
+          <div>
+            <h2 className="m-0 flex items-center gap-2 text-lg font-semibold">
+              דוח הסוכן המפקח <AgentChip tone={chip.tone}>{chip.label}</AgentChip>
+            </h2>
+            <div className="mt-1 text-[13px]" style={{ color: 'var(--muted)' }}>
+              {agent === 'running'
+                ? 'בודק…'
+                : agent === 'none'
+                  ? 'טרם נבדק'
+                  : view.open.length
+                    ? `${view.open.length} ממצאים פתוחים`
+                    : 'אין ממצאים פתוחים'}
+            </div>
           </div>
         </div>
         <button type="button" className="btn btn-primary" disabled={disabled} onClick={onRun}>
@@ -123,7 +137,7 @@ export default function AgentReport({
           </button>
         </div>
       )}
-      {agent === 'running' && <ThinkingBox on={on} step={step} />}
+      {agent === 'running' && <ThinkingBox on={on} step={step} final={final} />}
       {agent === 'done' && (
         <div className="mt-4 space-y-3">
           <div className="text-xs" style={{ color: 'var(--muted)' }}>

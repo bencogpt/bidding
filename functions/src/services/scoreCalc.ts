@@ -140,7 +140,9 @@ export function rawMetrics(i: ScoreInput): Partial<Record<ScoreMetricKey | RawEx
   if (runs.length) {
     m.firstCheck = VERDICT_CODE[runs[0].verdict];
     m.blockRuns = runs.filter((r) => r.verdict === 'BLOCK' && beforePublish(r.at)).length;
-    m.overrides = i.audit.filter((a) => a.action === 'supervisor_override').length;
+    // A conscious bypass of a check: the publish-gate override (re-publishing an edited document), and
+    // continuing without the AI review at the final check (plan G-D5).
+    m.overrides = i.audit.filter((a) => a.action === 'supervisor_override' || a.action === 'final_check_override').length;
     if (publishedAt !== null) {
       const gate = runs.filter((r) => r.stage === 'prepublish' && r.at <= publishedAt).pop();
       if (gate) m.blockersAtPublish = gate.findings.filter((f) => f.severity === 'block').length;
