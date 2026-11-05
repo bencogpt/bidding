@@ -278,15 +278,25 @@ export interface SupervisionSummary {
   dataHash?: string | null;
 }
 
+/** The checks that decide whether suppliers see the document: publishing it, and re-publishing an edited one. */
+export const PUBLISH_GATE_STAGES: readonly SupervisionStage[] = ['prepublish', 'refresh'];
+
 /**
  * Only hard facts block: a leftover {{placeholder}} or internal flag, a confidential-value leak, the wrong
  * template, an unreadable document — each marked `hard` by the rule that found it. Every other blocking
  * finding (AI review, legal sections, unsourced values, …) becomes a warning: the manager decides.
+ *
+ * Fail-closed at the publish gate: there, an AI review that could not run (`SUPERVISOR_UNAVAILABLE`) keeps
+ * blocking, so an unchecked document reaches suppliers only through a re-check or the manager's audited
+ * override. In the draft and during approvals it is a warning, as its text says.
  */
-export function applySeverityPolicy<F extends Pick<SupervisionFinding, 'severity' | 'hard' | 'source'>>(findings: F[]): F[] {
-  return findings.map((f) =>
-    f.severity === 'block' && !(f.hard && f.source === 'rules') ? { ...f, severity: 'warn' as const } : f,
-  );
+export function applySeverityPolicy<F extends Pick<SupervisionFinding, 'severity' | 'hard' | 'source' | 'code'>>(
+  findings: F[],
+  stage?: SupervisionStage,
+): F[] {
+  const gate = stage !== undefined && PUBLISH_GATE_STAGES.includes(stage);
+  const keepsBlocking = (f: F) => (f.hard && f.source === 'rules') || (gate && f.code === 'SUPERVISOR_UNAVAILABLE');
+  return findings.map((f) => (f.severity === 'block' && !keepsBlocking(f) ? { ...f, severity: 'warn' as const } : f));
 }
 
 export function verdictOf(findings: Pick<SupervisionFinding, 'severity'>[]): SupervisionVerdict {

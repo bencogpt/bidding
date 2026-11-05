@@ -62,6 +62,7 @@ import {
   ROLE_LABELS_HE,
   isSupplierVisible,
   canTransition,
+  manualTransitionDenial,
   templateIdFor,
   toG9Flag,
   parseDocId,
@@ -1078,6 +1079,10 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
   const input = parseInput(transitionTenderInput, req.data);
   const current = await tendersRepo.get(input.tenderId);
   if (!current) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  // Only the workflow up to publication is the manager's to move; responses, evaluated and awarded follow from
+  // their own actions (a submission, the comparison, choosing the winner).
+  const denial = manualTransitionDenial(current.status, input.to);
+  if (denial) throw new HttpsError('failed-precondition', denial);
 
   // Internal review happens in the document — it must exist (draft-first).
   if (input.to === 'internal_review' && canTransition(current.status, 'internal_review') && !hasDocument(current)) {
@@ -1845,14 +1850,23 @@ export const awardTender = onCall(async (req) => {
   const input = parseInput(awardTenderInput, req.data);
   const tender = await tendersRepo.get(input.tenderId);
   if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  // Everything is checked before anything is written: a refused award leaves no winner behind.
+  if (tender.status === 'awarded') throw new HttpsError('failed-precondition', 'כבר נבחר זוכה במכרז הזה.');
+  if (!canTransition(tender.status, 'awarded')) {
+    throw new HttpsError('failed-precondition', 'ניתן לבחור זוכה רק לאחר השוואת ההצעות.');
+  }
   const supplier = await suppliersRepo.get(input.supplierId);
   if (!supplier) throw new HttpsError('not-found', 'ספק לא נמצא.');
+  // The winner is one of the bidders.
+  if (!(await submissionsRepo.get(input.tenderId, input.supplierId))) {
+    throw new HttpsError('failed-precondition', 'הספק לא הגיש הצעה במכרז הזה.');
+  }
 
-  await tendersRepo.update(input.tenderId, {
+  // The winner and the status are written together, in the transaction that checks the move once more.
+  await transition(caller, input.tenderId, 'awarded', {
     awardedSupplierId: input.supplierId,
     awardDate: now(),
   });
-  await transition(caller, input.tenderId, 'awarded');
   await auditRepo.append({
     entityType: 'tender',
     entityId: input.tenderId,
