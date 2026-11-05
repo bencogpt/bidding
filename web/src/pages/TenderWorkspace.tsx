@@ -42,8 +42,7 @@ import {
   FLOW_HE,
   missingRoles,
   missingTimelineDates,
-  sendDenial,
-  SEND_DENIAL_HE,
+  sendDenialHe,
   type TeamRole,
   type AgentRunState,
   type ApprovalRowAction,
@@ -227,16 +226,13 @@ export default function TenderWorkspace() {
     finalCheck: finalCheckViewOf(tender),
     sendBlockedTitle:
       tender.status === 'draft' && ds === 'doc'
-        ? (() => {
-            const why = sendDenial({
-              status: tender.status,
-              hasDocument: true,
-              missingRoles: missingRoles(requiredRoles, tender.team),
-              blockers: fv.blocking.length,
-              missingDates: missingTimelineDates(tender),
-            });
-            return why ? SEND_DENIAL_HE[why] : null;
-          })()
+        ? sendDenialHe({
+            status: tender.status,
+            hasDocument: true,
+            missingRoles: missingRoles(requiredRoles, tender.team),
+            blockers: fv.blocking.length,
+            missingDates: missingTimelineDates(tender),
+          })
         : null,
     cancelled: Object.keys(tender.cancelledApprovals ?? {}) as TeamRole[],
   };
@@ -550,6 +546,8 @@ export default function TenderWorkspace() {
           fv={fv}
           rows={av.rows}
           onTab={setTab}
+          // The manager fills or changes the team until the send (the access tab is hidden — plan D9).
+          teamUsers={isManager && tender.status === 'draft' ? users : undefined}
         />
       )}
       {shown === 'document' && (

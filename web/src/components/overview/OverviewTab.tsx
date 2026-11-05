@@ -1,6 +1,8 @@
-import type { CSSProperties } from 'react';
+import { useState, type CSSProperties } from 'react';
 import {
   NEXT_ACTION_HE,
+  REQUIRED_ROLES_BY_TYPE,
+  missingRoles,
   agentChip,
   progressPct,
   type AgentRunState,
@@ -9,10 +11,12 @@ import {
   type FindingsView,
   type TemplateDoc,
   type TenderDoc,
+  type UserDoc,
   type WorkspaceTabKey,
 } from '@obms/shared';
 import Avatar from '../Avatar';
 import DatesCard from '../DatesCard';
+import TeamPanel from '../TeamPanel';
 import { AgentChip, ApprovalTag } from '../agent/Chips';
 
 /** The agent's state in one line, on the draft and on the document (prototype draftStrip / agentStrip). */
@@ -45,6 +49,7 @@ export default function OverviewTab({
   fv,
   rows,
   onTab,
+  teamUsers,
 }: {
   tender: TenderDoc;
   template: TemplateDoc | null;
@@ -54,9 +59,16 @@ export default function OverviewTab({
   fv: FindingsView;
   rows: ApprovalRow[];
   onTab: (tab: WorkspaceTabKey) => void;
+  /** Set when the signed-in manager may change the team (until the send): the users to pick from. */
+  teamUsers?: UserDoc[];
 }) {
   const chip = agentChip(agent, fv);
   const pct = progressPct(stageIdx, ds);
+  // The quartet card turns into the team editor; it opens by itself while a required role is empty.
+  const [editingTeam, setEditingTeam] = useState(
+    () => missingRoles(tender.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[tender.type], tender.team).length > 0,
+  );
+  const editing = !!teamUsers && editingTeam;
   // While drafting, the next step is the agent's decisions and then the document (prototype line 2710).
   const next =
     ds !== 'doc'
@@ -118,10 +130,18 @@ export default function OverviewTab({
         </div>
 
         <div className={CARD} style={cardStyle}>
-          <h3 className="m-0 mb-3.5 text-xs font-semibold" style={{ color: 'var(--muted)' }}>
-            הרביעייה
-          </h3>
-          {rows.map((r) => (
+          <div className="mb-3.5 flex items-center justify-between gap-2">
+            <h3 className="m-0 text-xs font-semibold" style={{ color: 'var(--muted)' }}>
+              הרביעייה
+            </h3>
+            {teamUsers && (
+              <button type="button" className="btn btn-sm" onClick={() => setEditingTeam(!editing)}>
+                {editing ? 'סיום' : 'שיבוץ'}
+              </button>
+            )}
+          </div>
+          {editing && <TeamPanel tender={tender} users={teamUsers!} />}
+          {!editing && rows.map((r) => (
             <div
               key={r.role}
               className="flex items-center justify-between gap-2 py-1.5 last:border-0"
