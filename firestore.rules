@@ -107,6 +107,24 @@ service cloud.firestore {
           && request.resource.data.text.size() <= 4000;
         allow update, delete: if false;
       }
+      // "אינפוטים" on the document after it was sent for approval (plan G-D10): comments of the case team,
+      // optionally about a section. Stored in the system, never as Google Docs comments. Immutable like the
+      // chat; identity and time are enforced, not client-supplied.
+      match /inputs/{inputId} {
+        allow read: if isCaseMember(tenderId);
+        allow create: if isCaseMember(tenderId)
+          && request.resource.data.keys().hasOnly(['id', 'uid', 'name', 'role', 'text', 'section', 'createdAt'])
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.role == role()
+          && request.resource.data.id == inputId
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.name is string
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 4000
+          && (request.resource.data.section == null || (request.resource.data.section is string && request.resource.data.section.size() <= 20));
+        allow update, delete: if false;
+      }
       // per-user read marker for the chat's unread count
       match /chatReads/{uid} {
         allow read: if isCaseMember(tenderId) && uid == request.auth.uid;

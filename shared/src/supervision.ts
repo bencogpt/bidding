@@ -160,7 +160,7 @@ export interface TenderProvenance {
 export type FindingSeverity = 'block' | 'warn' | 'info';
 export type SupervisionVerdict = 'PASS' | 'WARN' | 'BLOCK';
 // 'edit': the rules re-checked right after a draft edit (no AI; the last AI findings carry over).
-export type SupervisionStage = 'created' | 'review' | 'ready' | 'prepublish' | 'refresh' | 'manual' | 'edit';
+export type SupervisionStage = 'created' | 'review' | 'ready' | 'prepublish' | 'refresh' | 'manual' | 'edit' | 'final';
 
 export type FindingCode =
   // template
@@ -273,13 +273,18 @@ export interface SupervisionSummary {
   verdict: SupervisionVerdict;
   stage: SupervisionStage;
   blockers: number;
+  /** Warnings of the run (older summaries don't have it). */
+  warnings?: number;
   at: number;
   basis?: 'draft' | 'document';
   dataHash?: string | null;
 }
 
-/** The checks that decide whether suppliers see the document: publishing it, and re-publishing an edited one. */
-export const PUBLISH_GATE_STAGES: readonly SupervisionStage[] = ['prepublish', 'refresh'];
+/**
+ * The checks that decide whether suppliers see the document: the final check before the lock (plan G-D3),
+ * publishing, and re-publishing an edited one.
+ */
+export const PUBLISH_GATE_STAGES: readonly SupervisionStage[] = ['final', 'prepublish', 'refresh'];
 
 /**
  * Only hard facts block: a leftover {{placeholder}} or internal flag, a confidential-value leak, the wrong

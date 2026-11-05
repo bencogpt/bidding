@@ -2,7 +2,6 @@
 // Run via:  firebase emulators:exec --only auth,firestore,functions,storage \
 //             "npm run seed && node functions/lib/test/e2e.js"
 import assert from 'node:assert/strict';
-import { REQUIRE_APPROVALS } from '@obms/shared';
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
@@ -70,6 +69,29 @@ async function waitForCheck(tenderId: string, basis: 'draft' | 'document', timeo
       | undefined;
     if (t?.lastSupervision?.basis === basis && t.supervisionRun?.state !== 'running') return t.lastSupervision;
     if (Date.now() > until) throw new Error(`no ${basis} check of ${tenderId} within ${timeoutMs} ms`);
+    await new Promise((r) => setTimeout(r, 400));
+  }
+}
+
+// The refusal's message, or null when the call went through.
+async function refusalMsg(fn: () => Promise<unknown>): Promise<string | null> {
+  try {
+    await fn();
+    return null;
+  } catch (e) {
+    return (e as Error).message;
+  }
+}
+
+// The final check runs by itself after the last approval (plan G-D3): wait until the case reaches `status`.
+async function waitForStatus(tenderId: string, status: string, timeoutMs = 120_000) {
+  const until = Date.now() + timeoutMs;
+  for (;;) {
+    const t = (await getDoc(doc(db, 'tenders', tenderId))).data() as
+      | { status: string; finalCheck?: { state: string; docHash?: string }; lockedAt?: number }
+      | undefined;
+    if (t?.status === status) return t;
+    if (Date.now() > until) throw new Error(`${tenderId} did not reach ${status} (now ${t?.status}, final check ${t?.finalCheck?.state})`);
     await new Promise((r) => setTimeout(r, 400));
   }
 }
@@ -222,13 +244,11 @@ async function main() {
 
   // Draft-first: the case has no document until the manager creates it after a clean check.
   assert.equal(tdoc.data()!.documentStatus, 'none', 'a new case is a draft without a document');
-  let noDocReview = false;
-  try {
-    await call('transitionTender')({ tenderId, to: 'internal_review' });
-  } catch (e) {
-    noDocReview = /יש ליצור את מסמך המכרז/.test((e as Error).message);
-  }
-  assert.ok(noDocReview, 'review is refused before the document exists');
+  assert.match(
+    (await refusalMsg(() => call('transitionTender')({ tenderId, to: 'internal_review' }))) ?? '',
+    /יש ליצור את המסמך לפני השליחה לאישור/,
+    'the send is refused before the document exists',
+  );
   await call('generateDocument')({ tenderId });
   await waitForCheck(tenderId, 'document'); // the server checks the new document by itself
   const generated = (await getDoc(doc(db, 'tenders', tenderId))).data()!;
@@ -243,19 +263,36 @@ async function main() {
   assert.ok(twice, 'the document is created only once');
   console.log('✓ draft-first: document created only after the inspector checked the draft');
 
-  // Approvals open as soon as the document exists — no "send for approval" step; the manager acts last
-  // (plan D1). With REQUIRE_APPROVALS off, an early "ready" would succeed, so only probe the refusal
-  // when the gate is on. The approvals themselves are always exercised.
-  if (REQUIRE_APPROVALS) {
-    let notApproved = false;
-    try {
-      await call('transitionTender')({ tenderId, to: 'ready' });
-    } catch (e) {
-      notApproved = /ממתין לאישור/.test((e as Error).message);
-    }
-    assert.ok(notApproved, 'final approval is refused until every role has approved');
-  }
-  assert.ok(await refusedAs(tenderId, 'legal', /המשפטי מאשר אחרי/), 'legal approves after requester and finance (D1a)');
+  // The v22 flow (plan Phase G). Nobody approves before procurement sends (G-D1).
+  assert.ok(await refusedAs(tenderId, 'requester', /רק אחרי שהמסמך נשלח לאישור/), 'no approval before the send');
+  // The send waits for the three required dates (G-D7); a Friday is refused (G-D9).
+  assert.match(
+    (await refusalMsg(() => call('transitionTender')({ tenderId, to: 'internal_review' }))) ?? '',
+    /תאריכי החובה/,
+    'the send waits for the required dates',
+  );
+  assert.match(
+    (await refusalMsg(() => call('setTimeline')({ tenderId, dates: { qdead: '2026-12-25' } }))) ?? '',
+    /סוף שבוע \/ חג/,
+    'a Friday is refused',
+  );
+  const dates = { qdead: '2026-12-01', submit: '2026-12-21', valid: '2027-02-22' }; // Tue, Mon, Mon
+  await call('setTimeline')({ tenderId, dates });
+  const dated = (await getDoc(doc(db, 'tenders', tenderId))).data()!;
+  assert.deepEqual(dated.timeline, dates, 'the dates are kept');
+  assert.ok(dated.submissionDeadline, 'the submission date is the deadline');
+  await call('transitionTender')({ tenderId, to: 'internal_review' });
+  const sentDoc = (await getDoc(doc(db, 'tenders', tenderId))).data()!;
+  assert.equal(sentDoc.status, 'internal_review', 'sent for approval');
+  assert.ok(sentDoc.sentForApproval?.docHash, 'with the fingerprint of the content it sent');
+  assert.match(
+    (await refusalMsg(() => call('setTimeline')({ tenderId, dates: { conf: '2026-11-17' } }))) ?? '',
+    /עד השליחה לאישור/,
+    'the dates are fixed once sent',
+  );
+  console.log('✓ send: refused before the document and the required dates; nobody approves before it');
+
+  assert.ok(await refusedAs(tenderId, 'legal', /המשפטי מאשר אחרי/), 'legal approves after requester and finance');
   await approveAs(tenderId, ['requester']);
   // The manager approves on finance's behalf (D1d): a reason is required; it counts like finance's own.
   let noReason = false;
@@ -266,17 +303,50 @@ async function main() {
   }
   assert.ok(noReason, 'approving on behalf needs a reason');
   await call('approveTender')({ tenderId, approve: true, onBehalfOf: 'finance', reason: 'אושר בטלפון, איש הכספים בחופשה' });
+  const behalfChat = await getDocs(collection(db, 'tenders', tenderId, 'chat'));
+  assert.ok(
+    behalfChat.docs.some((d) => d.data().uid === 'system' && /אישור בשם/.test(d.data().text)),
+    'the participant is told in the case chat (UX 1.1.C)',
+  );
+  const approvedTwo = (await getDoc(doc(db, 'tenders', tenderId))).data()!.approvals ?? {};
+  assert.equal(approvedTwo.finance.onBehalf, true, "finance's approval was given on its behalf");
+  assert.equal(approvedTwo.finance.uid, goodsTeam.finance, 'an approval on behalf stands for the slot holder');
+  assert.ok(approvedTwo.requester.docHash, 'an approval records the content it approved');
+
+  // A content change after approvals cancels them (G-D4). Dev mode keeps the document as HTML in Storage.
+  const goodsFile = adminStorage(adminApp).bucket('biding-system.firebasestorage.app').file(`tenders/${tenderId}/document.html`);
+  const [goodsHtml] = await goodsFile.download();
+  await goodsFile.save(goodsHtml.toString('utf8').replace('</body>', '<p>תוספת אחרי האישורים</p></body>'), {
+    contentType: 'text/html',
+  });
+  assert.ok(await refusedAs(tenderId, 'legal', /המשפטי מאשר אחרי/), 'the change cancelled the earlier approvals: legal waits again');
+  const afterChange = (await getDoc(doc(db, 'tenders', tenderId))).data()!;
+  assert.deepEqual(Object.keys(afterChange.approvals ?? {}), [], 'the approvals given before the change are cancelled');
+  assert.deepEqual(Object.keys(afterChange.cancelledApprovals ?? {}).sort(), ['finance', 'requester'], 'and marked, for "לטיפולך"');
+  await approveAs(tenderId, ['requester', 'finance']);
+  assert.deepEqual(
+    Object.keys((await getDoc(doc(db, 'tenders', tenderId))).data()!.cancelledApprovals ?? {}),
+    [],
+    'approving again clears the mark',
+  );
+  console.log('✓ approvals: legal last, on behalf with a reason and a chat notice; a content change cancels earlier approvals');
+
+  // The last approval starts the final check (G-D3): it passes, then the case locks.
   await approveAs(tenderId, ['legal']);
-  const approved = (await getDoc(doc(db, 'tenders', tenderId))).data()!.approvals ?? {};
-  assert.deepEqual(Object.keys(approved).sort(), ['finance', 'legal', 'requester'], 'each role recorded its approval');
-  assert.equal(approved.finance.onBehalf, true, "finance's approval was given on its behalf");
-  assert.equal(approved.finance.uid, goodsTeam.finance, 'an approval on behalf stands for the slot holder');
-  await call('transitionTender')({ tenderId, to: 'ready' });
-  const locked = (await getDoc(doc(db, 'tenders', tenderId))).data()!;
-  assert.equal(locked.status, 'ready', "the manager's final approval goes straight from the draft to ready");
-  assert.ok(locked.lockedAt, 'and locks the case');
-  console.log('✓ approvals: team first (legal after requester and finance), on behalf with a reason, manager last');
-  // Reopen a locked case (plan B5): a new editable copy, clean approvals, the locked original kept.
+  const locked = await waitForStatus(tenderId, 'ready');
+  assert.equal(locked.finalCheck?.state, 'passed', 'the final check passed');
+  assert.ok(locked.finalCheck?.docHash, 'with the fingerprint publishing compares to (G-D6)');
+  assert.ok(locked.lockedAt, 'and locked the case');
+  const finalAudit = await getDocs(query(collection(db, 'auditLog'), where('tenderId', '==', tenderId)));
+  assert.ok(finalAudit.docs.some((d) => d.data().action === 'final_check_started'), 'the final check is in the activity');
+  assert.match(
+    (await refusalMsg(() => call('transitionTender')({ tenderId, to: 'draft' }))) ?? '',
+    /פתיחה מחדש/,
+    'a locked case goes back only by reopening',
+  );
+  console.log('✓ final check: runs after the last approval, before the lock; passed → locked, stage "פרסום לספקים"');
+
+  // Reopen a locked case (plan B5): a new editable copy, back to the draft (not sent), the locked original kept.
   await signOut(auth);
   await login('requester@obms.test');
   let reopenDenied = false;
@@ -290,14 +360,14 @@ async function main() {
   await login('manager@obms.test');
   await call('reopenTender')({ tenderId });
   const reopened = (await getDoc(doc(db, 'tenders', tenderId))).data()!;
-  assert.equal(reopened.status, 'internal_review', 'reopened: back to writing');
+  assert.equal(reopened.status, 'draft', 'reopened: back to the draft, not sent');
+  assert.equal(reopened.sentForApproval, null, 'the send is cleared');
   assert.equal(reopened.lockedAt, null, 'unlocked');
   assert.deepEqual(Object.keys(reopened.approvals ?? {}), [], 'a clean round of approvals');
   assert.equal(reopened.lockedDocuments?.length, 1, 'the locked original is kept');
   assert.notEqual(reopened.docExportPath, reopened.lockedDocuments[0].docExportPath, 'with a new document to edit');
   assert.equal(reopened.lockedDocuments[0].approvals.legal.uid, goodsTeam.legal, 'and the approvals it was locked with');
-  const reopenedCheck = await waitForCheck(tenderId, 'document');
-  assert.ok(reopenedCheck, 'the agent checked the new document');
+  assert.ok(await waitForCheck(tenderId, 'document'), 'the agent checked the new document');
   let reopenTwice = false;
   try {
     await call('reopenTender')({ tenderId });
@@ -305,32 +375,27 @@ async function main() {
     reopenTwice = true;
   }
   assert.ok(reopenTwice, 'only a locked document can be reopened');
-  // …approved and locked again, ready to publish.
+  // …sent, approved and locked again, ready to publish.
+  await call('transitionTender')({ tenderId, to: 'internal_review' });
   await approveAs(tenderId, ['requester', 'finance', 'legal']);
-  await call('transitionTender')({ tenderId, to: 'ready' });
-  assert.equal((await getDoc(doc(db, 'tenders', tenderId))).data()!.status, 'ready', 'locked again');
-  console.log('✓ reopen: new copy, clean approvals, locked original kept, locked again');
-  // Publishing goes to the suppliers the manager picked beforehand — at least one.
-  let noSuppliers = false;
-  try {
-    await call('transitionTender')({ tenderId, to: 'published' });
-  } catch (e) {
-    noSuppliers = /לפחות ספק אחד/.test((e as Error).message);
-  }
-  assert.ok(noSuppliers, 'publish is refused until a supplier is picked');
-  await call('setPendingSuppliers')({ tenderId, supplierIds: ['sup_aegis'] });
-  const pick = await getDoc(doc(db, 'tenders', tenderId, 'internal', 'suppliers'));
-  assert.deepEqual(pick.data()?.supplierIds, ['sup_aegis'], 'the pick is kept internally');
+  await waitForStatus(tenderId, 'ready');
+  console.log('✓ reopen: new copy, back to the draft, locked original kept; sent and locked again');
+
+  // Publishing (G-D6): one call saves the suppliers and publishes; no second AI review.
+  assert.match(
+    (await refusalMsg(() => call('transitionTender')({ tenderId, to: 'published' }))) ?? '',
+    /לפחות ספק אחד/,
+    'publish is refused until a supplier is picked',
+  );
   const preAccess = await getDocs(collection(db, 'tenders', tenderId, 'access'));
   assert.ok(!preAccess.docs.some((d) => d.id === 'sup_aegis'), 'no supplier access before publication');
-  const published = (await call('transitionTender')({ tenderId, to: 'published' })) as {
-    data: { verdict: string };
-  };
-  assert.notEqual(published.data.verdict, 'BLOCK', 'clean tender passes the supervisor gate');
+  await call('transitionTender')({ tenderId, to: 'published', supplierIds: ['sup_aegis'] });
   const publishedDoc = (await getDoc(doc(db, 'tenders', tenderId))).data()!;
   assert.equal(publishedDoc.status, 'published');
   assert.ok(publishedDoc.publishedAt, 'the publication date is recorded (overview: פרסום לספקים)');
-  console.log(`✓ supervisor: provenance + G6 split + gate passed (${published.data.verdict})`);
+  const pick = await getDoc(doc(db, 'tenders', tenderId, 'internal', 'suppliers'));
+  assert.deepEqual(pick.data()?.supplierIds ?? [], [], 'the pick is used up by the publication');
+  console.log('✓ publish: suppliers saved and published in one step');
 
   // An empty field of the draft is one warning (plan D7): the document can still be created, the field
   // printed as a blank line. The optional "milestones" field is left empty.
@@ -375,13 +440,11 @@ async function main() {
   const [html] = await docFile.download();
   const cleanHtml = html.toString('utf8');
   const withPlaceholder = cleanHtml.replace('</body>', '<p>{{milestones_appendix}}</p></body>');
-  let gateRefused = false;
-  try {
-    await call('transitionTender')({ tenderId: bad.data.id, to: 'internal_review' });
-  } catch (e) {
-    gateRefused = /יש לשבץ/.test((e as Error).message);
-  }
-  assert.ok(gateRefused, 'review is refused while a required role is empty');
+  assert.match(
+    (await refusalMsg(() => call('transitionTender')({ tenderId: bad.data.id, to: 'internal_review' }))) ?? '',
+    /יש לשבץ/,
+    'the send is refused while a required role is empty',
+  );
   // Finance assigns its own contact from its home (plan D3): the case waits in the unit queue until then.
   await signOut(auth);
   await login('finance@obms.test');
@@ -405,9 +468,10 @@ async function main() {
   console.log('✓ unit contacts: finance assigned its own contact from its queue (D3)');
   await call('assignTeamMember')({ tenderId: bad.data.id, role: 'finance', uid: goodsTeam.finance });
   await call('assignTeamMember')({ tenderId: bad.data.id, role: 'security', uid: uidOf('security') });
+  await call('setTimeline')({ tenderId: bad.data.id, dates });
   await call('transitionTender')({ tenderId: bad.data.id, to: 'internal_review' });
-  console.log('✓ review gate: refused with an empty slot, passes once the team is complete');
-  // A blocking finding on the document stops approvals ("ממצא חוסם מונע אישור סופי ופרסום", plan D1).
+  console.log('✓ send gate: refused with an empty slot, passes once the team is complete');
+  // A blocking finding on the document stops approvals ("ממצא חוסם מונע שליחה לאישור ופרסום").
   await docFile.save(withPlaceholder, { contentType: 'text/html' });
   const blockedCheck = (await call('runSupervision')({ tenderId: bad.data.id })) as { data: { verdict: string } };
   assert.equal(blockedCheck.data.verdict, 'BLOCK', 'the leftover placeholder blocks the document');
@@ -442,51 +506,53 @@ async function main() {
   await signOut(auth);
   await login('manager@obms.test');
   console.log('✓ versions: summaries, who, view and compare; internal case members only');
-  // Security is assigned but doesn't block: the final approval goes ahead without it (plan D2).
+  // Security is assigned but doesn't block: the final check runs without its approval (plan D2).
   await approveAs(bad.data.id, ['requester', 'finance', 'legal']);
-  await call('transitionTender')({ tenderId: bad.data.id, to: 'ready' });
-  console.log('✓ approvals: information security does not block the final approval');
-  // A case that is "ready" without every approval (e.g. from before approvals were required) can't be
-  // published; sent back to review it keeps the approvals already given.
+  await waitForStatus(bad.data.id, 'ready');
+  console.log('✓ approvals: information security does not block the final check');
+  // The AI unavailable at the final check (G-D5). The emulator has no AI (the review is skipped, not failed),
+  // so the state is set directly: out for approval, everyone approved, the check stopped on the AI.
+  {
+    process.env.FIRESTORE_EMULATOR_HOST ??= '127.0.0.1:8080';
+    const ref = adminFirestore(adminApp).collection('tenders').doc(bad.data.id);
+    await ref.update({ status: 'internal_review', lockedAt: null, finalCheck: { state: 'ai_unavailable', at: Date.now() } });
+    assert.match(
+      (await refusalMsg(() => call('continueWithoutAiCheck')({ tenderId: bad.data.id, reason: 'קצר' }))) ?? '',
+      /./,
+      'a reason of at least 10 characters',
+    );
+    await call('continueWithoutAiCheck')({ tenderId: bad.data.id, reason: 'שירות ה-AI אינו זמין, אושר מול המשפטי' });
+    const cont = (await getDoc(doc(db, 'tenders', bad.data.id))).data()!;
+    assert.equal(cont.status, 'ready', 'procurement continued to "פרסום לספקים"');
+    assert.equal(cont.finalCheck?.state, 'overridden', 'recorded as continued without the AI check');
+    assert.ok(cont.lockedAt, 'and locked');
+    const contAudit = await getDocs(query(collection(db, 'auditLog'), where('tenderId', '==', bad.data.id)));
+    assert.ok(contAudit.docs.some((d) => d.data().action === 'final_check_override'), 'audited, with the reason');
+    console.log('✓ final check: with the AI unavailable procurement continues with a recorded reason');
+  }
+  // A case that is "ready" without every approval (e.g. from before approvals were required) can't be published.
   process.env.FIRESTORE_EMULATOR_HOST ??= '127.0.0.1:8080';
-  await adminFirestore(adminApp).collection('tenders').doc(bad.data.id).update({ 'approvals.legal': FieldValue.delete() });
-  let unapproved = false;
-  try {
-    await call('transitionTender')({ tenderId: bad.data.id, to: 'published' });
-  } catch (e) {
-    unapproved = /לא ניתן לפרסם — ממתין לאישור/.test((e as Error).message);
-  }
-  assert.ok(unapproved, 'publish is refused while a required role has not approved');
-  await call('transitionTender')({ tenderId: bad.data.id, to: 'internal_review' });
-  const kept = (await getDoc(doc(db, 'tenders', bad.data.id))).data()!.approvals ?? {};
-  assert.deepEqual(Object.keys(kept).sort(), ['finance', 'requester'], 'approvals already given are kept');
-  await approveAs(bad.data.id, ['legal']);
-  await call('transitionTender')({ tenderId: bad.data.id, to: 'ready' });
-  console.log('✓ approvals: publish needs every role; back to review keeps given approvals');
-  // After the lock a manual edit leaves a placeholder: the publish gate still catches it.
+  const badRef = adminFirestore(adminApp).collection('tenders').doc(bad.data.id);
+  const legalApproval = (await badRef.get()).data()!.approvals.legal;
+  await badRef.update({ 'approvals.legal': FieldValue.delete() });
+  assert.match(
+    (await refusalMsg(() => call('transitionTender')({ tenderId: bad.data.id, to: 'published', supplierIds: ['sup_globex'] }))) ?? '',
+    /לא ניתן לפרסם — ממתין לאישור/,
+    'publish is refused while a required role has not approved',
+  );
+  await badRef.update({ 'approvals.legal': legalApproval });
+  // A change behind the lock (G-D6): publishing compares the document with the one the final check passed.
   await docFile.save(withPlaceholder, { contentType: 'text/html' });
-  await call('setPendingSuppliers')({ tenderId: bad.data.id, supplierIds: ['sup_globex'] });
-  let blocked = false;
-  try {
-    await call('transitionTender')({ tenderId: bad.data.id, to: 'published' });
-  } catch (e) {
-    blocked = /הסוכן המפקח/.test((e as Error).message);
-  }
-  assert.ok(blocked, 'publish is refused while the supervisor verdict is BLOCK');
+  assert.match(
+    (await refusalMsg(() => call('transitionTender')({ tenderId: bad.data.id, to: 'published', supplierIds: ['sup_globex'] }))) ?? '',
+    /השתנה מאז הבדיקה הסופית/,
+    'a document changed since the final check is not published',
+  );
   assert.equal((await getDoc(doc(db, 'tenders', bad.data.id))).data()!.status, 'ready');
-  await call('transitionTender')({
-    tenderId: bad.data.id,
-    to: 'published',
-    overrideReason: 'אישור חריג לצורך בדיקה אוטומטית',
-  });
-  const overrideAudit = await getDocs(
-    query(collection(db, 'auditLog'), where('tenderId', '==', bad.data.id)),
-  );
-  assert.ok(
-    overrideAudit.docs.some((d) => d.data().action === 'supervisor_override'),
-    'override is audited',
-  );
-  console.log('✓ supervisor: placeholder blocks publish; manager override is audited');
+  await docFile.save(cleanHtml, { contentType: 'text/html' });
+  await call('transitionTender')({ tenderId: bad.data.id, to: 'published', supplierIds: ['sup_globex'] });
+  assert.equal((await getDoc(doc(db, 'tenders', bad.data.id))).data()!.status, 'published');
+  console.log('✓ publish: needs every approval, and the document the final check passed');
 
   // Requirement research runs in the background when a request is opened (no AI key in the
   // emulator, so it records 'skipped'); its results are readable by managers only via rules.

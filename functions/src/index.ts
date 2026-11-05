@@ -47,8 +47,19 @@ import {
   planApproval,
   APPROVAL_DENIAL_HE,
   APPROVAL_PERMISSION_DENIALS,
-  finalApprovalDenial,
-  FINAL_APPROVAL_DENIAL_HE,
+  sendDenial,
+  SEND_DENIAL_HE,
+  illegalTransitionHe,
+  CHAT_MAX_LENGTH,
+  missingTimelineDates,
+  checkTimelineDay,
+  timelineOf,
+  timelineParamValues,
+  formatDocDate,
+  TIMELINE_DAY_HE,
+  continueWithoutAiInput,
+  rerunFinalCheckInput,
+  setTimelineInput,
   documentBlockers,
   REQUIRE_APPROVALS,
   requiredRolesFor,
@@ -121,6 +132,7 @@ import {
 } from '@obms/shared';
 import { randomBytes } from 'node:crypto';
 import { auth, db, now, storage } from './lib/admin.js';
+import { FieldValue } from 'firebase-admin/firestore';
 import { requireAuth, requireRole, requireManager, requireInternal, requireCaseAccess, type Caller } from './lib/context.js';
 import { parseInput } from './lib/validate.js';
 import {
@@ -147,6 +159,8 @@ import {
 } from './repositories.js';
 import { allocateBidNumber, israelYear } from './services/bidNumber.js';
 import { transition } from './stateMachines/tenderFsm.js';
+import { cancelStaleApprovals, currentContentHash } from './services/approvalGuard.js';
+import { continueWithoutAi, readyForFinalCheck, runFinalCheck } from './services/finalCheck.js';
 import {
   generateTenderDocument,
   getViewable,
@@ -158,6 +172,7 @@ import {
   removeDocumentPermission,
   discardGeneratedDocument,
   readTenderDocText,
+  replaceOnceInDocument,
   lockDocument,
   copyTenderDocument,
   readVersionSnapshot,
@@ -1084,100 +1099,84 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
   const denial = manualTransitionDenial(current.status, input.to);
   if (denial) throw new HttpsError('failed-precondition', denial);
 
-  // Internal review happens in the document — it must exist (draft-first).
-  if (input.to === 'internal_review' && canTransition(current.status, 'internal_review') && !hasDocument(current)) {
-    throw new HttpsError('failed-precondition', 'יש ליצור את מסמך המכרז (לאחר אישור הסוכן המפקח) לפני שליחה לבדיקה פנימית.');
+  if (current.status === input.to) return { ok: true, verdict: null };
+  if (input.to === 'internal_review') return sendForApproval(caller, current);
+  if (input.to === 'draft') {
+    // Procurement takes the send back (v22 cancelApproval): the case is a draft again, dates editable.
+    await transition(caller, current.id, 'draft', { sentForApproval: null, finalCheck: null });
+    await refreshCaseScore(SYSTEM, current.id);
+    return { ok: true, verdict: null };
   }
-  // The case team must be complete before internal review.
-  if (input.to === 'internal_review' && canTransition(current.status, 'internal_review')) {
-    const missing = missingRoles(current.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[current.type], current.team);
-    if (missing.length) {
-      throw new HttpsError(
-        'failed-precondition',
-        `לא ניתן לשלוח לבדיקה פנימית — יש לשבץ: ${missing.map(roleLabel).join(', ')}.`,
-      );
-    }
-  }
+  return publishToSuppliers(caller, current, input.supplierIds);
+});
 
-  // The manager's final approval (plan D1): the document exists and nothing blocks; it locks the case.
-  if (input.to === 'ready' && canTransition(current.status, 'ready')) {
-    const doc = hasDocument(current);
-    const denial = finalApprovalDenial({ hasDocument: doc, blockers: documentBlockers({ hasDocument: doc, lastSupervision: current.lastSupervision }) });
-    if (denial) throw new HttpsError('failed-precondition', FINAL_APPROVAL_DENIAL_HE[denial]);
-  }
+/** "שליחה לאישור" (plan G-D1, G-D7): procurement's approval, which opens everyone else's. */
+async function sendForApproval(caller: Caller, t: TenderDoc) {
+  const doc = hasDocument(t);
+  const denial = sendDenial({
+    status: t.status,
+    hasDocument: doc,
+    missingRoles: missingRoles(t.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[t.type], t.team),
+    blockers: documentBlockers({ hasDocument: doc, lastSupervision: t.lastSupervision }),
+    missingDates: missingTimelineDates(t),
+  });
+  if (denial) throw new HttpsError('failed-precondition', SEND_DENIAL_HE[denial]);
+  const hash = await currentContentHash(t);
+  await transition(caller, t.id, 'internal_review', {
+    sentForApproval: { uid: caller.uid, name: caller.name, at: now(), ...(hash ? { docHash: hash } : {}) },
+    finalCheck: null,
+  });
+  // Approvals kept from an earlier send stand only if the content is unchanged (plan G-D4).
+  const sent = await tendersRepo.get(t.id);
+  if (sent) await cancelStaleApprovals(sent, hash);
+  const verdict = (await supervisorCheckpoint(caller, t.id, 'review'))?.verdict ?? null;
+  await refreshCaseScore(SYSTEM, t.id);
+  return { ok: true, verdict };
+}
 
-  // Final approval and publishing: every required role has signed off in this review round.
-  if (REQUIRE_APPROVALS && (input.to === 'ready' || input.to === 'published') && canTransition(current.status, input.to)) {
-    // Information security approves as an extra participant; it doesn't block (plan D2).
-    const waiting = missingApprovals(
-      blockingApproverRoles(current.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[current.type]),
-      current.team,
-      current.approvals,
-    );
+/**
+ * "פרסום לספקים" (plan G-D6): the final check already ran, so publishing only verifies the document is the one
+ * it passed. The suppliers picked in the dialog are saved and published in the same call.
+ */
+async function publishToSuppliers(caller: Caller, t: TenderDoc, supplierIds: string[] | undefined) {
+  if (t.status !== 'ready') throw new HttpsError('failed-precondition', illegalTransitionHe(t.status, 'published'));
+  // Every required role has signed off (security doesn't block — plan D2).
+  if (REQUIRE_APPROVALS) {
+    const waiting = missingApprovals(blockingApproverRoles(t.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[t.type]), t.team, t.approvals);
     if (waiting.length) {
-      throw new HttpsError(
-        'failed-precondition',
-        `${input.to === 'published' ? 'לא ניתן לפרסם' : 'לא ניתן לאשר סופית'} — ממתין לאישור: ${waiting.map(roleLabel).join(', ')}.`,
-      );
+      throw new HttpsError('failed-precondition', `לא ניתן לפרסם — ממתין לאישור: ${waiting.map(roleLabel).join(', ')}.`);
     }
   }
-
-  // A template whose date fields come from the submission deadline can't be published without one (the deadline
-  // may stay empty while drafting — plan D7; it used to be required at creation).
-  if (input.to === 'published' && canTransition(current.status, 'published') && !current.submissionDeadline) {
-    const tpl = await templatesRepo.getForCase(current.type);
+  // A template whose date fields come from the submission deadline can't be published without one.
+  if (!t.submissionDeadline) {
+    const tpl = await templatesRepo.getForCase(t.type);
     if (tpl?.params.some(isAutoDeadlineParam)) {
       throw new HttpsError('failed-precondition', 'יש לקבוע מועד הגשת הצעות לפני הפרסום לספקים.');
     }
   }
+  // The document is the one the final check passed (locked since; this catches a change behind the lock).
+  const hash = await currentContentHash(t);
+  if (t.finalCheck?.docHash && hash && hash !== t.finalCheck.docHash) {
+    throw new HttpsError('failed-precondition', 'המסמך השתנה מאז הבדיקה הסופית. יש לפתוח אותו מחדש לפני הפרסום.'); // new
+  }
+  // One button saves the suppliers and publishes (at least one).
+  if (supplierIds) await savePendingSuppliers(caller, t, supplierIds);
+  const pending = await internalRepo.getPendingSuppliers(t.id);
+  if (!pending.length) throw new HttpsError('failed-precondition', 'יש לבחור לפחות ספק אחד לפני הפרסום.');
 
-  // Publishing goes to the suppliers picked beforehand (at least one).
-  let pendingSuppliers: string[] = [];
-  if (input.to === 'published' && canTransition(current.status, 'published')) {
-    pendingSuppliers = await internalRepo.getPendingSuppliers(input.tenderId);
-    if (!pendingSuppliers.length) {
-      throw new HttpsError('failed-precondition', 'יש לבחור לפחות ספק אחד לפני הפרסום (לשונית הגישה).');
-    }
-  }
-
-  // Publish gate: the supervisor inspects the live document before suppliers can see it.
-  let gate: SupervisionReport | null = null;
-  if (input.to === 'published' && canTransition(current.status, 'published')) {
-    gate = await supervisorGate(caller, input.tenderId, 'prepublish', input.overrideReason);
-  }
-  const from = current.status;
-  await transition(caller, input.tenderId, input.to);
-  // Locked by the final approval; sent back to writing, it is open again.
-  if (input.to === 'ready' && from !== 'ready') {
-    await tendersRepo.update(input.tenderId, { lockedAt: now() });
-    // The Google Doc is locked with the case: from now on everyone, the manager included, can only read it.
-    await lockDocument(current.googleDocId);
-  }
-  if (input.to === 'internal_review' && from === 'ready') await tendersRepo.update(input.tenderId, { lockedAt: null });
-  if (input.to === 'published' && from !== 'published') await tendersRepo.update(input.tenderId, { publishedAt: now() });
-
-  if (input.to === 'published' && gate) {
-    // Cache the exported HTML at publish so suppliers load it fast (no live Google export).
-    const tender = await tendersRepo.get(input.tenderId);
-    const path = tender ? await cacheTenderHtml(tender) : null;
-    await tendersRepo.update(input.tenderId, {
-      ...(path ? { docExportPath: path } : {}),
-      publishedDocHash: gate.docHash,
-    });
-    // The picked suppliers get access now that the document is public to them.
-    await grantSupplierAccess(caller, input.tenderId, pendingSuppliers);
-    await internalRepo.setPendingSuppliers(input.tenderId, [], caller.uid);
-    // Ask every internal participant how the drafting/review went.
-    await requestFeedback(caller, input.tenderId, 'publish');
-  }
-  let verdict = gate?.verdict ?? null;
-  if (input.to === 'internal_review' || input.to === 'ready') {
-    const stage = input.to === 'ready' ? 'ready' : 'review';
-    verdict = (await supervisorCheckpoint(caller, input.tenderId, stage))?.verdict ?? null;
-  }
-  await refreshCaseScore(SYSTEM, input.tenderId);
-  return { ok: true, verdict };
-});
+  await transition(caller, t.id, 'published', { publishedAt: now() });
+  // Cache the exported HTML at publish so suppliers load it fast (no live Google export).
+  const published = (await tendersRepo.get(t.id)) ?? t;
+  const path = await cacheTenderHtml(published);
+  await tendersRepo.update(t.id, { ...(path ? { docExportPath: path } : {}), publishedDocHash: hash ?? t.finalCheck?.docHash ?? null });
+  // The picked suppliers get access now that the document is public to them.
+  await grantSupplierAccess(caller, t.id, pending);
+  await internalRepo.setPendingSuppliers(t.id, [], caller.uid);
+  // Ask every internal participant how the drafting/review went.
+  await requestFeedback(caller, t.id, 'publish');
+  await refreshCaseScore(SYSTEM, t.id);
+  return { ok: true, verdict: null };
+}
 
 // Manager re-exports + re-caches the bid document after editing the Google Doc. Once suppliers can
 // see the document, the edited version goes through the supervisor gate again.
@@ -1244,10 +1243,16 @@ export const setPendingSuppliers = onCall(async (req) => {
   const input = parseInput(setPendingSuppliersInput, req.data);
   const tender = await tendersRepo.get(input.tenderId);
   if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  const ids = await savePendingSuppliers(caller, tender, input.supplierIds);
+  return { ok: true, supplierIds: ids };
+});
+
+/** The suppliers the case will be published to: checked, saved (internal) and audited. */
+async function savePendingSuppliers(caller: Caller, tender: TenderDoc, supplierIds: readonly string[]): Promise<string[]> {
   if (tender.status !== 'internal_review' && tender.status !== 'ready') {
-    throw new HttpsError('failed-precondition', 'ניתן לבחור ספקים לפרסום בבדיקה פנימית או כשהמכרז מוכן לפרסום.');
+    throw new HttpsError('failed-precondition', 'ניתן לבחור ספקים לפרסום אחרי השליחה לאישור ולפני הפרסום.');
   }
-  const ids = [...new Set(input.supplierIds)];
+  const ids = [...new Set(supplierIds)];
   const known = (await Promise.all(ids.map((id) => suppliersRepo.get(id)))).filter((s): s is SupplierDoc => !!s);
   if (known.length !== ids.length) throw new HttpsError('invalid-argument', 'ספק לא מוכר ברשימה.');
   await internalRepo.setPendingSuppliers(tender.id, ids, caller.uid);
@@ -1262,8 +1267,8 @@ export const setPendingSuppliers = onCall(async (req) => {
     newState: `${ids.length} ספקים`,
     detail: known.map((s) => s.name).join(', ') || undefined,
   });
-  return { ok: true, supplierIds: ids };
-});
+  return ids;
+}
 
 export const grantAccess = onCall({ secrets: DOCS_SECRETS }, async (req) => {
   const caller = requireManager(req);
@@ -1430,15 +1435,19 @@ export const approveTender = onCall(async (req) => {
   const doc = hasDocument(tender);
   const holderUid = input.onBehalfOf ? tender.team?.[input.onBehalfOf] : undefined;
   const holderName = holderUid ? (await usersRepo.get(holderUid))?.displayName : undefined;
+  // The content being approved (plan G-D4); approvals given on an earlier version are cancelled first.
+  const docHash = input.approve && tender.status === 'internal_review' && doc ? await currentContentHash(tender) : null;
+  const cancelled = docHash ? await cancelStaleApprovals(tender, docHash) : [];
+  const fresh = cancelled.length ? ((await tendersRepo.get(tender.id)) ?? tender) : tender;
   const plan = planApproval(
     {
-      status: tender.status,
+      status: fresh.status,
       hasDocument: doc,
-      ownerUid: tender.ownerUid,
-      team: tender.team,
-      approvals: tender.approvals,
-      requiredRoles: tender.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[tender.type],
-      blockers: documentBlockers({ hasDocument: doc, lastSupervision: tender.lastSupervision }),
+      ownerUid: fresh.ownerUid,
+      team: fresh.team,
+      approvals: fresh.approvals,
+      requiredRoles: fresh.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[fresh.type],
+      blockers: documentBlockers({ hasDocument: doc, lastSupervision: fresh.lastSupervision }),
     },
     {
       uid: caller.uid,
@@ -1447,9 +1456,13 @@ export const approveTender = onCall(async (req) => {
       ...(input.onBehalfOf ? { onBehalfOf: input.onBehalfOf } : {}),
       ...(input.reason !== undefined ? { reason: input.reason } : {}),
       ...(holderName ? { holderName } : {}),
+      docHash,
     },
     now(),
   );
+  if (plan.ok && tender.finalCheck?.state === 'running') {
+    throw new HttpsError('failed-precondition', 'הסוכן המפקח מבצע בדיקה סופית. אפשר לשנות אישורים אחרי שהבדיקה תסתיים.'); // new
+  }
   if (!plan.ok) {
     throw new HttpsError(
       APPROVAL_PERMISSION_DENIALS.includes(plan.denial) ? 'permission-denied' : 'failed-precondition',
@@ -1473,8 +1486,32 @@ export const approveTender = onCall(async (req) => {
         : {}),
     });
   }
-  return { ok: true };
+  // Approved again after a content change: the "approval cancelled" mark goes.
+  const reapproved = plan.writes.filter((w) => w.approval && fresh.cancelledApprovals?.[w.role]).map((w) => w.role);
+  await tendersRepo.clearCancelled(tender.id, reapproved);
+  // The participant is told, in the case chat and in "לטיפולך" (UX answer 1.1.C).
+  if (plan.audit === 'approve_on_behalf' && input.onBehalfOf) {
+    const reason = plan.writes[0]?.approval?.reason ?? '';
+    await postSystemChat(
+      tender.id,
+      `אישור בשם: ${caller.name} אישר בשם ${holderName ?? roleLabel(input.onBehalfOf)} · ${roleLabel(input.onBehalfOf)} · סיבה: ${reason}`,
+    );
+  }
+  return { ok: true, cancelled };
 });
+
+/** A system line in the case's team chat (plan G-D2): immutable like every message, written by the server. */
+async function postSystemChat(tenderId: string, text: string): Promise<void> {
+  const ref = db.collection('tenders').doc(tenderId).collection('chat').doc();
+  await ref.set({
+    id: ref.id,
+    uid: SYSTEM.uid,
+    name: SYSTEM.name,
+    role: 'system',
+    text: text.slice(0, CHAT_MAX_LENGTH),
+    createdAt: FieldValue.serverTimestamp(),
+  });
+}
 
 // Returns the rendered tender document for the in-system viewer (authorization checked here).
 export const getTenderDocument = onCall({ secrets: DOCS_SECRETS }, async (req) => {
@@ -2000,7 +2037,8 @@ export const reopenTender = onCall({ ...SUPERVISED, secrets: [...DOCS_SECRETS, '
   }
   const copy = await copyTenderDocument(tender);
   try {
-    await transition(caller, tender.id, 'internal_review'); // ready → internal_review (audited)
+    // ready → draft (audited): a new approval round starts with procurement's send (plan Phase G).
+    await transition(caller, tender.id, 'draft', { sentForApproval: null, finalCheck: null, cancelledApprovals: {} });
     await tendersRepo.clearApprovals(tender.id);
     await tendersRepo.update(tender.id, {
       googleDocId: copy.googleDocId,
@@ -2034,7 +2072,7 @@ export const reopenTender = onCall({ ...SUPERVISED, secrets: [...DOCS_SECRETS, '
     actorName: caller.name,
     action: 'tender_reopened',
     prevState: 'ready',
-    newState: 'internal_review',
+    newState: 'draft',
     detail: 'נוצרה גרסה חדשה מקושרת. המקור נשאר נעול',
   });
   await autoSupervise(tender.id); // the agent checks the new document right away
@@ -2072,6 +2110,141 @@ export const superviseOnDocumentReady = onDocumentUpdated(
     await autoSupervise(event.params.tenderId);
   },
 );
+
+// The final check (plan G-D3) starts by itself: when the last approval lands, and again after a final check
+// that found a blocker, once a newer agent check of the document finds none (everyone still approved).
+export const finalCheckOnApprovals = onDocumentUpdated(
+  { document: 'tenders/{tenderId}', ...SUPERVISED },
+  async (event) => {
+    const before = event.data?.before.data() as TenderDoc | undefined;
+    const after = event.data?.after.data() as TenderDoc | undefined;
+    if (!before || !after || !readyForFinalCheck(after)) return;
+    // Stopped on the AI being unavailable: procurement decides (continue with a reason, or run it again).
+    if (after.finalCheck?.state === 'ai_unavailable') return;
+    const becameReady = !readyForFinalCheck(before);
+    const fixed =
+      after.finalCheck?.state === 'blocked' &&
+      !!after.lastSupervision &&
+      after.lastSupervision.runId !== before.lastSupervision?.runId &&
+      after.lastSupervision.stage !== 'final' &&
+      after.lastSupervision.blockers === 0;
+    if (becameReady || fixed) await runFinalCheck(event.params.tenderId);
+  },
+);
+
+const CONTINUE_DENIAL_HE = {
+  not_waiting: 'אפשר להמשיך בלי בדיקת AI רק כשהבדיקה הסופית לא הושלמה כי בדיקת ה-AI אינה זמינה.', // new
+  reason_required: 'יש לציין סיבה (10 תווים לפחות).', // new
+  changed: 'המסמך השתנה אחרי האישורים, ולכן בוטלו האישורים שניתנו לפני השינוי.', // new
+} as const;
+
+// Procurement continues to "פרסום לספקים" without the AI review when it was unavailable (plan G-D5). Audited.
+export const continueWithoutAiCheck = onCall(SUPERVISED, async (req) => {
+  const caller = requireManager(req);
+  const input = parseInput(continueWithoutAiInput, req.data);
+  const t = await tendersRepo.get(input.tenderId);
+  if (!t) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  if (t.ownerUid !== caller.uid) throw new HttpsError('permission-denied', 'רק מנהל המכרז יכול להמשיך בלי בדיקת AI.'); // new
+  const denial = await continueWithoutAi(t, caller, input.reason);
+  if (denial) throw new HttpsError('failed-precondition', CONTINUE_DENIAL_HE[denial]);
+  await refreshCaseScore(SYSTEM, t.id);
+  return { ok: true };
+});
+
+// The final check again, after it failed to complete or found a blocker that is fixed now.
+export const rerunFinalCheck = onCall(SUPERVISED, async (req) => {
+  requireManager(req);
+  const input = parseInput(rerunFinalCheckInput, req.data);
+  const t = await tendersRepo.get(input.tenderId);
+  if (!t) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  if (!readyForFinalCheck(t) || !['error', 'blocked', 'ai_unavailable'].includes(t.finalCheck?.state ?? '')) {
+    throw new HttpsError('failed-precondition', 'אפשר להריץ שוב את הבדיקה הסופית רק אחרי שכל הרביעייה אישרה.'); // new
+  }
+  await runFinalCheck(t.id);
+  return { ok: true };
+});
+
+/** Epoch of a date at a time of day in Israel ("12:00"), whichever offset (+2 / +3) applies that day. */
+function israelDateTimeMs(iso: string, hm: string): number {
+  const [y, m, d] = iso.split('-').map(Number);
+  const [h, mi] = hm.split(':').map(Number);
+  for (const offset of [2, 3]) {
+    const ms = Date.UTC(y!, m! - 1, d!, h! - offset, mi!);
+    const shown = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit', hour12: false }).format(ms);
+    if (shown === `${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}`) return ms;
+  }
+  return Date.UTC(y!, m! - 1, d!, h! - 2, mi!);
+}
+
+// "לוחות זמנים" (plan G-D7, G-D9): procurement sets the four dates until the send; a blocked day is refused.
+export const setTimeline = onCall(async (req) => {
+  const caller = requireManager(req);
+  const input = parseInput(setTimelineInput, req.data);
+  const t = await tendersRepo.get(input.tenderId);
+  if (!t) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  if (t.status !== 'draft') {
+    throw new HttpsError('failed-precondition', 'אפשר לשנות תאריכים עד השליחה לאישור. אחר כך נדרשת פתיחה מחדש.'); // new
+  }
+  for (const [, iso] of Object.entries(input.dates)) {
+    if (!iso) continue;
+    const day = checkTimelineDay(iso);
+    if (!day.ok) throw new HttpsError('invalid-argument', TIMELINE_DAY_HE[day.error]);
+  }
+  const timeline = { ...t.timeline, ...input.dates };
+  // The submission date is the deadline suppliers see: keep its time of day (noon when there was none).
+  let submissionDeadline = t.submissionDeadline ?? null;
+  if (input.dates.submit !== undefined) {
+    const hm = t.submissionDeadline
+      ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit', hour12: false }).format(t.submissionDeadline)
+      : '12:00';
+    submissionDeadline = input.dates.submit ? israelDateTimeMs(input.dates.submit, hm) : null;
+  }
+  await tendersRepo.update(t.id, { timeline, submissionDeadline });
+
+  // The dates go into the document's fields (G-D7): through the draft data before the document exists (the
+  // rules re-check it like any edit); once it exists, each changed value is replaced in it if it appears once.
+  const template = await templatesRepo.getForCase(t.type);
+  const before = timelineOf(t);
+  const after = timelineOf({ timeline, submissionDeadline });
+  const mapped = template ? timelineParamValues(template.params, after) : {};
+  let docUpdated: boolean | null = null;
+  if (template && !hasDocument(t)) {
+    if (Object.keys(mapped).length) {
+      const dated = { ...t, timeline, submissionDeadline };
+      await applyDraftData(caller, dated, template, { tenderId: t.id, params: mapped }, currentPublicBrief(template, t.params));
+      const fresh = await tendersRepo.get(t.id);
+      if (fresh?.lastSupervision?.basis === 'draft' && fresh.supervisionRun?.state !== 'running') {
+        await superviseTender(caller, t.id, 'edit').catch((e) => console.error('timeline re-check failed', e));
+      }
+    }
+  } else if (template) {
+    const replacements: [string, string][] = Object.entries(mapped)
+      .filter(([k, v]) => t.params[k] !== undefined && String(t.params[k]) !== String(v))
+      .map(([k, v]) => [String(t.params[k]), String(v)]);
+    if (before.submit && after.submit && before.submit !== after.submit) {
+      replacements.push([formatDocDate(before.submit), formatDocDate(after.submit)]);
+    }
+    let all = true;
+    for (const [from, to] of replacements) {
+      all = (await replaceOnceInDocument(t, from, to).catch(() => false)) && all;
+    }
+    if (Object.keys(mapped).length) await tendersRepo.update(t.id, { params: { ...t.params, ...mapped } });
+    docUpdated = replacements.length ? all : null;
+  }
+
+  await auditRepo.append({
+    entityType: 'tender',
+    entityId: t.id,
+    tenderId: t.id,
+    actorUid: caller.uid,
+    actorName: caller.name,
+    action: 'timeline_updated',
+    prevState: null,
+    newState: Object.keys(input.dates).join(','),
+  });
+  // docUpdated: null = nothing to change in a document; false = left for the user to update in Google Docs.
+  return { ok: true, timeline, submissionDeadline, docUpdated };
+});
 
 // The manager decides on findings of the latest check (plan B2): incorporated — the next check verifies it —
 // or left as is. Warnings only: a blocking finding goes away when a check no longer finds it, never by a mark.

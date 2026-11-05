@@ -1,24 +1,27 @@
 import type { ReactNode } from 'react';
 
 /**
- * "פרסום לספקים": procurement picks the suppliers (today's supplier picker, passed as children) and publishes.
- * The access tab is hidden for now (plan D9), so this is where suppliers are picked (plan D8). Not in the
- * prototype — the layout is provisional until UX supplies a mock. If the supervisor's publish gate blocks,
- * the workspace shows the reason and the audited override, as before.
+ * "פרסום לספקים" (plan G-D6; UX answers 1.2): procurement picks the suppliers (the existing picker, passed as
+ * children, without the permissions list — 1.2.C) and one button saves the pick and publishes (1.2.D), after
+ * "לפרסם ל-{N} ספקים?" because publishing can't be undone (1.2.B). The picker is not redesigned (1.2.A).
  */
 export default function PublishDialog({
-  canPublish,
+  count,
   busy,
   onPublish,
   onClose,
   children,
 }: {
-  canPublish: boolean;
+  /** Suppliers picked in the dialog. */
+  count: number;
   busy?: boolean;
   onPublish: () => void;
   onClose: () => void;
   children: ReactNode;
 }) {
+  const publish = () => {
+    if (window.confirm(`לפרסם ל-${count} ספקים?`)) onPublish();
+  };
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-ink-900/50 p-4" onClick={onClose}>
       <div
@@ -40,9 +43,10 @@ export default function PublishDialog({
         <div className="min-h-0 flex-1 overflow-auto px-5 py-4">{children}</div>
         <div className="flex items-center justify-between gap-3 border-t px-5 py-3.5" style={{ borderColor: 'var(--line-soft)' }}>
           <span className="text-xs" style={{ color: 'var(--muted)' }}>
-            {canPublish ? 'הספקים שנבחרו יקבלו גישה למסמך עם הפרסום.' : 'בחרו לפחות ספק אחד ושמרו את הבחירה.'}
+            {/* 1.2.3 said "…ושמרו את הבחירה"; with one button there is nothing to save (new wording, UX to confirm). */}
+            {count > 0 ? 'הספקים שנבחרו יקבלו גישה למסמך עם הפרסום.' : 'בחרו לפחות ספק אחד.'}
           </span>
-          <button type="button" className="btn btn-primary" disabled={!canPublish || busy} onClick={onPublish}>
+          <button type="button" className="btn btn-primary" disabled={count === 0 || busy} onClick={publish}>
             פרסום לספקים
           </button>
         </div>

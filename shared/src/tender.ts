@@ -28,8 +28,8 @@ export type TenderStatus = (typeof TENDER_STATUSES)[number];
 
 export const TENDER_STATUS_LABELS_HE: Record<TenderStatus, string> = {
   draft: 'טיוטה',
-  internal_review: 'בבדיקה פנימית',
-  ready: 'מוכן לפרסום',
+  internal_review: 'נשלח לאישור',
+  ready: 'מוכן לפרסום לספקים',
   published: 'פורסם',
   responses: 'התקבלו הצעות',
   evaluated: 'הוערך',
@@ -38,11 +38,12 @@ export const TENDER_STATUS_LABELS_HE: Record<TenderStatus, string> = {
 
 // Allowed transitions for the tender FSM.
 export const TENDER_TRANSITIONS: Record<TenderStatus, TenderStatus[]> = {
-  // 'ready' straight from the draft: the team approves on the document, then the manager's final approval
-  // locks the case (plan D1). 'internal_review' stays for older cases and reopened ones.
-  draft: ['internal_review', 'ready'],
+  // The v22 flow (plan Phase G): draft → internal_review is "שליחה לאישור"; internal_review → ready happens
+  // only when the final check passes (the system, or procurement continuing without the AI check); reopening a
+  // locked case goes back to the draft (not sent).
+  draft: ['internal_review'],
   internal_review: ['ready', 'draft'],
-  ready: ['published', 'internal_review'],
+  ready: ['published', 'draft'],
   published: ['responses'],
   responses: ['evaluated'],
   evaluated: ['awarded', 'responses'],
@@ -58,19 +59,28 @@ export function canTransition(from: TenderStatus, to: TenderStatus): boolean {
  * action, which checks what the step needs: the first supplier submission (→ responses), the bid comparison
  * (→ evaluated) and choosing the winner (→ awarded). So no case reaches "awarded" without a winner.
  */
-export const MANUAL_TRANSITION_TARGETS: readonly TenderStatus[] = ['draft', 'internal_review', 'ready', 'published'];
+export const MANUAL_TRANSITION_TARGETS: readonly TenderStatus[] = ['draft', 'internal_review', 'published'];
 
 const ACTION_ONLY_STATUS_HE: Partial<Record<TenderStatus, string>> = {
+  draft: 'חזרה לעריכה נעשית בפתיחה מחדש.', // new — UX to confirm
+  ready: 'המעבר לפרסום לספקים קורה כשהבדיקה הסופית של הסוכן המפקח עוברת.', // new — UX to confirm
   responses: 'שלב ההצעות מתחיל מעצמו עם ההגשה הראשונה של ספק.',
   evaluated: 'שלב ההערכה מתחיל בהרצת השוואת ההצעות.',
   awarded: 'הזכייה נקבעת בבחירת הספק הזוכה.',
 };
 
+/** "מעבר סטטוס לא חוקי: טיוטה ← פורסם": status names in Hebrew, never the codes (UX answer 4.5). */
+export function illegalTransitionHe(from: TenderStatus, to: TenderStatus): string {
+  return `מעבר סטטוס לא חוקי: ${TENDER_STATUS_LABELS_HE[from]} ← ${TENDER_STATUS_LABELS_HE[to]}`;
+}
+
 /** Why a manager can't move the case from `from` to `to` directly, or null when the move is allowed. */
 export function manualTransitionDenial(from: TenderStatus, to: TenderStatus): string | null {
   if (from === to) return null; // nothing changes
-  if (!MANUAL_TRANSITION_TARGETS.includes(to)) return ACTION_ONLY_STATUS_HE[to] ?? `מעבר סטטוס לא חוקי: ${from} → ${to}`;
-  return canTransition(from, to) ? null : `מעבר סטטוס לא חוקי: ${from} → ${to}`;
+  // Back to the draft only takes the send back (v22); a locked case goes back by reopening it.
+  if (to === 'draft' && from !== 'internal_review') return ACTION_ONLY_STATUS_HE.draft!;
+  if (!MANUAL_TRANSITION_TARGETS.includes(to)) return ACTION_ONLY_STATUS_HE[to] ?? illegalTransitionHe(from, to);
+  return canTransition(from, to) ? null : illegalTransitionHe(from, to);
 }
 
 // Statuses in which the bid document is public to (granted) suppliers.

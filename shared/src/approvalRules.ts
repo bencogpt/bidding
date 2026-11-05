@@ -1,17 +1,21 @@
-// Who may approve a tender, when, and in which order (plan B4, decisions D1, D1a, D1b, D1d):
-// - approvals open as soon as the document exists (no "send for approval" step);
-// - requester and finance approve in any order, legal after both;
-// - the tender manager acts last: the final approval ("ready") locks the case;
+// Who may approve a tender, when, and in which order — the v22 flow (plan Phase G, decisions G-D1 to G-D5):
+// - procurement sends the document for approval ("שליחה לאישור"); that is procurement's own approval, and
+//   nobody else can approve before it;
+// - requester and finance approve the document ("אישור מסמך") in any order, legal after both;
+// - when all have approved, the supervising agent's final check runs before the lock: it passes → locked,
+//   stage "פרסום לספקים"; it fails → the case stays open and procurement fixes it;
+// - a change in the document's content after an approval cancels the approvals given before it;
 // - the case owner may approve on behalf of an assigned participant, with a reason;
-// - an open blocking finding stops every approval.
-// Pure rules: the approveTender / transitionTender callables apply them; tests run without Firestore.
+// - an open blocking finding stops the send and every approval.
+// Pure rules: the callables apply them; tests run without Firestore.
 import type { TenderStatus } from './tender.js';
 import type { CaseApprovals, CaseTeam, TeamApproval, TeamRole } from './team.js';
+import type { SupervisionFinding } from './supervision.js';
 
-/** Statuses in which approvals are given (with a document). `internal_review` stays for older cases. */
-export const APPROVAL_OPEN_STATUSES: readonly TenderStatus[] = ['draft', 'internal_review'];
+/** Approvals are given only once the document was sent for approval (status `internal_review`). */
+export const APPROVAL_OPEN_STATUSES: readonly TenderStatus[] = ['internal_review'];
 
-/** Minimum length of the reason for an approval given on someone's behalf (like the publish override). */
+/** Minimum length of a recorded reason: approval on someone's behalf, or continuing without the AI check. */
 export const ON_BEHALF_REASON_MIN = 10;
 
 export type ApprovalDenial =
@@ -27,8 +31,8 @@ export type ApprovalDenial =
   | 'not_on_behalf';
 
 export const APPROVAL_DENIAL_HE: Record<ApprovalDenial, string> = {
-  not_open: 'ניתן לאשר רק אחרי שהמסמך נוצר ולפני האישור הסופי.',
-  blocked: 'ממצא חוסם מונע אישור סופי ופרסום.',
+  not_open: 'ניתן לאשר רק אחרי שהמסמך נשלח לאישור ולפני הנעילה.',
+  blocked: 'ממצא חוסם מונע שליחה לאישור ופרסום.',
   no_slot: 'אינך משובץ בתפקיד שנדרש לאשר את המכרז.',
   not_required: 'התפקיד אינו נדרש לאישור במכרז זה.',
   legal_too_early: 'המשפטי מאשר אחרי שהדורש והכספים אישרו.',
@@ -62,6 +66,8 @@ export interface ApprovalCall {
   reason?: string;
   /** Display name of the slot holder, for an approval given on their behalf. */
   holderName?: string;
+  /** Fingerprint of the document's content as approved (G-D4); null when it couldn't be read. */
+  docHash?: string | null;
 }
 
 export type ApprovalAudit = 'approve_tender' | 'withdraw_approval' | 'approve_on_behalf' | 'withdraw_on_behalf';
@@ -71,7 +77,7 @@ export type ApprovalPlan =
   | { ok: true; audit: ApprovalAudit; writes: { role: TeamRole; approval: TeamApproval | null }[] };
 
 /** An approval counts only from the slot's current holder (same rule as missingApprovals). */
-const approvedByHolder = (c: ApprovalCase, r: TeamRole) =>
+const approvedByHolder = (c: Pick<ApprovalCase, 'team' | 'approvals'>, r: TeamRole) =>
   !!c.approvals?.[r] && !!c.team?.[r] && c.approvals[r]!.uid === c.team[r];
 
 /** Legal waits for requester and finance; a role the same caller holds doesn't make them wait. */
@@ -80,6 +86,9 @@ function legalWaits(c: ApprovalCase, callerRoles: readonly TeamRole[]): boolean 
     (r) => c.requiredRoles.includes(r) && !approvedByHolder(c, r) && !callerRoles.includes(r),
   );
 }
+
+const withHash = (a: TeamApproval, docHash: string | null | undefined): TeamApproval =>
+  docHash ? { ...a, docHash } : a;
 
 export function planApproval(c: ApprovalCase, call: ApprovalCall, at: number): ApprovalPlan {
   if (!APPROVAL_OPEN_STATUSES.includes(c.status) || !c.hasDocument) return { ok: false, denial: 'not_open' };
@@ -109,15 +118,10 @@ export function planApproval(c: ApprovalCase, call: ApprovalCall, at: number): A
         {
           role,
           // uid = the holder, so missingApprovals counts it like their own approval.
-          approval: {
-            uid: holder,
-            name: call.holderName ?? '',
-            at,
-            onBehalf: true,
-            byUid: call.uid,
-            byName: call.name,
-            reason,
-          },
+          approval: withHash(
+            { uid: holder, name: call.holderName ?? '', at, onBehalf: true, byUid: call.uid, byName: call.name, reason },
+            call.docHash,
+          ),
         },
       ],
     };
@@ -133,25 +137,79 @@ export function planApproval(c: ApprovalCase, call: ApprovalCall, at: number): A
   return {
     ok: true,
     audit: 'approve_tender',
-    writes: roles.map((role) => ({ role, approval: { uid: call.uid, name: call.name, at } })),
+    writes: roles.map((role) => ({ role, approval: withHash({ uid: call.uid, name: call.name, at }, call.docHash) })),
   };
 }
 
-export type FinalApprovalDenial = 'no_document' | 'blocked';
+// ───────────────────────── the send ("שליחה לאישור", G-D1, G-D7) ─────────────────────────
 
-export const FINAL_APPROVAL_DENIAL_HE: Record<FinalApprovalDenial, string> = {
-  no_document: 'יש ליצור את מסמך המכרז לפני האישור הסופי.',
-  blocked: 'ממצא חוסם מונע אישור סופי ופרסום.',
-};
+export type SendDenial = 'no_document' | 'team_incomplete' | 'blocked' | 'dates_missing' | 'not_draft';
 
-/**
- * The manager's final approval (the move to "ready"), on top of the approvals check the callable already
- * makes: the document must exist and nothing may block. Returns null when allowed.
- */
-export function finalApprovalDenial(c: Pick<ApprovalCase, 'hasDocument' | 'blockers'>): FinalApprovalDenial | null {
+export interface SendCase {
+  status: TenderStatus;
+  hasDocument: boolean;
+  /** Required team roles that have no holder yet. */
+  missingRoles: readonly TeamRole[];
+  /** Open blocking findings of the latest check of the document. */
+  blockers: number;
+  /** Required timeline dates that are still empty (G-D7). */
+  missingDates: readonly string[];
+}
+
+/** Why procurement can't send the document for approval yet, or null when it can. In this order. */
+export function sendDenial(c: SendCase): SendDenial | null {
+  if (c.status !== 'draft') return 'not_draft';
   if (!c.hasDocument) return 'no_document';
   if (c.blockers > 0) return 'blocked';
+  if (c.missingRoles.length) return 'team_incomplete';
+  if (c.missingDates.length) return 'dates_missing';
   return null;
+}
+
+export const SEND_DENIAL_HE: Record<SendDenial, string> = {
+  not_draft: 'המסמך כבר נשלח לאישור.',
+  no_document: 'יש ליצור את המסמך לפני השליחה לאישור.',
+  blocked: 'ממצא חוסם מונע שליחה לאישור ופרסום.',
+  team_incomplete: 'יש לשבץ את כל התפקידים לפני השליחה לאישור.', // new — UX to confirm
+  dates_missing: 'יש להזין את שלושת תאריכי החובה בלשונית "לוחות זמנים" לפני השליחה לאישור.', // new — UX to confirm
+};
+
+// ───────────────────────── content changes after an approval (G-D4) ─────────────────────────
+
+/**
+ * Roles whose approval was given on an earlier version of the document: their fingerprint differs from the
+ * current one. Approvals without a fingerprint (given before fingerprints existed, or when the document
+ * couldn't be read) are kept: there is nothing to compare. Unknown current content (null) cancels nothing.
+ */
+export function staleApprovals(approvals: CaseApprovals | undefined, currentHash: string | null): TeamRole[] {
+  if (!currentHash || !approvals) return [];
+  return (Object.keys(approvals) as TeamRole[]).filter((r) => {
+    const h = approvals[r]?.docHash;
+    return !!h && h !== currentHash;
+  });
+}
+
+// ───────────────────────── the final check (G-D3, G-D5) ─────────────────────────
+
+/** Everyone the lock waits for has approved: the send (procurement) and the blocking roles. */
+export function allApproved(
+  c: Pick<ApprovalCase, 'status' | 'team' | 'approvals'>,
+  blockingRoles: readonly TeamRole[],
+): boolean {
+  return c.status === 'internal_review' && blockingRoles.every((r) => approvedByHolder(c, r));
+}
+
+export type FinalCheckOutcome = 'pass' | 'blocked' | 'ai_unavailable';
+
+/**
+ * The verdict of the final check. A check whose only blocking findings say the AI review couldn't run is
+ * `ai_unavailable`: procurement may continue with a recorded reason (G-D5). Any other blocker can't be
+ * overridden.
+ */
+export function finalCheckOutcome(findings: readonly Pick<SupervisionFinding, 'severity' | 'code'>[]): FinalCheckOutcome {
+  const blocking = findings.filter((f) => f.severity === 'block');
+  if (!blocking.length) return 'pass';
+  return blocking.every((f) => f.code === 'SUPERVISOR_UNAVAILABLE') ? 'ai_unavailable' : 'blocked';
 }
 
 /**

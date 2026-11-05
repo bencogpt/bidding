@@ -9,10 +9,12 @@
 import type { TenderStatus } from './tender.js';
 import type { DocumentStatus } from './draft.js';
 import type { FindingDecisionRecord, SupervisionFinding, SupervisionStage } from './supervision.js';
+import { SUPERVISION_RUN_STALE_MS } from './supervision.js';
 import type { TeamRole } from './team.js';
 import {
   CONFERENCE_STAGE_IDX,
   FINDING_TYPE_HE,
+  FLOW_HE,
   NEXT_ACTION_HE,
   RULE_FIX_HE,
   NO_CONFERENCE_NOTE_HE,
@@ -107,6 +109,7 @@ export function visibleTabs(i: {
 }): TabView[] {
   const joinsAt: Partial<Record<WorkspaceTabKey, number>> = {
     agent: 1,
+    timelines: 1, // v22 TAB_FROM tl: 1
     conference: i.hasConference ? CONFERENCE_STAGE_IDX : Infinity,
     questions: 2,
     bids: 5,
@@ -114,6 +117,7 @@ export function visibleTabs(i: {
   const all: TabView[] = [
     { key: 'overview', label: 'סקירה' },
     { key: 'document', label: i.ds === 'doc' ? 'מסמך' : 'טיוטה' },
+    { key: 'timelines', label: 'לוחות זמנים' },
     { key: 'agent', label: 'סוכן מפקח', ...(i.blockingCount ? { badge: i.blockingCount } : {}) },
     { key: 'conference', label: 'פרוטוקול כנס ספקים' },
     {
@@ -428,7 +432,28 @@ function legalWaitsFor(holders: Holders, approvals: Approvals, myRoles: readonly
 
 // ───────────────────────── A3: the header's main button ─────────────────────────
 
-export type HeaderActionKind = 'run_agent' | 'create_document' | 'open_tab' | 'approve' | 'final_approve' | 'publish';
+export type HeaderActionKind =
+  | 'run_agent'
+  | 'create_document'
+  | 'open_tab'
+  | 'send'
+  | 'approve'
+  | 'continue_without_ai'
+  | 'publish';
+
+/** The final check of the current approval round, as the screens show it (plan G-D3, G-D5). */
+export type FinalCheckView = 'none' | 'running' | 'blocked' | 'ai_unavailable';
+
+/** Only while the document is out for approval; a run that never finished counts as none after 10 minutes. */
+export function finalCheckViewOf(
+  t: { status: TenderStatus; finalCheck?: { state: string; at: number } | null },
+  now: number = Date.now(),
+): FinalCheckView {
+  if (t.status !== 'internal_review' || !t.finalCheck) return 'none';
+  const s = t.finalCheck.state;
+  if (s === 'running') return now - t.finalCheck.at < SUPERVISION_RUN_STALE_MS ? 'running' : 'none';
+  return s === 'blocked' || s === 'ai_unavailable' ? s : 'none';
+}
 
 export interface HeaderAction {
   label: string;
@@ -455,15 +480,23 @@ export interface WorkspaceCtx {
   myRoles: TeamRole[];
   holders: Holders;
   approvals: Approvals;
-  /** Roles whose approval the final action waits for (default: requester, legal, finance — see missingTeamApprovals). */
+  /** Roles whose approval the lock waits for (default: requester, legal, finance — see missingTeamApprovals). */
   approverRoles?: readonly TeamRole[];
+  /** Procurement sent the document for approval (status internal_review): procurement's own approval. */
+  sent?: boolean;
+  sentAt?: number | null;
+  finalCheck?: FinalCheckView;
+  /** Why procurement can't send yet (a SEND_DENIAL_HE text), or null/undefined when it can. */
+  sendBlockedTitle?: string | null;
+  /** Roles whose approval a content change cancelled (plan G-D4). */
+  cancelled?: readonly TeamRole[];
 }
 
 /** Security is an extra, non-blocking participant unless the case's approver roles include it. */
 const securityBlocks = (c: Pick<WorkspaceCtx, 'approverRoles'>) => !!c.approverRoles?.includes('security');
 
 const ONLY_MANAGER_CREATES = 'רק הרכש יכול ליצור את המסמך';
-const BLOCKED_TITLE = 'ממצא חוסם מונע אישור סופי ופרסום';
+const BLOCKED_TITLE = FLOW_HE.blockedTitle;
 
 /** "שימו לב: …" on "יצירת מסמך" while warnings are open (syncNext, line 2608; singular fixed, plan §10). */
 export function openWarningsTip(n: number): string {
@@ -500,59 +533,66 @@ export function headerAction(c: WorkspaceCtx): HeaderAction | null {
     };
   }
 
+  // The final check runs while everyone waits (v22 syncNext: it comes first).
+  if (c.stageIdx === 1 && c.finalCheck === 'running')
+    return { label: FLOW_HE.finalRunning, kind: null, enabled: false, title: FLOW_HE.finalRunningTitle };
+
   // A blocking finding on the document stops everyone (renderApr, line 2360).
   if (c.blockingCount > 0)
     return { label: 'טפל בממצא חוסם', kind: 'open_tab', tab: 'agent', enabled: true, title: BLOCKED_TITLE };
 
-  // From publication on, the button points to the stage's work (NEXT_ACT).
-  if (c.stageIdx >= 2) {
+  // "פרסום לספקים" (spec §5.3): procurement publishes, the others wait.
+  if (c.stageIdx === 2)
+    return c.isManager
+      ? { label: FLOW_HE.publish, kind: 'publish', enabled: true }
+      : { label: FLOW_HE.waitingForPublish, kind: null, enabled: false, title: FLOW_HE.waitingForPublishTitle };
+
+  // After publication, the button points to the stage's work (NEXT_ACT).
+  if (c.stageIdx > 2) {
     const na = NEXT_ACTION_HE[c.stageIdx];
     if (!na) return null;
-    if (c.stageIdx === 2 && c.isManager)
-      return { label: `${na.text} ←`, kind: 'publish', enabled: true };
     return { label: `${na.text} ←`, kind: 'open_tab', tab: na.tab, enabled: true };
   }
 
   const approved = (r: TeamRole) => isApproved(c.holders, c.approvals, r);
   const myPending = c.myRoles.filter((r) => !approved(r));
 
-  // Approving: the team first, legal after requester and finance (D1, D1a).
+  // "אישור מסמך" (spec §5.2): requester and finance in any order, legal after both.
   const approveButton = (): HeaderAction => {
     if (myPending.includes('legal')) {
       const waits = legalWaitsFor(c.holders, c.approvals, c.myRoles);
       return {
-        label: 'אישור סופי של המכרז',
+        label: FLOW_HE.approve,
         kind: 'approve',
         enabled: waits.length === 0,
-        ...(waits.length
-          ? { title: `הכפתור שלך יפעל אחרי שהדורש והכספים יאשרו. נותר: ${rolesHe(waits)}.` }
-          : {}),
+        ...(waits.length ? { title: FLOW_HE.legalWaits(rolesHe(waits)) } : {}),
       };
     }
     if (myPending.every((r) => r === 'security') && !securityBlocks(c))
-      return { label: 'אישור (משתתף נוסף)', kind: 'approve', enabled: true };
-    return { label: 'אישור סופי של המכרז', kind: 'approve', enabled: true };
+      return { label: FLOW_HE.approveExtra, kind: 'approve', enabled: true };
+    return { label: FLOW_HE.approve, kind: 'approve', enabled: true };
   };
 
   if (c.isManager) {
-    // A manager who also holds a team slot (e.g. opened the request) approves it first.
+    // Procurement sends; until then nobody else can approve (G-D1).
+    if (!c.sent) {
+      const why = c.sendBlockedTitle ?? null;
+      return { label: FLOW_HE.send, kind: 'send', enabled: !why, ...(why ? { title: why } : {}) };
+    }
+    // The AI was down at the final check: continue with a recorded reason (G-D5).
+    if (c.finalCheck === 'ai_unavailable')
+      return { label: FLOW_HE.continueWithoutAi, kind: 'continue_without_ai', enabled: true, title: FLOW_HE.continueWithoutAiTitle };
+    // A manager who also holds a team slot (e.g. opened the request) approves it too.
     if (myPending.some((r) => r !== 'security' || securityBlocks(c))) return approveButton();
-    // The manager acts last: the final action locks the case (D1, D1b, D1c).
     const missing = missingTeamApprovals(c.holders, c.approvals, c.approverRoles);
-    return {
-      label: 'אישור סופי של המכרז',
-      kind: 'final_approve',
-      enabled: missing.length === 0,
-      ...(missing.length
-        ? { title: `הכפתור שלך יפעל אחרי שהדורש, המשפטי והכספים יאשרו. נותר: ${rolesHe(missing)}.` }
-        : {}),
-    };
+    return { label: missing.length ? FLOW_HE.waitingFor(rolesHe(missing)) : FLOW_HE.sent, kind: null, enabled: false };
   }
 
   if (!c.myRoles.length) return null; // not on the team: nothing to approve
+  if (!c.sent) return { label: FLOW_HE.waitingForSend, kind: null, enabled: false, title: FLOW_HE.waitingForSendTitle };
   if (!myPending.length) {
     const at = Math.max(...c.myRoles.map((r) => c.approvals[r]?.at ?? 0));
-    return { label: 'האישור שלך נרשם', kind: null, enabled: false, title: `האישור שלך נרשם · ${fmtStamp(at)}` };
+    return { label: FLOW_HE.yourApproval, kind: null, enabled: false, title: FLOW_HE.noteYours(fmtStamp(at)) };
   }
   return approveButton();
 }
@@ -588,6 +628,7 @@ export interface ApprovalsView {
   title: string;
   rows: ApprovalRow[];
   note: string;
+  /** withdraw: the caller's own approval; for procurement it takes the send back (v22 cancelApproval). */
   actions: { kind: 'withdraw' | 'reopen'; label: string }[];
 }
 
@@ -605,10 +646,11 @@ const TAG_LABEL: Record<ApprovalTag, string> = { approved: 'אושר', pending: 
 
 export function approvalsView(c: ApprovalsCtx): ApprovalsView {
   const locked = c.stageIdx >= 2;
+  const sent = locked || !!c.sent; // procurement's approval is the send (v22)
   const approved = (r: TeamRole) => isApproved(c.holders, c.approvals, r);
   const segments = QUARTET_ROLES.map((role) => ({
     role,
-    approved: role === 'manager' ? locked : approved(role),
+    approved: role === 'manager' ? sent : approved(role),
   }));
 
   const roleOrder: ApprovalRole[] = [...QUARTET_ROLES, ...(c.securityInvolved || c.holders.security ? ['security' as const] : [])];
@@ -619,9 +661,9 @@ export function approvalsView(c: ApprovalsCtx): ApprovalsView {
         roleHe: ROLE_HE.manager,
         name: c.ownerName,
         nonBlocking: false,
-        tag: locked ? 'approved' : 'pending',
-        tagLabel: TAG_LABEL[locked ? 'approved' : 'pending'],
-        ...(locked && c.lockedAt ? { tagTitle: fmtStamp(c.lockedAt) } : {}),
+        tag: sent ? 'approved' : 'pending',
+        tagLabel: TAG_LABEL[sent ? 'approved' : 'pending'],
+        ...(sent && c.sentAt ? { tagTitle: fmtStamp(c.sentAt) } : {}),
       };
     }
     const holder = c.holders[role];
@@ -647,46 +689,47 @@ export function approvalsView(c: ApprovalsCtx): ApprovalsView {
   });
 
   const myPending = c.myRoles.filter((r) => !approved(r));
-  const mine = !c.isManager && c.myRoles.length > 0 && myPending.length === 0;
+  // "Mine" (v22 renderApr): the send for procurement, the approval of every slot the caller holds for the others.
+  const mine = c.isManager ? sent && !myPending.some((r) => r !== 'security') : c.myRoles.length > 0 && !myPending.length;
+  const running = c.finalCheck === 'running';
 
+  // Notes in v22's order (renderApr), plus the final check's states and cancelled approvals (plan G-D3–G-D5).
   let note = '';
-  if (locked) note = 'המסמך נעול ומוכן לפרסום.' + (c.isManager ? '' : ' רק הרכש יכול לפתוח מחדש.');
-  else if (c.isManager) {
-    const missing = missingTeamApprovals(c.holders, c.approvals, c.approverRoles);
-    note = missing.length
-      ? `הכפתור שלך יפעל אחרי שהדורש, המשפטי והכספים יאשרו. נותר: ${rolesHe(missing)}.`
-      : 'כולם אישרו. לחץ על "אישור סופי של המכרז" כדי לנעול את המסמך.';
-  } else if (mine) {
-    const at = Math.max(...c.myRoles.map((r) => c.approvals[r]?.at ?? 0));
-    note = `האישור שלך נרשם · ${fmtStamp(at)}`;
-  } else if (myPending.includes('legal')) {
+  if (locked) note = FLOW_HE.noteLocked + (c.isManager ? '' : FLOW_HE.noteLockedOthers);
+  else if (running) note = FLOW_HE.noteAllApproved;
+  else if (c.finalCheck === 'ai_unavailable') note = FLOW_HE.noteAiUnavailable;
+  else if (c.finalCheck === 'blocked') note = FLOW_HE.noteFinalBlocked;
+  else if (mine) {
+    note = c.isManager
+      ? FLOW_HE.noteSent(c.sentAt ? fmtStamp(c.sentAt) : '')
+      : FLOW_HE.noteYours(fmtStamp(Math.max(...c.myRoles.map((r) => c.approvals[r]?.at ?? 0))));
+  } else if (!c.isManager && !sent) note = FLOW_HE.waitingForSendTitle;
+  else if (myPending.includes('legal')) {
     const waits = legalWaitsFor(c.holders, c.approvals, c.myRoles);
-    note = waits.length
-      ? `הכפתור שלך יפעל אחרי שהדורש והכספים יאשרו. נותר: ${rolesHe(waits)}.`
-      : 'הדורש והכספים אישרו. אחרי האישור שלך הרכש יוכל לתת אישור סופי.';
-  } else if (myPending.length && myPending.every((r) => r === 'security') && !securityBlocks(c))
-    note = 'משתתף נוסף: האישור נרשם ואינו חוסם נעילה.';
-  else if (myPending.length) note = 'לחץ על "אישור סופי של המכרז" כשסיימת לעבוד על המסמך.';
+    note = waits.length ? FLOW_HE.legalWaits(rolesHe(waits)) : FLOW_HE.noteLegalLast;
+  } else if (myPending.length && myPending.every((r) => r === 'security') && !securityBlocks(c)) note = FLOW_HE.noteExtra;
+  else note = c.isManager ? FLOW_HE.noteSendHint : FLOW_HE.noteApproveHint;
+  if (!locked && c.cancelled?.length) note = `${FLOW_HE.noteCancelled(rolesHe([...c.cancelled]))} ${note}`.trim();
 
   const actions: ApprovalsView['actions'] = [];
-  if (mine && !locked) actions.push({ kind: 'withdraw', label: 'בטל את האישור שלי' });
-  if (locked && c.isManager) actions.push({ kind: 'reopen', label: 'פתח מחדש (שכפול)' });
+  if (mine && !locked && !running) actions.push({ kind: 'withdraw', label: FLOW_HE.withdraw });
+  if (locked && c.isManager) actions.push({ kind: 'reopen', label: FLOW_HE.reopen });
 
   return {
     visible: c.stageIdx >= 1 && c.ds === 'doc',
     segments,
     count: segments.filter((s) => s.approved).length,
     total: segments.length,
-    title: 'אישור סופי של המכרז',
+    title: FLOW_HE.cardTitle,
     rows,
     note,
     actions,
   };
 }
 
-/** The owner's "approve on behalf" on a participant's row (D1d): assigned slots, in turn, before the lock. */
+/** The owner's "approve on behalf" on a participant's row (D1d): assigned slots, in turn, after the send. */
 function onBehalfAction(c: ApprovalsCtx, role: TeamRole, locked: boolean): ApprovalRowAction | undefined {
-  if (!c.isOwner || locked || c.stageIdx !== 1 || c.ds !== 'doc') return undefined;
+  if (!c.isOwner || locked || c.stageIdx !== 1 || c.ds !== 'doc' || !c.sent || c.finalCheck === 'running') return undefined;
   const holder = c.holders[role];
   if (holder && holder.uid === c.myUid) return undefined; // your own slot is approved with the main button
   const a = c.approvals[role];
@@ -756,8 +799,19 @@ export interface PendingTenderInput {
   approvedAt?: number;
   /** The signed-in requester has opened the draft (plan B7). */
   draftSeen?: boolean;
-  /** Roles the final action waits for (see missingTeamApprovals). */
+  /** Roles the lock waits for (see missingTeamApprovals). */
   approverRoles?: readonly TeamRole[];
+  /** Open findings of the latest check (the draft's "N ממצאים ממתינים להחלטתך"). */
+  openCount?: number;
+  /** Sent for approval (plan G-D1). */
+  sent?: boolean;
+  finalCheck?: FinalCheckView;
+  /** Roles whose approval a content change cancelled (plan G-D4). */
+  cancelled?: readonly TeamRole[];
+  /** The signed-in user's slot was approved on their behalf and they haven't opened the case since (UX 1.1.C). */
+  onBehalfUnseenBy?: string | null;
+  /** For the meta line "עודכן {time}" (v22). */
+  updatedAt?: number;
 }
 
 export interface PendingCtx {
@@ -792,7 +846,7 @@ export function pendingItems(c: PendingCtx): PendingItem[] {
       name: t.name,
       stageIdx: stageIdx ?? t.stageIdx,
       target: { kind: 'tender', id: t.id, tab },
-      meta: meta ?? t.ref,
+      meta: meta ?? (t.updatedAt ? `עודכן ${fmtStamp(t.updatedAt)}` : t.ref),
       ...rest,
     };
   };
@@ -803,17 +857,37 @@ export function pendingItems(c: PendingCtx): PendingItem[] {
     // Procurement's own cases first (stateActs, line 1922).
     for (const t of c.tenders.filter((x) => x.ownerUid === c.uid)) {
       if (t.stageIdx === 1 && t.ds === 'draft' && !t.preparing) {
+        const n = t.openCount ?? 0;
         if (t.agent === 'none')
           out.push(tenderItem(t, 'run', { tone: 'w', bold: 'טיוטה חדשה:', text: 'ממתינה להרצת הסוכן המפקח', button: 'הרץ סוכן מפקח', tab: 'document' }));
         else if (t.agent === 'done' && t.blockingCount > 0)
-          out.push(tenderItem(t, 'block', { tone: 'r', bold: 'ממצא חוסם בטיוטה:', text: 'יש לטפל לפני יצירת המסמך', button: 'טפל בממצא', tab: 'agent' }));
+          out.push(tenderItem(t, 'block', { tone: 'r', bold: 'ממצא חוסם בטיוטה:', text: 'יש לטפל בו לפני יצירת המסמך', button: 'טפל בממצא', tab: 'document' }));
         else if (t.agent === 'done')
-          out.push(tenderItem(t, 'create', { tone: 'g', bold: 'הטיוטה נבדקה:', text: 'אין ממצא חוסם, אפשר ליצור את המסמך', button: 'יצירת מסמך', tab: 'document' }));
-      } else if (t.ds === 'doc' && t.blockingCount > 0) {
-        out.push(tenderItem(t, 'block', { tone: 'r', bold: 'ממצא חוסם בדוח הסוכן המפקח:', text: 'מונע אישור סופי ופרסום', button: 'טפל בממצא', tab: 'agent' }));
-      } else if (t.ds === 'doc' && t.stageIdx === 1 && !missingTeamApprovals(t.holders, t.approvals, t.approverRoles).length) {
-        // New with D1: the team approved, the manager's final action is due.
-        out.push(tenderItem(t, 'final', { tone: 'w', bold: 'כל הצוות אישר:', text: 'ממתין לאישור הסופי שלך', button: 'אישור סופי של המכרז', tab: 'document' }));
+          out.push(tenderItem(t, 'create', { tone: n ? 'w' : 'g', bold: 'הטיוטה נבדקה:', text: FLOW_HE.piDraftChecked(n), button: 'יצירת מסמך', tab: 'document' }));
+      } else if (t.stageIdx === 1 && t.ds === 'doc') {
+        if (t.finalCheck === 'running')
+          out.push(tenderItem(t, 'final', { tone: 'g', bold: FLOW_HE.piFinalRunning, text: FLOW_HE.piFinalRunningText, button: 'צפה בבל"מ', tab: 'overview' }));
+        else if (t.blockingCount > 0)
+          out.push(tenderItem(t, 'block', { tone: 'r', bold: 'ממצא חוסם בדוח הסוכן המפקח:', text: FLOW_HE.piDocBlocked, button: 'טפל בממצא', tab: 'document' }));
+        else if (t.finalCheck === 'ai_unavailable')
+          out.push(tenderItem(t, 'noai', { tone: 'r', bold: FLOW_HE.piAiUnavailable, text: FLOW_HE.piAiUnavailableText, button: FLOW_HE.continueWithoutAi, tab: 'overview' }));
+        else if (!t.sent)
+          out.push(tenderItem(t, 'send', { tone: 'w', bold: FLOW_HE.piDocCreated, text: FLOW_HE.piCanSend, button: FLOW_HE.send, tab: 'overview' }));
+        else {
+          const waiting = missingTeamApprovals(t.holders, t.approvals, t.approverRoles);
+          if (waiting.length)
+            out.push(
+              tenderItem(t, 'sent', {
+                tone: 'g',
+                bold: FLOW_HE.piSent,
+                text: FLOW_HE.piWaitingForApprovals(waiting.map((r) => ROLE_HE[r]).join(' · ')),
+                button: 'צפה בבל"מ',
+                tab: 'overview',
+              }),
+            );
+        }
+      } else if (t.stageIdx === 2) {
+        out.push(tenderItem(t, 'publish', { tone: 'w', bold: FLOW_HE.piFinalPassed, text: FLOW_HE.piFinalPassedText, button: FLOW_HE.publish, tab: 'overview' }));
       }
     }
     // Requests waiting for procurement (handoffActs0, line 1940).
@@ -863,11 +937,26 @@ export function pendingItems(c: PendingCtx): PendingItem[] {
     });
   for (const t of c.tenders) {
     const iAmRequester = t.holders.requester?.uid === c.uid;
-    if (!iAmRequester || t.stageIdx !== 1 || t.ds === 'doc') continue;
-    if (t.preparing)
-      out.push(tenderItem(t, 'preparing', { tone: 'g', bold: 'הרכש אישר:', text: 'הטיוטה נוצרת כעת', button: 'צפה בבל"מ', tab: 'overview', meta: approvedMeta(t) }));
-    else if (!t.draftSeen)
-      out.unshift(tenderItem(t, 'ready', { tone: 'w', bold: 'הטיוטה מוכנה:', text: 'הרכש אישר את הבל"ם והכין טיוטה', button: 'פתח את הטיוטה', tab: 'document', meta: approvedMeta(t) }));
+    if (!iAmRequester || t.stageIdx !== 1) continue;
+    if (t.ds !== 'doc') {
+      if (t.preparing)
+        out.push(tenderItem(t, 'preparing', { tone: 'g', bold: 'הרכש אישר:', text: 'הטיוטה נוצרת כעת', button: 'צפה בבל"מ', tab: 'overview', meta: approvedMeta(t) }));
+      else if (!t.draftSeen)
+        out.unshift(tenderItem(t, 'ready', { tone: 'w', bold: 'הטיוטה מוכנה:', text: 'הרכש אישר את הבל"ם והכין טיוטה', button: 'פתח את הטיוטה', tab: 'document', meta: approvedMeta(t) }));
+      else
+        out.push(
+          tenderItem(t, 'drafting', {
+            tone: 'g',
+            bold: FLOW_HE.piPreparing,
+            text: FLOW_HE.piPreparingText(t.agent, t.openCount ?? 0),
+            button: 'צפה בטיוטה',
+            tab: 'document',
+          }),
+        );
+    } else if (!t.sent) {
+      // v22: the requester sees the document before it is sent.
+      out.push(tenderItem(t, 'created', { tone: 'g', bold: FLOW_HE.piDocCreated, text: FLOW_HE.piWaitingForSend, button: 'צפה במסמך', tab: 'document' }));
+    }
   }
 
   // Legal / finance: their unit's contact is still missing (line 1944).
@@ -887,14 +976,20 @@ export function pendingItems(c: PendingCtx): PendingItem[] {
         target: { kind: 'assign', tenderId: t.id, role: c.unitRole },
       });
 
-  // Approvals due from the signed-in team member (their turn has come, nothing blocks).
+  // The team member's own rows (v22 stateActs): approval cancelled by a change, approved on their behalf,
+  // and the document waiting for their approval once it was sent.
   for (const t of c.tenders) {
-    if (t.stageIdx !== 1 || t.ds !== 'doc' || t.blockingCount > 0) continue;
+    if (t.stageIdx !== 1 || t.ds !== 'doc') continue;
     const mySlots = (Object.keys(t.holders) as TeamRole[]).filter((r) => t.holders[r]?.uid === c.uid);
+    if (!mySlots.length) continue;
+    if (t.onBehalfUnseenBy)
+      out.push(tenderItem(t, 'behalf', { tone: 'g', bold: FLOW_HE.piOnBehalf, text: FLOW_HE.piOnBehalfText(t.onBehalfUnseenBy), button: 'צפה בבל"מ', tab: 'overview' }));
+    if (!t.sent || t.blockingCount > 0 || t.finalCheck === 'running') continue;
     const pending = mySlots.filter((r) => !isApproved(t.holders, t.approvals, r));
     if (!pending.length) continue;
-    if (pending.length === 1 && pending[0] === 'legal' && legalWaitsFor(t.holders, t.approvals, mySlots).length) continue;
-    out.push(tenderItem(t, 'approve', { tone: 'w', bold: 'אישור סופי של המכרז:', text: 'המסמך מוכן לאישורך', button: 'פתח את המסמך', tab: 'document' }));
+    if (pending.some((r) => t.cancelled?.includes(r)))
+      out.unshift(tenderItem(t, 'reapprove', { tone: 'w', bold: FLOW_HE.piCancelled, text: FLOW_HE.piCancelledText, button: 'פתח את המסמך', tab: 'document' }));
+    else out.push(tenderItem(t, 'approve', { tone: 'w', bold: FLOW_HE.piSent, text: FLOW_HE.piReadyForYou, button: 'פתח את המסמך', tab: 'document' }));
   }
   return out;
 }

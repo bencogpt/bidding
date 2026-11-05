@@ -344,7 +344,8 @@ test('only hard facts block; everything else becomes a warning', async () => {
 test('fail-closed: an AI review that could not run blocks at the publish gate, and only there', async () => {
   const { applySeverityPolicy, verdictOf, PUBLISH_GATE_STAGES } = await import('@obms/shared');
   const unavailable = { code: 'SUPERVISOR_UNAVAILABLE', severity: 'block', source: 'ai' } as const;
-  assert.deepEqual([...PUBLISH_GATE_STAGES], ['prepublish', 'refresh']);
+  // The final check before the lock is a publish gate too (plan G-D3, G-D5).
+  assert.deepEqual([...PUBLISH_GATE_STAGES], ['final', 'prepublish', 'refresh']);
   for (const stage of PUBLISH_GATE_STAGES) {
     assert.equal(verdictOf(applySeverityPolicy([unavailable], stage)), 'BLOCK', `${stage}: needs a re-check or the override`);
   }

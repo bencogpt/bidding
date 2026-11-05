@@ -1,5 +1,5 @@
 import { HttpsError } from 'firebase-functions/v2/https';
-import { canTransition, type TenderDoc, type TenderStatus } from '@obms/shared';
+import { canTransition, illegalTransitionHe, type TenderDoc, type TenderStatus } from '@obms/shared';
 import { tendersRepo, auditRepo } from '../repositories.js';
 import type { Caller } from '../lib/context.js';
 
@@ -24,15 +24,14 @@ export async function transition(
     (t) => {
       if (t.status === to && !extra) return;
       if (!canTransition(t.status, to)) {
-        throw new HttpsError('failed-precondition', `מעבר סטטוס לא חוקי: ${t.status} → ${to}`);
+        throw new HttpsError('failed-precondition', illegalTransitionHe(t.status, to));
       }
     },
     extra,
   );
   if (tender.status === to) return;
-  // A review round starts with no approvals. Sent back from "ready" (to collect missing approvals), the
-  // approvals already given are kept.
-  if (to === 'internal_review' && tender.status !== 'ready') await tendersRepo.clearApprovals(tenderId);
+  // Approvals are kept across a send taken back and sent again (v22); one given on content that changed since
+  // is cancelled by its fingerprint (plan G-D4). Reopening a locked case clears them itself.
   await auditRepo.append({
     entityType: 'tender',
     entityId: tenderId,

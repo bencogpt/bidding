@@ -26,6 +26,8 @@ export interface MilestoneInput {
   approvals?: Approvals;
   /** The roles whose approval the final approval waits for (requester, legal, finance; security doesn't block). */
   approverRoles?: readonly TeamRole[];
+  /** Sent for approval (plan G-D1). */
+  sent?: boolean;
   submissionDeadline?: number | null;
 }
 
@@ -70,11 +72,12 @@ const FOR_NEXT_STAGE: Partial<Record<number, WorkspaceTabKey>> = { 4: 'questions
 function waitingFor(r: MilestoneInput): QuartetRole[] {
   if (r.kind === 'request') return ['manager']; // procurement picks the type and completes the request
   if (r.stageIdx === 1) {
-    // The team's approvals still missing, in the quartet's order; procurement's own (the final approval) is
-    // the last step of this stage, so it is always still to come.
+    // Before the send it waits for procurement (v22: procurement's approval is the send); after it, for the
+    // team members who haven't approved, in the quartet's order. Then the final check runs by itself.
+    if (!r.sent) return ['manager'];
     const roles = new Set<string>(r.approverRoles ?? []);
     return QUARTET_ROLES.filter(
-      (q) => q === 'manager' || (roles.has(q) && !isApproved(r.holders ?? {}, r.approvals ?? {}, q as TeamRole)),
+      (q) => q !== 'manager' && roles.has(q) && !isApproved(r.holders ?? {}, r.approvals ?? {}, q as TeamRole),
     );
   }
   if (r.stageIdx === 2) return ['manager']; // approved and locked: procurement publishes

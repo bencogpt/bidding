@@ -14,6 +14,7 @@ type Filter = '' | 'block' | 'warn';
 export default function FindingsPanel({
   agent,
   serverStep,
+  final = false,
   on,
   creating,
   view,
@@ -28,6 +29,8 @@ export default function FindingsPanel({
 }: {
   agent: AgentRunState;
   serverStep?: number | null;
+  /** The final check before the lock is running (plan G-D3). */
+  final?: boolean;
   on: 'draft' | 'document';
   creating: boolean;
   view: FindingsView;
@@ -41,7 +44,7 @@ export default function FindingsPanel({
   onShowAll: () => void;
 }) {
   const [filter, setFilter] = useState<Filter>('');
-  const step = usePacedStep(agent === 'running', serverStep);
+  const step = usePacedStep(agent === 'running', final ? null : serverStep, final);
   const open = view.open;
   const list = open.filter((f) => !filter || f.severity === filter);
   const decided = view.applied.length + view.skipped.length;
@@ -82,7 +85,7 @@ export default function FindingsPanel({
             {isDraft ? 'הסוכן טרם בדק את הטיוטה.' : 'הסוכן טרם בדק את המסמך.'}
           </div>
         )}
-        {agent === 'running' && <ThinkingBox on={on} step={step} />}
+        {agent === 'running' && <ThinkingBox on={on} step={step} final={final} />}
         {agent === 'done' && (
           <>
             {open.length > 4 && (

@@ -41,6 +41,20 @@ export function isIsraeliWorkingDay(d: Date): boolean {
   return !(month === 'Iyar' && isIndependenceDay(day, wd));
 }
 
+// Days that are working days but worth a warning (plan G-D9): the eves of the rest-day holidays, and Chol
+// HaMoed of Sukkot (incl. Hoshana Raba) and Pesach.
+const EVES: Record<string, readonly number[]> = { Elul: [29], Tishri: [9, 14, 21], Nisan: [14, 20], Sivan: [5] };
+const CHOL_HAMOED: Record<string, readonly number[]> = { Tishri: [16, 17, 18, 19, 20, 21], Nisan: [16, 17, 18, 19, 20] };
+
+/** A working day that is a holiday eve or Chol HaMoed (Hoshana Raba and 20 Nisan are both: Chol HaMoed wins). */
+export function israeliHalfDay(d: Date): 'eve' | 'chol_hamoed' | null {
+  if (!isIsraeliWorkingDay(d)) return null;
+  const { month, day } = hebrewDate(d);
+  if (CHOL_HAMOED[month]?.includes(day)) return 'chol_hamoed';
+  if (EVES[month]?.includes(day)) return 'eve';
+  return null;
+}
+
 const DAY = 86_400_000;
 
 /** `days` calendar days after `fromMs`; a date that isn't a working day moves to the next one that is. */

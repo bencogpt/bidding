@@ -14,6 +14,8 @@ import {
   useChat,
   useTenderInternal,
   useSupervision,
+  useInputs,
+  useTenderAudit,
 } from '../lib/hooks';
 import {
   REQUIRED_ROLES_BY_TYPE,
@@ -36,6 +38,13 @@ import {
   visibleTabs,
   resolveTab,
   blockingApproverRoles,
+  finalCheckViewOf,
+  FLOW_HE,
+  missingRoles,
+  missingTimelineDates,
+  sendDenial,
+  SEND_DENIAL_HE,
+  type TeamRole,
   type AgentRunState,
   type ApprovalRowAction,
   type Approvals,
@@ -60,7 +69,9 @@ import AgentReport from '../components/agent/AgentReport';
 import TenderHeader, { type HeaderButton } from '../components/TenderHeader';
 import OnBehalfDialog from '../components/agent/OnBehalfDialog';
 import PublishDialog from '../components/agent/PublishDialog';
-import { markDraftSeen } from '../lib/seen';
+import InputsPanel from '../components/agent/InputsPanel';
+import TimelineTab from '../components/timeline/TimelineTab';
+import { markBehalfSeen, markDraftSeen } from '../lib/seen';
 
 // The prototype's tabs (shared visibleTabs). "שיתוף והרשאות" and "תיק מכרז" are hidden for now (plan D9):
 // suppliers are picked in the publish dialog. The conference stage has no backend.
@@ -95,15 +106,20 @@ export default function TenderWorkspace() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   // Set when the supervisor blocked publication — offers the audited manager override.
-  const [blocked, setBlocked] = useState(false);
-  const [overrideReason, setOverrideReason] = useState('');
+  // The suppliers picked in the publish dialog (published in the same call — plan G-D6).
+  const [publishPick, setPublishPick] = useState<string[]>([]);
   const reports = useSupervision(id);
+  const inputs = useInputs(id);
+  const caseAudit = useTenderAudit(id);
   // A check this browser started (until the server reports runs itself — plan B1).
   const [agentBusy, setAgentBusy] = useState(false);
   // Approving on a participant's behalf: the row it was asked for, while the reason dialog is open.
   const [onBehalf, setOnBehalf] = useState<ApprovalRowAction | null>(null);
   const [onBehalfError, setOnBehalfError] = useState('');
   const [publishOpen, setPublishOpen] = useState(false);
+  // Continuing without the AI review when it was unavailable at the final check (plan G-D5).
+  const [continueOpen, setContinueOpen] = useState(false);
+  const [continueError, setContinueError] = useState('');
 
   // The server starts the agent by itself (plan B1). Until it claims the run, the agent shows as starting;
   // when that grace period ends the page re-renders, so a failed automatic run leaves "הרץ סוכן מפקח".
@@ -121,27 +137,26 @@ export default function TenderWorkspace() {
     if (tender && user && tab === 'document' && draftStateOf(tender) !== 'doc') markDraftSeen(tender.id, user.uid);
   }, [tender?.id, tender?.documentStatus, tab, user?.uid]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // A participant opened the case: "אושר בשמך" leaves their home list (UX 1.1.C).
+  useEffect(() => {
+    if (!tender || !user) return;
+    const mine = Object.values(tender.approvals ?? {}).filter((a) => a?.onBehalf && a.uid === user.uid);
+    const at = Math.max(0, ...mine.map((a) => a!.at));
+    if (at) markBehalfSeen(tender.id, user.uid, at);
+  }, [tender?.id, tender?.approvals, user?.uid]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (loading) return <div className="text-tx-soft">{t('common.loading')}</div>;
   if (!tender) return <div className="text-tx-soft">{denied ? t('team.notAssigned') : '404'}</div>;
 
   const isManager = role === 'tender_manager';
-  const transitionTo = async (
-    to: Parameters<typeof api.transitionTender>[0]['to'],
-    override?: string,
-  ) => {
+  const transitionTo = async (to: Parameters<typeof api.transitionTender>[0]['to'], supplierIds?: string[]) => {
     setBusy(true);
     setError('');
     try {
       // Left out when absent: an undefined field is sent as null, which the server rejects.
-      await api.transitionTender({ tenderId: tender.id, to, ...(override ? { overrideReason: override } : {}) });
-      setBlocked(false);
-      setOverrideReason('');
+      await api.transitionTender({ tenderId: tender.id, to, ...(supplierIds ? { supplierIds } : {}) });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-      if (to === 'published') {
-        setBlocked(true);
-        setTab('agent');
-      }
     } finally {
       setBusy(false);
     }
@@ -204,8 +219,26 @@ export default function TenderWorkspace() {
     myRoles: requiredRoles.filter((r) => tender.team?.[r] === user?.uid),
     holders,
     approvals: (tender.approvals ?? {}) as Approvals,
-    // The final approval waits for requester, legal and finance; security doesn't block (plan D2).
+    // The lock waits for requester, legal and finance; security doesn't block (plan D2).
     approverRoles: REQUIRE_APPROVALS ? blockingApproverRoles(requiredRoles) : [],
+    // The v22 flow (plan Phase G): the send, the final check and approvals cancelled by a content change.
+    sent: tender.status === 'internal_review',
+    sentAt: tender.sentForApproval?.at ?? null,
+    finalCheck: finalCheckViewOf(tender),
+    sendBlockedTitle:
+      tender.status === 'draft' && ds === 'doc'
+        ? (() => {
+            const why = sendDenial({
+              status: tender.status,
+              hasDocument: true,
+              missingRoles: missingRoles(requiredRoles, tender.team),
+              blockers: fv.blocking.length,
+              missingDates: missingTimelineDates(tender),
+            });
+            return why ? SEND_DENIAL_HE[why] : null;
+          })()
+        : null,
+    cancelled: Object.keys(tender.cancelledApprovals ?? {}) as TeamRole[],
   };
   const hv = headerAction(wctx);
   const av = approvalsView({
@@ -324,11 +357,14 @@ export default function TenderWorkspace() {
       case 'open_tab':
         if (hv.tab) setTab(hv.tab);
         return;
+      case 'send':
+        void transitionTo('internal_review'); // "שליחה לאישור" (plan G-D1)
+        return;
       case 'approve':
         void setApproval(true);
         return;
-      case 'final_approve':
-        void transitionTo('ready');
+      case 'continue_without_ai':
+        setContinueOpen(true); // a recorded reason (plan G-D5)
         return;
       case 'publish':
         // Suppliers are picked in the publish dialog (the access tab is hidden — plan D9).
@@ -371,7 +407,8 @@ export default function TenderWorkspace() {
           view: av,
           busy,
           onAction: (kind) => {
-            if (kind === 'withdraw') void setApproval(false);
+            // Procurement's "בטל את האישור שלי" takes the send back (v22); the others withdraw their approval.
+            if (kind === 'withdraw') void (isManager && tender.status === 'internal_review' && !wctx.myRoles.length ? transitionTo('draft') : setApproval(false));
             else if (confirm('לפתוח מחדש? ייווצר עותק חדש של המסמך לעריכה, האישורים יתאפסו והמסמך הנעול יישמר.')) {
               void run(() => api.reopenTender({ tenderId: tender.id })); // the agent then checks the new copy
             }
@@ -424,12 +461,12 @@ export default function TenderWorkspace() {
 
       {publishOpen && isManager && (
         <PublishDialog
-          canPublish={pendingSuppliers.length > 0}
+          count={publishPick.length}
           busy={busy}
           onClose={() => setPublishOpen(false)}
           onPublish={() => {
             setPublishOpen(false);
-            void transitionTo('published');
+            void transitionTo('published', publishPick); // saved and published in one step (plan G-D6)
           }}
         >
           <AccessPanel
@@ -441,8 +478,32 @@ export default function TenderWorkspace() {
             suppliers={suppliers}
             canManage={isManager}
             pendingSupplierIds={pendingSuppliers}
+            onSelect={setPublishPick}
           />
         </PublishDialog>
+      )}
+
+      {continueOpen && (
+        // The AI was unavailable at the final check (plan G-D5): continue with a recorded reason. New, UX to confirm.
+        <OnBehalfDialog
+          title="המשך לפרסום לספקים בלי בדיקת AI"
+          confirmLabel="המשך בלי בדיקת AI"
+          busy={busy}
+          error={continueError}
+          onCancel={() => setContinueOpen(false)}
+          onConfirm={async (reason) => {
+            setBusy(true);
+            setContinueError('');
+            try {
+              await api.continueWithoutAiCheck({ tenderId: tender.id, reason });
+              setContinueOpen(false);
+            } catch (e) {
+              setContinueError(e instanceof Error ? e.message : String(e));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
       )}
 
       {onBehalf && holders[onBehalf.role] && (
@@ -467,47 +528,15 @@ export default function TenderWorkspace() {
         />
       )}
 
-      {isManager && REQUIRE_APPROVALS && tender.status === 'internal_review' && waiting.length > 0 && (
-        <div className="card mb-4 border-teal-200 bg-teal-soft p-3 text-sm text-teal-700">
-          {t('ws.reviewWaiting', { roles: waiting.map((r) => t(`role.${r}`)).join(', ') })}
-        </div>
-      )}
+      {/* A "ready" case without every approval (from before approvals were required) can only be reopened. */}
       {isManager && REQUIRE_APPROVALS && tender.status === 'ready' && waiting.length > 0 && (
-        <div className="card mb-4 flex flex-wrap items-center justify-between gap-2 border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-          <span>{t('ws.readyMissingApprovals', { roles: waiting.map((r) => t(`role.${r}`)).join(', ') })}</span>
-          <button className="btn btn-sm" disabled={busy} onClick={() => transitionTo('internal_review')}>
-            {t('ws.backToReview')}
-          </button>
-        </div>
-      )}
-      {isManager && tender.status === 'ready' && waiting.length === 0 && pendingSuppliers.length === 0 && (
-        <div className="card mb-4 flex flex-wrap items-center justify-between gap-2 border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-          <span>{t('ws.pickSuppliersFirst')}</span>
-          <button className="btn btn-sm" onClick={() => setPublishOpen(true)}>
-            {t('ws.goPickSuppliers')}
-          </button>
+        <div className="card mb-4 border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          {t('ws.readyMissingApprovals', { roles: waiting.map((r) => t(`role.${r}`)).join(', ') })}
         </div>
       )}
       {error && (
-        <div className="card mb-4 space-y-2 border-red-200 p-4 text-sm">
+        <div className="card mb-4 border-red-200 p-4 text-sm">
           <div className="text-red-600">{error}</div>
-          {isManager && blocked && tender.status === 'ready' && (
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                className="input flex-1"
-                placeholder={t('sup.overridePlaceholder')}
-                value={overrideReason}
-                onChange={(e) => setOverrideReason(e.target.value)}
-              />
-              <button
-                className="btn"
-                disabled={busy || overrideReason.trim().length < 10}
-                onClick={() => transitionTo('published', overrideReason.trim())}
-              >
-                {t('sup.override')}
-              </button>
-            </div>
-          )}
         </div>
       )}
 
@@ -545,7 +574,18 @@ export default function TenderWorkspace() {
                     </button>
                   </div>
                 )}
-                <DocView ref={docRef} tenderId={tender.id} googleDocId={tender.googleDocId} internal locked={stageIdx >= 2} />
+                <DocView
+                  ref={docRef}
+                  tenderId={tender.id}
+                  googleDocId={tender.googleDocId}
+                  internal
+                  locked={stageIdx >= 2}
+                  {...(stageIdx === 1 && wctx.finalCheck === 'running'
+                    ? { banner: FLOW_HE.bannerFinal }
+                    : stageIdx === 1 && wctx.sent
+                      ? { banner: FLOW_HE.bannerSent }
+                      : {})}
+                />
               </>
             ) : (
               <>
@@ -594,23 +634,47 @@ export default function TenderWorkspace() {
               maxHeight: 'calc(100vh - var(--tender-header-h, 0px) - 92px)',
             }}
           >
-            <FindingsPanel
-              agent={agent}
-              serverStep={serverRunning ? serverRun?.step : null}
-              on={ds === 'doc' ? 'document' : 'draft'}
-              creating={ds === 'creating'}
-              view={fv}
-              canManage={isManager}
-              busy={busy}
-              onRun={runAgent}
-              onApply={(f) => void applyFindings([f], true)}
-              onApplyAll={() => void applyFindings(fv.open, false)}
-              onEditField={(key) => setFocusField((f) => ({ key, n: (f?.n ?? 0) + 1 }))}
-              onFocus={jumpTo}
-              onShowAll={() => setTab('agent')}
-            />
+            {/* After the send the side panel collects the team's inputs; the findings stay in the agent tab (v22). */}
+            {ds === 'doc' && (tender.sentForApproval || stageIdx >= 2) ? (
+              <InputsPanel
+                tenderId={tender.id}
+                tenderName={tender.title}
+                inputs={inputs}
+                audit={caseAudit}
+                sentAt={tender.sentForApproval?.at ?? 0}
+                onSection={(n) => docRef.current?.jumpToSection(n)}
+              />
+            ) : (
+              <FindingsPanel
+                agent={agent}
+                serverStep={serverRunning ? serverRun?.step : null}
+                final={wctx.finalCheck === 'running'}
+                on={ds === 'doc' ? 'document' : 'draft'}
+                creating={ds === 'creating'}
+                view={fv}
+                canManage={isManager}
+                busy={busy}
+                onRun={runAgent}
+                onApply={(f) => void applyFindings([f], true)}
+                onApplyAll={() => void applyFindings(fv.open, false)}
+                onEditField={(key) => setFocusField((f) => ({ key, n: (f?.n ?? 0) + 1 }))}
+                onFocus={jumpTo}
+                onShowAll={() => setTab('agent')}
+              />
+            )}
           </aside>
         </div>
+      )}
+      {shown === 'timelines' && (
+        <TimelineTab
+          tender={tender}
+          canEdit={isManager && tender.status === 'draft'}
+          audit={caseAudit}
+          onJump={(n) => {
+            setTab('document');
+            setTimeout(() => docRef.current?.jumpToSection(n), 400); // once the document tab is on screen
+          }}
+        />
       )}
       {shown === 'activity' && <ActivityTab tender={tender} template={template} />}
       {shown === 'versions' && <VersionsTab tender={tender} />}
@@ -631,6 +695,7 @@ export default function TenderWorkspace() {
           view={fv}
           agent={agent}
           serverStep={serverRunning ? serverRun?.step : null}
+          final={wctx.finalCheck === 'running'}
           on={ds === 'doc' ? 'document' : 'draft'}
           creating={ds === 'creating'}
           lastAt={fresh ? latest.at : null}

@@ -70,6 +70,8 @@ export interface TeamApproval {
   byUid?: string;
   byName?: string;
   reason?: string;
+  // Fingerprint of the document's content that was approved (plan G-D4): a later content change cancels it.
+  docHash?: string;
 }
 export type CaseApprovals = Partial<Record<TeamRole, TeamApproval>>;
 
