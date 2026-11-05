@@ -29,6 +29,7 @@ export default function DatesCard({
 }: {
   tender: TenderDoc;
   template?: TemplateDoc | null;
+  stageIdx?: number;
 }) {
   const { t } = useTranslation();
   // Templates name these fields differently, so find each by its Hebrew label first, then by key.
@@ -38,8 +39,9 @@ export default function DatesCard({
         ?.key ?? keys.find((k) => k in tender.params);
     return key ? fromParam(tender.params[key]) : null;
   };
-  const rows: { label: string; value: string | null }[] = [
-    { label: 'overview.datePublish', value: fmt(tender.createdAt) },
+  const rows: { label: string; value: string | null; noValue?: string }[] = [
+    // The day the case was published to suppliers; until then it has no date (it used to show the creation date).
+    { label: 'overview.datePublish', value: tender.publishedAt ? fmt(tender.publishedAt) : null },
     {
       label: 'overview.dateConference',
       // gathering_date / gathering_hour are the fields these templates use for the conference.
@@ -53,6 +55,7 @@ export default function DatesCard({
         .reverse()
         .filter(Boolean)
         .join(' ') || null,
+      noValue: 'overview.dateNoConference',
     },
     {
       label: 'overview.dateQuestions',
@@ -69,22 +72,28 @@ export default function DatesCard({
     },
   ];
 
+  // Prototype overview card: a small grey heading, then label / date rows (lines 1220–1222, 835–836).
   return (
-    <div className="card p-5">
-      <div className="mb-2 text-xs font-semibold text-tx-mute">{t('overview.dates')}</div>
-      <ul className="text-sm">
-        {rows.map(({ label, value }) => (
-          <li
-            key={label}
-            className="flex items-center justify-between gap-3 border-b border-paper-2 py-2 last:border-0"
-          >
-            <span>{t(label)}</span>
+    <div className="border p-[22px]" style={{ background: 'var(--panel)', borderColor: 'var(--line)', borderRadius: 8 }}>
+      <h3 className="m-0 mb-3.5 text-xs font-semibold" style={{ color: 'var(--muted)' }}>
+        {t('overview.dates')}
+      </h3>
+      {rows.map(({ label, value, noValue }) => (
+        <div
+          key={label}
+          className="flex items-center justify-between gap-3 py-1.5"
+          style={{ borderBottom: '1px solid var(--line-soft)' }}
+        >
+          <span>{t(label)}</span>
+          {value ? (
             <b className="tabular-nums" dir="ltr">
-              {value ?? t('overview.dateUnset')}
+              {value}
             </b>
-          </li>
-        ))}
-      </ul>
+          ) : (
+            <span style={{ color: 'var(--muted)' }}>{t(noValue ?? 'overview.dateUnset')}</span>
+          )}
+        </div>
+      ))}
     </div>
   );
 }

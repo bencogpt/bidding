@@ -18,6 +18,17 @@ export const REQUIRED_ROLES_BY_TYPE: Record<TenderType, TeamRole[]> = {
 
 export const isTeamRole = (r: string | undefined): r is TeamRole => !!r && (TEAM_ROLES as readonly string[]).includes(r);
 
+/**
+ * Roles that approve as extra participants: they are assigned and may approve, but the final approval and
+ * publication don't wait for them (plan D2, decided 2026-11-04: information security does not block).
+ */
+export const NON_BLOCKING_APPROVER_ROLES: readonly TeamRole[] = ['security'];
+
+/** The required roles whose approval the final approval and publication wait for. */
+export function blockingApproverRoles(required: readonly TeamRole[]): TeamRole[] {
+  return required.filter((r) => !NON_BLOCKING_APPROVER_ROLES.includes(r));
+}
+
 /** BID-2026-0042 */
 export function formatSerial(year: number, n: number): string {
   return `BID-${year}-${String(n).padStart(4, '0')}`;
@@ -51,9 +62,14 @@ export const REQUIRE_APPROVALS = true;
 
 /** One team role's sign-off on the tender during internal review. */
 export interface TeamApproval {
-  uid: string;
+  uid: string; // the slot holder the approval stands for (also when given on their behalf)
   name: string;
   at: number; // epoch ms
+  // Given by the tender manager on the holder's behalf (plan D1d), with a reason.
+  onBehalf?: boolean;
+  byUid?: string;
+  byName?: string;
+  reason?: string;
 }
 export type CaseApprovals = Partial<Record<TeamRole, TeamApproval>>;
 
@@ -69,6 +85,9 @@ export function missingApprovals(
 export const approveTenderInput = z.object({
   tenderId: z.string(),
   approve: z.boolean(), // false withdraws the caller's approval
+  // The case owner approving (or withdrawing) on behalf of this role's holder; the reason is required to approve.
+  onBehalfOf: z.enum(TEAM_ROLES).optional(),
+  reason: z.string().max(500).optional(),
 });
 export type ApproveTenderInput = z.infer<typeof approveTenderInput>;
 
@@ -100,7 +119,39 @@ export type SetRequiredRolesInput = z.infer<typeof setRequiredRolesInput>;
 export const createTenderTeamFields = {
   team: teamSchema.optional(),
   extraRoles: z.array(z.enum(TEAM_ROLES)).optional(),
+  // Roles whose unit assigns its own contact (plan D3): legal and finance always when their slot is empty;
+  // security when procurement chose "שלח לגוף אבטחת מידע".
+  unitRequests: z.array(z.enum(['legal', 'finance', 'security'])).optional(),
 };
+
+/** Roles whose unit assigns the case contact itself (plan D3) — the unit queue on their home. */
+export const UNIT_ROLES = ['legal', 'finance', 'security'] as const;
+export type UnitRole = (typeof UNIT_ROLES)[number];
+export const isUnitRole = (r: string | undefined): r is UnitRole => !!r && (UNIT_ROLES as readonly string[]).includes(r);
+
+/** The unit roles to ask on a new case: legal and finance with an empty slot, plus security if asked for. */
+export function unitRequestsFor(team: CaseTeam, asked: readonly UnitRole[] = []): UnitRole[] {
+  return UNIT_ROLES.filter((r) => !team[r] && (r !== 'security' || asked.includes('security')));
+}
+
+/** A unit contact assigns (or reassigns to a colleague) its own slot on a case (plan D3, B7). */
+export const claimTeamSlotInput = z.object({
+  tenderId: z.string(),
+  role: z.enum(UNIT_ROLES),
+  uid: z.string().min(1),
+});
+export type ClaimTeamSlotInput = z.infer<typeof claimTeamSlotInput>;
+
+/** One case waiting for a contact from the caller's unit, with the colleagues who can take it. */
+export interface UnitQueueItem {
+  tenderId: string;
+  ref: string;
+  name: string;
+  ownerName: string;
+  createdAt: number;
+  role: UnitRole;
+  candidates: { uid: string; name: string }[];
+}
 
 /** tenders/{id}/chat/{msgId} — immutable internal chat message. */
 export interface ChatMessage {

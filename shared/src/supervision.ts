@@ -159,7 +159,8 @@ export interface TenderProvenance {
 
 export type FindingSeverity = 'block' | 'warn' | 'info';
 export type SupervisionVerdict = 'PASS' | 'WARN' | 'BLOCK';
-export type SupervisionStage = 'created' | 'review' | 'ready' | 'prepublish' | 'refresh' | 'manual';
+// 'edit': the rules re-checked right after a draft edit (no AI; the last AI findings carry over).
+export type SupervisionStage = 'created' | 'review' | 'ready' | 'prepublish' | 'refresh' | 'manual' | 'edit';
 
 export type FindingCode =
   // template
@@ -201,6 +202,15 @@ export interface SupervisionFinding {
   evidence?: string; // verbatim quote from the document / record
   source: 'rules' | 'ai';
   hard?: boolean; // a hard fact that keeps blocking (see applySeverityPolicy)
+  // The draft field the finding is about (a template param key) — lets the draft view jump to it.
+  paramKey?: string;
+  // The agent's proposed replacement for that field's value (Hebrew text or a number). With it the
+  // manager can apply the fix in one click (updateTenderDraft); without it only "edit the field".
+  suggestion?: string;
+  // Stable key ('draft:…' / 'doc:…', see findingKey) — decisions and jumps refer to it (plan B2).
+  key?: string;
+  // "הצעת הסוכן": the proposed fix in one Hebrew sentence (the AI's, or a fixed text per rule code).
+  fix?: string;
 }
 
 export interface SupervisionReport {
@@ -220,6 +230,30 @@ export interface SupervisionReport {
   // fingerprints exactly the data that was checked.
   basis?: 'draft' | 'document';
   dataHash?: string | null;
+}
+
+/**
+ * The agent's current run, on the tender doc so everyone viewing the case sees it (plan B1). step is the
+ * index of the thinking step reached (AGENT_STEPS_HE, 0–5).
+ */
+export interface SupervisionRunState {
+  runId: string;
+  state: 'running' | 'done' | 'failed';
+  basis: 'draft' | 'document';
+  step: number;
+  startedAt: number;
+  by: string;
+}
+
+/** A run older than this while "running" is treated as dead (a crashed function never finished it). */
+export const SUPERVISION_RUN_STALE_MS = 10 * 60 * 1000;
+
+/** The manager's decision on one finding (plan B2): incorporated, or left as is. Warnings only. */
+export interface FindingDecisionRecord {
+  action: 'applied' | 'skipped';
+  by: string;
+  byName: string;
+  at: number;
 }
 
 /** Small summary kept on the tender doc so lists/headers can show the latest verdict. */
@@ -244,15 +278,25 @@ export interface SupervisionSummary {
   dataHash?: string | null;
 }
 
+/** The checks that decide whether suppliers see the document: publishing it, and re-publishing an edited one. */
+export const PUBLISH_GATE_STAGES: readonly SupervisionStage[] = ['prepublish', 'refresh'];
+
 /**
  * Only hard facts block: a leftover {{placeholder}} or internal flag, a confidential-value leak, the wrong
  * template, an unreadable document — each marked `hard` by the rule that found it. Every other blocking
  * finding (AI review, legal sections, unsourced values, …) becomes a warning: the manager decides.
+ *
+ * Fail-closed at the publish gate: there, an AI review that could not run (`SUPERVISOR_UNAVAILABLE`) keeps
+ * blocking, so an unchecked document reaches suppliers only through a re-check or the manager's audited
+ * override. In the draft and during approvals it is a warning, as its text says.
  */
-export function applySeverityPolicy<F extends Pick<SupervisionFinding, 'severity' | 'hard' | 'source'>>(findings: F[]): F[] {
-  return findings.map((f) =>
-    f.severity === 'block' && !(f.hard && f.source === 'rules') ? { ...f, severity: 'warn' as const } : f,
-  );
+export function applySeverityPolicy<F extends Pick<SupervisionFinding, 'severity' | 'hard' | 'source' | 'code'>>(
+  findings: F[],
+  stage?: SupervisionStage,
+): F[] {
+  const gate = stage !== undefined && PUBLISH_GATE_STAGES.includes(stage);
+  const keepsBlocking = (f: F) => (f.hard && f.source === 'rules') || (gate && f.code === 'SUPERVISOR_UNAVAILABLE');
+  return findings.map((f) => (f.severity === 'block' && !keepsBlocking(f) ? { ...f, severity: 'warn' as const } : f));
 }
 
 export function verdictOf(findings: Pick<SupervisionFinding, 'severity'>[]): SupervisionVerdict {

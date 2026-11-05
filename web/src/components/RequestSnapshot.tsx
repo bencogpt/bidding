@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
-import { REQUESTER_FIELDS, splitRequestBrief, type BidRequestDoc } from '@obms/shared';
-import Avatar from './Avatar';
+import { REQUESTER_FIELDS, ROLE_HE, splitRequestBrief, type BidRequestDoc } from '@obms/shared';
+import PersonChip from './agent/PersonChip';
 
 const MONEY_KEYS = new Set(['annual_budget']);
 
@@ -22,16 +22,19 @@ export default function RequestSnapshot({ request, sentAt, id }: { request: BidR
     MONEY_KEYS.has(key) && Number.isFinite(Number(v)) ? `₪${Number(v).toLocaleString('en-US')}` : String(v);
 
   return (
-    <div id={id} className="mb-6 scroll-mt-4 rounded-xl border border-black/5 bg-paper p-4">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="font-semibold">{t('req.snapshotTitle')}</h3>
-        <span className="flex items-center gap-1.5 text-xs text-tx-soft">
-          {t('req.sentBy')}
-          <Avatar name={request.requesterName} size={20} />
-          <b className="font-normal text-accent">{request.requesterName}</b>
-          <span>· {sentAt}</span>
-        </span>
-      </div>
+    <div
+      id={id}
+      className="mb-6 scroll-mt-4 border px-[18px] py-3.5"
+      style={{ background: 'var(--bg)', borderColor: 'var(--line-soft)', borderRadius: 8 }}
+    >
+      {/* Prototype .reqsnap > h4 (lines 215–217, 3364): the title, then who sent it as a person card and when. No
+          chat button in the card: the case, and its chat, don't exist yet (plan D14). */}
+      <h4 className="m-0 mb-2.5 text-sm font-medium">
+        {t('req.snapshotTitle')}
+        <small className="ms-2.5 text-xs font-normal" style={{ color: 'var(--muted)' }}>
+          {t('req.sentBy')} <PersonChip name={request.requesterName} role={ROLE_HE.requester} /> · <bdi>{sentAt}</bdi>
+        </small>
+      </h4>
 
       <div className="rounded-lg border border-black/5 bg-white p-5">
         {rows.length > 0 && (

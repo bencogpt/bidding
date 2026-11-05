@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/AuthProvider';
 import type { Role } from '@obms/shared';
-import { useMyFeedbackRequests } from '../lib/hooks';
+import { useBidRequests } from '../lib/hooks';
 
 function NavItem({ to, label, badge }: { to: string; label: string; badge?: number }) {
   return (
@@ -27,7 +27,7 @@ function NavItem({ to, label, badge }: { to: string; label: string; badge?: numb
 }
 
 function initials(name: string) {
-  const parts = name.trim().split(/s+/);
+  const parts = name.trim().split(/\s+/);
   return parts.length > 1 ? parts[0][0] + parts[1][0] : name.slice(0, 2);
 }
 
@@ -97,10 +97,11 @@ function UserMenu() {
 
 export default function InternalLayout() {
   const { t } = useTranslation();
-  const { role, user } = useAuth();
+  const { role } = useAuth();
   const navigate = useNavigate();
   const isManager = role === 'tender_manager';
-  const pendingFeedback = useMyFeedbackRequests(user?.uid);
+  // The number beside "מבט כללי" is the rows of the requests table on that page.
+  const { requests: deskRequests } = useBidRequests();
   // The dashboard list uses the full width and height of the screen; other pages stay a centred column.
   const fullScreen = useLocation().pathname === '/all';
 
@@ -120,7 +121,7 @@ export default function InternalLayout() {
       <div className="flex min-h-0 flex-1">
         <aside className="w-[200px] shrink-0 border-e border-paper-2 bg-surface px-3.5 py-5">
           <nav className="space-y-0.5">
-            <NavItem to="/" label={t('nav.myDesk')} badge={pendingFeedback.length} />
+            <NavItem to="/" label={t('nav.myDesk')} badge={deskRequests.length} />
             <NavItem to="/all" label={t('nav.dashboard')} />
             <div
               className="flex cursor-default items-center justify-between rounded-[10px] px-3.5 py-2 text-sm text-tx-soft opacity-[.55]"

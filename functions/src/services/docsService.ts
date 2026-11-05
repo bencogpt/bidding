@@ -11,11 +11,12 @@
 import { google } from 'googleapis';
 import { storage } from '../lib/admin.js';
 import type { TenderDoc, TemplateDoc, UserDoc } from '@obms/shared';
-import { TENDER_TYPE_LABELS_HE, isOmittedParam } from '@obms/shared';
+import { TENDER_TYPE_LABELS_HE, fillTemplate } from '@obms/shared';
 import { htmlToText } from './supervisorChecks.js';
 import { docPlainText } from './docText.js';
 import { bodyToHtml, escapeHtml, rtlifyExportedHtml } from './docHtml.js';
 import { groupSessions, sampleSessions, type RevisionMeta } from './scoreCalc.js';
+import { permissionsToLock } from './docLock.js';
 
 // drive.file = access only to files the app creates. Non-sensitive → no OAuth verification
 // needed. (We create the tender doc from the template text rather than copying a foreign file,
@@ -60,15 +61,8 @@ export function placeholderSpellings(key: string): string[] {
   return [`{{${key}}}`, `{{ ${key} }}`, `{{${key} }}`, `{{ ${key}}}`];
 }
 
-// Unfilled placeholders stay visible as {{key}} (matching real Docs mode) so the supervisor and
-// the manager see the gap — never silently papered over.
-export function fillTemplate(body: string, params: Record<string, string | number>): string {
-  return body.replace(/\{\{\s*([^}\n]+?)\s*\}\}/g, (m, key: string) => {
-    if (isOmittedParam({ key: key.trim() })) return ''; // tags removed from the system print nothing
-    const v = params[key.trim()];
-    return v !== undefined && String(v) !== '' ? String(v) : m;
-  });
-}
+// fillTemplate lives in @obms/shared (the browser's draft view renders with the same rule).
+export { fillTemplate };
 
 function renderHtml(tender: TenderDoc, template: TemplateDoc): string {
   const body = fillTemplate(template.bodyTemplate, tender.params);
@@ -359,6 +353,88 @@ export async function setDocumentPermissions(
   };
   for (const email of opts.writerEmails ?? []) await grant(email, 'writer');
   for (const email of opts.commenterEmails ?? []) await grant(email, 'commenter');
+}
+
+/**
+ * Lock the case's Google Doc at the final approval (plan B4): everyone the case shared it with — the manager
+ * included — can only read; the owner (the system account) keeps full access, so reopening can still copy it.
+ * Best-effort: the case is already locked in the system, a failure here is logged and the permissions can be
+ * narrowed again. Returns how many permissions were narrowed (0 in dev mode, where access is in-system).
+ */
+export async function lockDocument(googleDocId: string | null): Promise<number> {
+  if (!realMode() || !googleDocId) return 0;
+  const { drive } = googleClients();
+  try {
+    const res = await drive.permissions.list({
+      fileId: googleDocId,
+      fields: 'permissions(id, type, role, emailAddress)',
+      supportsAllDrives: true,
+    });
+    const ids = permissionsToLock(res.data.permissions ?? []);
+    for (const permissionId of ids) {
+      await drive.permissions.update({
+        fileId: googleDocId,
+        permissionId,
+        requestBody: { role: 'reader' },
+        supportsAllDrives: true,
+      });
+    }
+    return ids.length;
+  } catch (e) {
+    console.warn(`Docs lock skipped for ${googleDocId}:`, (e as Error).message);
+    return 0;
+  }
+}
+
+/**
+ * A new, editable copy of a case's document for "reopen" (plan B5): a Drive copy of the Google Doc, or — in dev
+ * mode — a copy of the stored HTML under a new name. The original is not touched.
+ */
+export async function copyTenderDocument(tender: TenderDoc): Promise<GeneratedDoc> {
+  if (!realMode()) {
+    const from = tender.docExportPath ?? htmlPath(tender.id);
+    const to = `tenders/${tender.id}/document-${Date.now()}.html`;
+    await storage.bucket().file(from).copy(storage.bucket().file(to));
+    return { googleDocId: null, exportPath: to };
+  }
+  if (!tender.googleDocId) throw new Error('Tender has no googleDocId to copy.');
+  const { drive } = googleClients();
+  const copy = await drive.files.copy({
+    fileId: tender.googleDocId,
+    requestBody: { name: tender.title },
+    fields: 'id',
+    supportsAllDrives: true,
+  });
+  return { googleDocId: copy.data.id!, exportPath: null };
+}
+
+/**
+ * Who last edited the case's Google Doc, from Drive's revision history — the "edited by" of a version.
+ * null in dev mode (the document is stored HTML, nobody edits it) or when Drive doesn't say.
+ */
+export async function lastEditorName(tender: Pick<TenderDoc, 'googleDocId'>): Promise<string | null> {
+  if (!realMode() || !tender.googleDocId) return null;
+  try {
+    const { drive } = googleClients();
+    let last: string | null = null;
+    let pageToken: string | undefined;
+    for (let page = 0; page < 10; page++) {
+      const res = await drive.revisions.list({
+        fileId: tender.googleDocId,
+        pageSize: 200,
+        ...(pageToken ? { pageToken } : {}),
+        fields: 'nextPageToken, revisions(lastModifyingUser(displayName))',
+      });
+      const revs = res.data.revisions ?? [];
+      if (revs.length) last = revs[revs.length - 1].lastModifyingUser?.displayName ?? last;
+      pageToken = res.data.nextPageToken ?? undefined;
+      if (!pageToken) break;
+    }
+    return last;
+  } catch (e) {
+    console.warn('lastEditorName skipped:', (e as Error).message);
+    return null;
+  }
 }
 
 /** Copy a Doc as a backup before modifying it (e.g. template conversion). Returns the copy id. */

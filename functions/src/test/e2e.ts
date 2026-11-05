@@ -37,6 +37,11 @@ connectFirestoreEmulator(db, '127.0.0.1', 8080);
 const fns = getFunctions(app, 'europe-west1');
 connectFunctionsEmulator(fns, '127.0.0.1', 5001);
 
+// The Admin SDK must talk to the emulators even when this runs directly (`node functions/lib/test/e2e.js`)
+// rather than under `firebase emulators:exec`, which sets these — never to the live project.
+process.env.FIRESTORE_EMULATOR_HOST ??= '127.0.0.1:8080';
+process.env.FIREBASE_AUTH_EMULATOR_HOST ??= '127.0.0.1:9099';
+process.env.FIREBASE_STORAGE_EMULATOR_HOST ??= '127.0.0.1:9199';
 const adminApp = initAdmin({ projectId: 'biding-system', storageBucket: 'biding-system.firebasestorage.app' }, 'e2e-admin');
 const call = (n: string) => httpsCallable(fns, n);
 const login = (email: string) => signInWithEmailAndPassword(auth, email, 'password');
@@ -54,6 +59,34 @@ async function approveAs(tenderId: string, roles: string[]) {
   }
   await signOut(auth);
   await login('manager@obms.test');
+}
+
+// The server checks by itself (plan B1): wait until the check of `basis` has finished, and return it.
+async function waitForCheck(tenderId: string, basis: 'draft' | 'document', timeoutMs = 120_000) {
+  const until = Date.now() + timeoutMs;
+  for (;;) {
+    const t = (await getDoc(doc(db, 'tenders', tenderId))).data() as
+      | { lastSupervision?: { basis?: string; runId: string }; supervisionRun?: { state: string } }
+      | undefined;
+    if (t?.lastSupervision?.basis === basis && t.supervisionRun?.state !== 'running') return t.lastSupervision;
+    if (Date.now() > until) throw new Error(`no ${basis} check of ${tenderId} within ${timeoutMs} ms`);
+    await new Promise((r) => setTimeout(r, 400));
+  }
+}
+
+// Whether the given role's approval is refused with a message matching `re`; the manager is signed back in.
+async function refusedAs(tenderId: string, role: string, re: RegExp): Promise<boolean> {
+  await signOut(auth);
+  await login(role + '@obms.test');
+  let refused = false;
+  try {
+    await call('approveTender')({ tenderId, approve: true });
+  } catch (e) {
+    refused = re.test((e as Error).message);
+  }
+  await signOut(auth);
+  await login('manager@obms.test');
+  return refused;
 }
 
 async function main() {
@@ -172,8 +205,8 @@ async function main() {
   const prov = await getDoc(doc(db, 'tenders', tenderId, 'internal', 'provenance'));
   assert.equal(prov.data()?.templateType, 'goods', 'provenance records the template used');
   assert.equal(prov.data()?.templateId, 'T-A');
-  // Creation is fast; the case page starts the first supervisor check right after.
-  await call('runSupervision')({ tenderId, initial: true });
+  // Creation is fast; the server starts the first supervisor check by itself (plan B1).
+  await waitForCheck(tenderId, 'draft');
   const createdRuns = await getDocs(collection(db, 'tenders', tenderId, 'supervision'));
   assert.equal(createdRuns.size, 1, 'initial supervisor check ran');
   const again = (await call('runSupervision')({ tenderId, initial: true })) as { data: { skipped?: boolean } };
@@ -197,6 +230,7 @@ async function main() {
   }
   assert.ok(noDocReview, 'review is refused before the document exists');
   await call('generateDocument')({ tenderId });
+  await waitForCheck(tenderId, 'document'); // the server checks the new document by itself
   const generated = (await getDoc(doc(db, 'tenders', tenderId))).data()!;
   assert.equal(generated.documentStatus, 'generated');
   assert.ok(generated.docExportPath, 'document created after the inspector passed the draft');
@@ -209,9 +243,9 @@ async function main() {
   assert.ok(twice, 'the document is created only once');
   console.log('✓ draft-first: document created only after the inspector checked the draft');
 
-  await call('transitionTender')({ tenderId, to: 'internal_review' });
-  // With REQUIRE_APPROVALS off, an early "ready" would succeed and end the review round —
-  // so only probe the refusal when the gate is on. The approvals themselves are always exercised.
+  // Approvals open as soon as the document exists — no "send for approval" step; the manager acts last
+  // (plan D1). With REQUIRE_APPROVALS off, an early "ready" would succeed, so only probe the refusal
+  // when the gate is on. The approvals themselves are always exercised.
   if (REQUIRE_APPROVALS) {
     let notApproved = false;
     try {
@@ -221,10 +255,61 @@ async function main() {
     }
     assert.ok(notApproved, 'final approval is refused until every role has approved');
   }
-  await approveAs(tenderId, ['requester', 'legal', 'finance']);
+  assert.ok(await refusedAs(tenderId, 'legal', /המשפטי מאשר אחרי/), 'legal approves after requester and finance (D1a)');
+  await approveAs(tenderId, ['requester']);
+  // The manager approves on finance's behalf (D1d): a reason is required; it counts like finance's own.
+  let noReason = false;
+  try {
+    await call('approveTender')({ tenderId, approve: true, onBehalfOf: 'finance', reason: 'קצר' });
+  } catch (e) {
+    noReason = /יש לציין סיבה/.test((e as Error).message);
+  }
+  assert.ok(noReason, 'approving on behalf needs a reason');
+  await call('approveTender')({ tenderId, approve: true, onBehalfOf: 'finance', reason: 'אושר בטלפון, איש הכספים בחופשה' });
+  await approveAs(tenderId, ['legal']);
   const approved = (await getDoc(doc(db, 'tenders', tenderId))).data()!.approvals ?? {};
   assert.deepEqual(Object.keys(approved).sort(), ['finance', 'legal', 'requester'], 'each role recorded its approval');
+  assert.equal(approved.finance.onBehalf, true, "finance's approval was given on its behalf");
+  assert.equal(approved.finance.uid, goodsTeam.finance, 'an approval on behalf stands for the slot holder');
   await call('transitionTender')({ tenderId, to: 'ready' });
+  const locked = (await getDoc(doc(db, 'tenders', tenderId))).data()!;
+  assert.equal(locked.status, 'ready', "the manager's final approval goes straight from the draft to ready");
+  assert.ok(locked.lockedAt, 'and locks the case');
+  console.log('✓ approvals: team first (legal after requester and finance), on behalf with a reason, manager last');
+  // Reopen a locked case (plan B5): a new editable copy, clean approvals, the locked original kept.
+  await signOut(auth);
+  await login('requester@obms.test');
+  let reopenDenied = false;
+  try {
+    await call('reopenTender')({ tenderId });
+  } catch {
+    reopenDenied = true;
+  }
+  assert.ok(reopenDenied, 'only the tender manager can reopen');
+  await signOut(auth);
+  await login('manager@obms.test');
+  await call('reopenTender')({ tenderId });
+  const reopened = (await getDoc(doc(db, 'tenders', tenderId))).data()!;
+  assert.equal(reopened.status, 'internal_review', 'reopened: back to writing');
+  assert.equal(reopened.lockedAt, null, 'unlocked');
+  assert.deepEqual(Object.keys(reopened.approvals ?? {}), [], 'a clean round of approvals');
+  assert.equal(reopened.lockedDocuments?.length, 1, 'the locked original is kept');
+  assert.notEqual(reopened.docExportPath, reopened.lockedDocuments[0].docExportPath, 'with a new document to edit');
+  assert.equal(reopened.lockedDocuments[0].approvals.legal.uid, goodsTeam.legal, 'and the approvals it was locked with');
+  const reopenedCheck = await waitForCheck(tenderId, 'document');
+  assert.ok(reopenedCheck, 'the agent checked the new document');
+  let reopenTwice = false;
+  try {
+    await call('reopenTender')({ tenderId });
+  } catch {
+    reopenTwice = true;
+  }
+  assert.ok(reopenTwice, 'only a locked document can be reopened');
+  // …approved and locked again, ready to publish.
+  await approveAs(tenderId, ['requester', 'finance', 'legal']);
+  await call('transitionTender')({ tenderId, to: 'ready' });
+  assert.equal((await getDoc(doc(db, 'tenders', tenderId))).data()!.status, 'ready', 'locked again');
+  console.log('✓ reopen: new copy, clean approvals, locked original kept, locked again');
   // Publishing goes to the suppliers the manager picked beforehand — at least one.
   let noSuppliers = false;
   try {
@@ -242,11 +327,13 @@ async function main() {
     data: { verdict: string };
   };
   assert.notEqual(published.data.verdict, 'BLOCK', 'clean tender passes the supervisor gate');
-  assert.equal((await getDoc(doc(db, 'tenders', tenderId))).data()!.status, 'published');
+  const publishedDoc = (await getDoc(doc(db, 'tenders', tenderId))).data()!;
+  assert.equal(publishedDoc.status, 'published');
+  assert.ok(publishedDoc.publishedAt, 'the publication date is recorded (overview: פרסום לספקים)');
   console.log(`✓ supervisor: provenance + G6 split + gate passed (${published.data.verdict})`);
 
-  // A document with an unfilled placeholder is blocked; an audited override lets it through.
-  // The optional "milestones" field is left empty, so {{milestones}} stays in the document.
+  // An empty field of the draft is one warning (plan D7): the document can still be created, the field
+  // printed as a blank line. The optional "milestones" field is left empty.
   const bad = (await call('createTender')({
     title: 'מכרז עם חוסר',
     bidRequestId: await newRequest(),
@@ -254,34 +341,40 @@ async function main() {
     params: { org: 'משרד הביטחון', scope: 'הקמת מערכת מצלמות', service: 'תחזוקה שנתית' },
     team: { requester: goodsTeam.requester, legal: legalUid }, // finance + security slots left empty
   })) as { data: { id: string; serial: string; verdict: string | null; missingRoles: string[] } };
-  const badCheck = (await call('runSupervision')({ tenderId: bad.data.id, initial: true })) as { data: { verdict: string } };
-  assert.equal(badCheck.data.verdict, 'BLOCK', 'supervisor flags the leftover placeholder in the draft');
-  assert.deepEqual(bad.data.missingRoles, ['finance', 'security']);
-  const refusedWith = async (re: RegExp) => {
-    try {
-      await call('generateDocument')({ tenderId: bad.data.id });
-    } catch (e) {
-      return re.test((e as Error).message);
-    }
-    return false;
+  const badLast = await waitForCheck(bad.data.id, 'draft');
+  const badCheck = {
+    data: (await getDoc(doc(db, 'tenders', bad.data.id, 'supervision', badLast.runId))).data() as {
+      verdict: string;
+      findings: { code: string; severity: string; message: string; key?: string }[];
+    },
   };
-  assert.ok(await refusedWith(/חוסמים/), 'no document while the inspector blocks the draft (no override)');
+  assert.notEqual(badCheck.data.verdict, 'BLOCK', 'an empty field of the draft does not block (D7)');
+  const emptyWarning = badCheck.data.findings.find((f) => f.code === 'MISSING_INFO' && f.severity === 'warn' && /כקו ריק/.test(f.message));
+  assert.ok(emptyWarning, 'the empty fields are one warning');
+  assert.match(emptyWarning!.key ?? '', /^draft:/, 'findings carry a stable key (B2)');
+  assert.deepEqual(bad.data.missingRoles, ['finance', 'security']);
+  // The manager marks the warning as incorporated (B2); a blocking finding can't be marked.
+  await call('decideFinding')({ tenderId: bad.data.id, keys: [emptyWarning!.key!], action: 'applied' });
+  assert.equal((await getDoc(doc(db, 'tenders', bad.data.id))).data()!.findingDecisions[emptyWarning!.key!].action, 'applied');
   const edited = (await call('updateTenderDraft')({
     tenderId: bad.data.id,
     params: { milestones: 'אבן דרך 1: תכנון; אבן דרך 2: התקנה' },
   })) as { data: { changed: string[] } };
   assert.deepEqual(edited.data.changed, ['milestones'], 'only the edited field changed');
-  assert.ok(await refusedWith(/השתנתה/), 'a check of older draft data does not open the gate');
-  const recheck = (await call('runSupervision')({ tenderId: bad.data.id })) as { data: { verdict: string } };
-  assert.notEqual(recheck.data.verdict, 'BLOCK', 'the fixed draft passes the inspector');
+  // The rules checked the edited draft at once (B3): the check is current, no manual re-run before the document.
+  const afterEdit = (await getDoc(doc(db, 'tenders', bad.data.id))).data()!;
+  assert.equal(afterEdit.lastSupervision.stage, 'edit', 'the rules re-checked the draft after the edit');
+  assert.equal(afterEdit.lastSupervision.dataHash, afterEdit.draftDataHash, 'the check covers the edited data');
+  assert.equal(afterEdit.supervisionRun.state, 'done', 'the run is shown as finished to everyone (B1)');
+  assert.equal(afterEdit.findingDecisions?.[emptyWarning!.key!], undefined, 'the field is filled: the warning is resolved');
   await call('generateDocument')({ tenderId: bad.data.id });
-  console.log('✓ draft-first: blocked draft fixed in the app, rechecked, then its document created');
-  // Simulate a later manual edit that leaves a placeholder in the document (dev mode keeps HTML in Storage).
+  await waitForCheck(bad.data.id, 'document');
+  console.log('✓ draft-first: empty fields warn (D7); decisions; the rules re-check each edit; document created');
+  // A manual edit that leaves a placeholder in the document (dev mode keeps HTML in Storage).
   const docFile = adminStorage(adminApp).bucket('biding-system.firebasestorage.app').file(`tenders/${bad.data.id}/document.html`);
   const [html] = await docFile.download();
-  await docFile.save(html.toString('utf8').replace('</body>', '<p>{{milestones_appendix}}</p></body>'), {
-    contentType: 'text/html',
-  });
+  const cleanHtml = html.toString('utf8');
+  const withPlaceholder = cleanHtml.replace('</body>', '<p>{{milestones_appendix}}</p></body>');
   let gateRefused = false;
   try {
     await call('transitionTender')({ tenderId: bad.data.id, to: 'internal_review' });
@@ -289,12 +382,70 @@ async function main() {
     gateRefused = /יש לשבץ/.test((e as Error).message);
   }
   assert.ok(gateRefused, 'review is refused while a required role is empty');
+  // Finance assigns its own contact from its home (plan D3): the case waits in the unit queue until then.
+  await signOut(auth);
+  await login('finance@obms.test');
+  type Queue = { data: { items: { tenderId: string; role: string; candidates: { uid: string }[] }[] } };
+  const queue = (await call('unitQueue')({})) as Queue;
+  const queued = queue.data.items.find((i) => i.tenderId === bad.data.id);
+  assert.ok(queued, 'the case waits in the finance unit queue');
+  assert.ok(queued!.candidates.some((c) => c.uid === goodsTeam.finance), 'with the unit colleagues to pick from');
+  let otherUnit = false;
+  try {
+    await call('claimTeamSlot')({ tenderId: bad.data.id, role: 'legal', uid: legalUid });
+  } catch (e) {
+    otherUnit = /היחידה שלך/.test((e as Error).message);
+  }
+  assert.ok(otherUnit, "a unit can't assign another unit's contact");
+  await call('claimTeamSlot')({ tenderId: bad.data.id, role: 'finance', uid: goodsTeam.finance });
+  const queueAfter = (await call('unitQueue')({})) as Queue;
+  assert.ok(!queueAfter.data.items.some((i) => i.tenderId === bad.data.id), 'and leaves it once assigned');
+  await signOut(auth);
+  await login('manager@obms.test');
+  console.log('✓ unit contacts: finance assigned its own contact from its queue (D3)');
   await call('assignTeamMember')({ tenderId: bad.data.id, role: 'finance', uid: goodsTeam.finance });
   await call('assignTeamMember')({ tenderId: bad.data.id, role: 'security', uid: uidOf('security') });
   await call('transitionTender')({ tenderId: bad.data.id, to: 'internal_review' });
   console.log('✓ review gate: refused with an empty slot, passes once the team is complete');
-  await approveAs(bad.data.id, ['requester', 'legal', 'finance', 'security']);
+  // A blocking finding on the document stops approvals ("ממצא חוסם מונע אישור סופי ופרסום", plan D1).
+  await docFile.save(withPlaceholder, { contentType: 'text/html' });
+  const blockedCheck = (await call('runSupervision')({ tenderId: bad.data.id })) as { data: { verdict: string } };
+  assert.equal(blockedCheck.data.verdict, 'BLOCK', 'the leftover placeholder blocks the document');
+  assert.ok(await refusedAs(bad.data.id, 'requester', /ממצא חוסם/), 'no approval while a blocking finding is open');
+  await docFile.save(cleanHtml, { contentType: 'text/html' });
+  const clearCheck = (await call('runSupervision')({ tenderId: bad.data.id })) as { data: { verdict: string } };
+  assert.notEqual(clearCheck.data.verdict, 'BLOCK', 'the cleaned document passes again');
+  console.log('✓ approvals: refused while the document has a blocking finding');
+  // The versions tab (plan B6): each observed edit is a version with a summary; a version can be viewed and compared.
+  const verDoc = await getDoc(doc(db, 'tenders', bad.data.id, 'internal', 'versions'));
+  const verList = (verDoc.data()?.list ?? []) as { n: number; summary?: string; changes?: number; by?: string }[];
+  assert.ok(verList.length >= 3, 'the document, the edit with the placeholder, and the cleaned document are versions');
+  assert.equal(verList[0].summary, 'המסמך נוצר מהטיוטה', 'version 1 is the document as created');
+  assert.equal(verList[0].by, 'דנה מנהלת', 'and records who created it');
+  assert.ok((verList[1].changes ?? 0) >= 1 && /שונתה|שונו/.test(verList[1].summary ?? ''), 'the edit is summarised');
+  const seen = (await call('getVersionView')({ tenderId: bad.data.id, n: 1 })) as { data: { text: string } };
+  assert.ok(seen.data.text.length > 100, 'a version can be viewed');
+  const versionCmp = (await call('getVersionView')({ tenderId: bad.data.id, n: 2, compare: true })) as {
+    data: { currentN: number; rows: { kind: string; text: string }[] };
+  };
+  assert.equal(versionCmp.data.currentN, verList.length, 'compared with the current version');
+  assert.ok(versionCmp.data.rows.some((r) => r.kind === 'del' && r.text.includes('milestones_appendix')), 'the removed text is shown');
+  await signOut(auth);
+  await login('a@aegis.test');
+  let supplierDenied = false;
+  try {
+    await call('getVersionView')({ tenderId: bad.data.id, n: 1 });
+  } catch {
+    supplierDenied = true;
+  }
+  assert.ok(supplierDenied, 'suppliers cannot read versions');
+  await signOut(auth);
+  await login('manager@obms.test');
+  console.log('✓ versions: summaries, who, view and compare; internal case members only');
+  // Security is assigned but doesn't block: the final approval goes ahead without it (plan D2).
+  await approveAs(bad.data.id, ['requester', 'finance', 'legal']);
   await call('transitionTender')({ tenderId: bad.data.id, to: 'ready' });
+  console.log('✓ approvals: information security does not block the final approval');
   // A case that is "ready" without every approval (e.g. from before approvals were required) can't be
   // published; sent back to review it keeps the approvals already given.
   process.env.FIRESTORE_EMULATOR_HOST ??= '127.0.0.1:8080';
@@ -308,10 +459,12 @@ async function main() {
   assert.ok(unapproved, 'publish is refused while a required role has not approved');
   await call('transitionTender')({ tenderId: bad.data.id, to: 'internal_review' });
   const kept = (await getDoc(doc(db, 'tenders', bad.data.id))).data()!.approvals ?? {};
-  assert.deepEqual(Object.keys(kept).sort(), ['finance', 'requester', 'security'], 'approvals already given are kept');
+  assert.deepEqual(Object.keys(kept).sort(), ['finance', 'requester'], 'approvals already given are kept');
   await approveAs(bad.data.id, ['legal']);
   await call('transitionTender')({ tenderId: bad.data.id, to: 'ready' });
   console.log('✓ approvals: publish needs every role; back to review keeps given approvals');
+  // After the lock a manual edit leaves a placeholder: the publish gate still catches it.
+  await docFile.save(withPlaceholder, { contentType: 'text/html' });
   await call('setPendingSuppliers')({ tenderId: bad.data.id, supplierIds: ['sup_globex'] });
   let blocked = false;
   try {
@@ -663,6 +816,27 @@ async function main() {
     'responses',
     'first submission advances published → responses',
   );
+  // The refusal's message, or null when the call went through.
+  const refusal = async (fn: () => Promise<unknown>) => {
+    try {
+      await fn();
+      return null;
+    } catch (e) {
+      return (e as Error).message;
+    }
+  };
+  // Before the comparison there is no award, and a refused award leaves no winner behind.
+  assert.match(
+    (await refusal(() => call('awardTender')({ tenderId, supplierId: 'sup_aegis' }))) ?? '',
+    /רק לאחר השוואת ההצעות/,
+    'no award before the comparison',
+  );
+  assert.equal((await getDoc(doc(db, 'tenders', tenderId))).data()!.awardedSupplierId ?? null, null, 'the refused award wrote no winner');
+  assert.match(
+    (await refusal(() => call('transitionTender')({ tenderId, to: 'evaluated' }))) ?? '',
+    /השוואת ההצעות/,
+    'the manager cannot skip the comparison',
+  );
   const cmp = (await call('runComparison')({ tenderId })) as { data: { ranking: { injection?: unknown }[] } };
   assert.ok(cmp.data.ranking.length >= 1, 'comparison produced a ranking');
   assert.ok(cmp.data.ranking[0].injection, 'the injection attempt is flagged to the manager');
@@ -674,11 +848,30 @@ async function main() {
     'evaluated',
     'comparison advances → evaluated',
   );
+  // "awarded" only comes with a winner, and the winner is one of the bidders.
+  assert.match(
+    (await refusal(() => call('transitionTender')({ tenderId, to: 'awarded' }))) ?? '',
+    /בבחירת הספק הזוכה/,
+    'no award without a winner through transitionTender',
+  );
+  assert.match(
+    (await refusal(() => call('awardTender')({ tenderId, supplierId: 'sup_meridian' }))) ?? '',
+    /לא הגיש הצעה/,
+    'a supplier that did not bid cannot win',
+  );
+  const notYet = (await getDoc(doc(db, 'tenders', tenderId))).data()!;
+  assert.equal(notYet.status, 'evaluated', 'the refused moves left the status');
+  assert.equal(notYet.awardedSupplierId ?? null, null, 'and wrote no winner');
   await call('awardTender')({ tenderId, supplierId: 'sup_aegis' });
   const awarded = (await getDoc(doc(db, 'tenders', tenderId))).data()!;
   assert.equal(awarded.status, 'awarded', 'award advances → awarded');
   assert.equal(awarded.awardedSupplierId, 'sup_aegis', 'winner recorded');
-  console.log('✓ lifecycle: published → submitted → compared → awarded');
+  assert.match(
+    (await refusal(() => call('awardTender')({ tenderId, supplierId: 'sup_aegis' }))) ?? '',
+    /כבר נבחר זוכה/,
+    'a second award is refused',
+  );
+  console.log('✓ lifecycle: published → submitted → compared → awarded (no award before the comparison, without a winner, or to a non-bidder)');
 
   // ---- participant feedback (publish + award rounds) ----
   const reqs = await getDocs(query(collection(db, 'feedbackRequests'), where('tenderId', '==', tenderId)));
@@ -823,13 +1016,10 @@ async function main() {
   assert.ok(svc.bodyTemplate.includes("בל\"מ מס' {{tender_number}}"), '{{fields}} written into the template');
   assert.equal(svc.params.find((p) => p.key === 'tender_number')?.labelHe, 'מספר הבל"מ', 'labels kept');
   assert.equal(svc.fieldsStatus, 'ready');
-  let missingRequired = false;
-  try {
-    await call('createTender')({ title: 'שירות', bidRequestId: await newRequest(), type: 'service', params: { tender_number: '2026-01' }, team: svcTeam });
-  } catch (e) {
-    missingRequired = /שדה חובה חסר/.test((e as Error).message);
-  }
-  assert.ok(missingRequired, 'an empty required template field is rejected');
+  // An empty required template field is completed in the draft (plan D4/D7): the case is created, the
+  // supervisor lists the field and the publish gate blocks while it stays blank.
+  const blankCase = (await call('createTender')({ title: 'שירות', bidRequestId: await newRequest(), type: 'service', params: { tender_number: '2026-01' }, team: svcTeam })) as { data: { id: string } };
+  assert.ok(blankCase.data.id, 'an empty required template field no longer stops the draft');
   let placeholderRejected = false;
   try {
     await call('createTender')({
@@ -899,6 +1089,7 @@ async function main() {
   assert.equal(autoTender.params.bid_guarantee_amount, '20,000', 'both guarantee fields agree');
   assert.equal(autoTender.params.bid_guarantee_amount_words, 'עשרים אלף שקלים');
   assert.equal(autoTender.params['תוקף אחריות'], '__________', 'not asked in step 2: a blank line to complete in the document');
+  await waitForCheck(autoCase.data.id, 'draft');
   const autoCheck = (await call('runSupervision')({ tenderId: autoCase.data.id })) as {
     data: { findings: { severity: string; message: string }[] };
   };
@@ -924,6 +1115,7 @@ async function main() {
   // Only hard facts block now, so this draft (legal sections missing → warnings) can get its document,
   // and a document not yet sent to review can be regenerated (back to draft-first; old doc kept).
   await call('generateDocument')({ tenderId: autoCase.data.id });
+  await waitForCheck(autoCase.data.id, 'document');
   await call('regenerateDocument')({ tenderId: autoCase.data.id });
   const regen = (await getDoc(doc(db, 'tenders', autoCase.data.id))).data()!;
   assert.equal(regen.documentStatus, 'none', 'back to a draft without a document');

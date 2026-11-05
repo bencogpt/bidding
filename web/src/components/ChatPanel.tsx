@@ -1,49 +1,90 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { collection, doc, serverTimestamp, setDoc } from 'firebase/firestore';
-import { CHAT_MAX_LENGTH, type ChatMessage, type Role } from '@obms/shared';
+import {
+  CHAT_MAX_LENGTH,
+  chatTime,
+  splitMentions,
+  withDaySeparators,
+  type ChatMessage,
+  type Role,
+} from '@obms/shared';
 import { db } from '../lib/firebase';
 import { useAuth } from '../auth/AuthProvider';
 import Avatar from './Avatar';
 
-const pad = (n: number) => String(n).padStart(2, '0');
-// 11:32 for today's messages, 02.11 11:32 for older ones.
-const timeOf = (ms: number) => {
-  const d = new Date(ms);
-  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  return d.toDateString() === new Date().toDateString()
-    ? hm
-    : `${pad(d.getDate())}.${pad(d.getMonth() + 1)} ${hm}`;
-};
+/** Text to start the message with, e.g. "@דני " from a person's card; a new `n` applies it again. */
+export interface ChatSeed {
+  text: string;
+  n: number;
+}
 
-// Internal chat of the case team. Messages are immutable (part of the case record); identity and
-// server time are enforced by Firestore rules. Suppliers never see it.
+/** A message with its @mentions marked (prototype `mention`, line 2229). */
+function MessageText({ text }: { text: string }) {
+  return (
+    <>
+      {splitMentions(text).map((p, i) =>
+        p.mention ? (
+          <span key={i} className="mn">
+            {p.text}
+          </span>
+        ) : (
+          p.text
+        ),
+      )}
+    </>
+  );
+}
+
+/**
+ * The case team chat as the prototype's floating dock (renderTeam, lines 2238–2247; HTML 1700–1704): the case
+ * and its participants on top, the day separators, other people's messages with avatar, name and role, and
+ * the caller's own on the other side without them. Messages are immutable (part of the case record); identity
+ * and server time are enforced by Firestore rules. Suppliers never see it.
+ */
 export default function ChatPanel({
   tenderId,
   title,
+  number,
+  people,
   messages,
+  seed,
   onClose,
 }: {
   tenderId: string;
   title: string;
-  onClose: () => void;
+  number?: string | null;
+  /** The case's participants, shown as avatars in the header. */
+  people: { name: string }[];
   messages: (ChatMessage & { at: number })[];
+  seed?: ChatSeed | null;
+  onClose: () => void;
 }) {
   const { t } = useTranslation();
   const { user, role } = useAuth();
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
-  const bottom = useRef<HTMLDivElement>(null);
+  const log = useRef<HTMLDivElement>(null);
+  const input = useRef<HTMLTextAreaElement>(null);
 
-  // Opening the tab (and every new message while it's open) marks the chat as read.
+  // Opening the dock (and every new message while it's open) marks the chat as read.
   useEffect(() => {
-    bottom.current?.scrollIntoView({ block: 'end' });
+    if (log.current) log.current.scrollTop = log.current.scrollHeight;
     if (!user) return;
     void setDoc(doc(db, 'tenders', tenderId, 'chatReads', user.uid), { lastReadAt: serverTimestamp() }).catch(
       () => undefined,
     );
   }, [messages.length, tenderId, user]);
+
+  // The input takes the focus on opening, and a seed ("@name ") with the cursor after it.
+  useEffect(() => {
+    if (seed) setText(seed.text);
+    const el = input.current;
+    if (!el) return;
+    el.focus();
+    if (seed) requestAnimationFrame(() => el.setSelectionRange(seed.text.length, seed.text.length));
+  }, [seed?.n]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const send = async () => {
     const body = text.trim();
@@ -61,6 +102,7 @@ export default function ChatPanel({
         createdAt: serverTimestamp(),
       });
       setText('');
+      input.current?.focus();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -68,70 +110,83 @@ export default function ChatPanel({
     }
   };
 
+  const items = withDaySeparators(messages, Date.now());
+
   return (
-    <div className="flex h-full flex-col">
-      <div
-        className="flex items-start justify-between gap-3 rounded-t-lg border-b border-paper-2 bg-accent-soft px-5 py-3"
-        title={t('chat.hint')}
-      >
-        <div className="min-w-0">
-          <h3 className="font-display text-lg font-semibold">{t('chat.title')}</h3>
-          <div className="truncate text-xs text-tx-soft">{title}</div>
+    <div className="tdock" role="dialog" aria-label={t('chat.title')}>
+      <div className="tdock-h" title={t('chat.hint')}>
+        <div className="tdock-t">
+          <b>{t('chat.title')}</b>
+          <small>
+            {title}
+            {number && (
+              <>
+                {' · '}
+                <span dir="ltr">{number}</span>
+              </>
+            )}
+          </small>
         </div>
-        <button
-          className="grid h-7 w-7 shrink-0 place-items-center rounded text-tx-soft hover:bg-white/60"
-          onClick={onClose}
-          title={t('chat.close')}
-          aria-label={t('chat.close')}
-        >
-          <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
-            <path d="M2 7h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+        <div className="tdock-p">
+          {people.map((p) => (
+            <span key={p.name} title={p.name} className="inline-flex rounded-full">
+              <Avatar name={p.name} size={24} />
+            </span>
+          ))}
+        </div>
+        <button type="button" className="tdock-x" onClick={onClose} title={t('chat.close')} aria-label={t('common.close')}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+            <path d="M5 12h14" />
           </svg>
         </button>
       </div>
-      <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
-        {messages.length === 0 && <div className="text-sm text-tx-mute">{t('chat.empty')}</div>}
-        {messages.map((m) => {
-          const mine = m.uid === user?.uid;
+      <div className="chat-log" ref={log}>
+        {items.length === 0 && <div className="chat-day">{t('chat.empty')}</div>}
+        {items.map((it) => {
+          if (it.kind === 'day') {
+            return (
+              <div key={it.key} className="chat-day">
+                {it.label}
+              </div>
+            );
+          }
+          const m = it.m;
+          const time = <span className="cm-t" dir="ltr">{chatTime(m.at)}</span>;
+          if (m.uid === user?.uid) {
+            return (
+              <div key={it.key} className="cm me">
+                <div className="cm-body">
+                  <div className="bub" dir="auto">
+                    <MessageText text={m.text} />
+                    {time}
+                  </div>
+                </div>
+              </div>
+            );
+          }
           return (
-            <div key={m.id} className="flex items-end gap-2">
-              {!mine && <Avatar name={m.name} size={28} />}
-              <div className={`min-w-0 ${mine ? 'w-full' : 'max-w-[85%]'}`}>
-                {!mine && (
-                  <div className="mb-1 flex items-center gap-2 text-sm">
-                    <b className="font-semibold">{m.name}</b>
-                    <span className="text-tx-mute">{t(`role.${m.role as Role}`)}</span>
-                  </div>
-                )}
-                <div
-                  className={`rounded-2xl px-4 py-3 text-sm ${mine ? 'bg-accent text-white' : 'bg-paper-2'}`}
-                >
-                  <div className="whitespace-pre-wrap break-words" dir="auto">
-                    {m.text}
-                  </div>
-                  <div className={`mt-1 text-xs ${mine ? 'text-white/70' : 'text-tx-mute'}`} dir="ltr">
-                    {timeOf(m.at)}
-                  </div>
+            <div key={it.key} className="cm">
+              <span className="cm-av">
+                <Avatar name={m.name} size={20} />
+              </span>
+              <div className="cm-body">
+                <div className="cm-meta">
+                  <b>{m.name}</b>
+                  <span>{t(`role.${m.role as Role}`)}</span>
+                </div>
+                <div className="bub" dir="auto">
+                  <MessageText text={m.text} />
+                  {time}
                 </div>
               </div>
             </div>
           );
         })}
-        <div ref={bottom} />
       </div>
-      {error && <div className="px-5 pb-2 text-sm text-red-600">{error}</div>}
-      <div className="flex items-center gap-2 border-t border-paper-2 px-4 py-3">
-        <button
-          className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-accent text-white hover:bg-accent-hover disabled:opacity-50"
-          disabled={sending || !text.trim()}
-          onClick={send}
-          title={t('chat.send')}
-          aria-label={t('chat.send')}
-        >
-          ←
-        </button>
+      {error && <div className="px-3.5 pb-1 text-xs text-red-600">{error}</div>}
+      <div className="chat-in">
         <textarea
-          className="input max-h-28 min-h-10 flex-1 resize-none rounded-full px-4 py-2"
+          ref={input}
           rows={1}
           dir="auto"
           maxLength={CHAT_MAX_LENGTH}
@@ -145,6 +200,16 @@ export default function ChatPanel({
             }
           }}
         />
+        <button
+          type="button"
+          className="send"
+          disabled={sending}
+          onClick={send}
+          title={t('chat.send')}
+          aria-label={t('chat.send')}
+        >
+          ←
+        </button>
       </div>
     </div>
   );

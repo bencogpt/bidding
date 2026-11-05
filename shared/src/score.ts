@@ -138,7 +138,18 @@ export interface DocVersion {
   at: number;
   path: string; // Storage path of the text snapshot
   changeRatio: number | null; // word-level change vs the previous version (0–1)
+  // For the versions tab (plan B6): who edited the document (the Doc's last editor; the creator for version 1),
+  // a one-line "what changed" and how many paragraphs changed. Older versions have none of them.
+  by?: string;
+  summary?: string;
+  changes?: number;
 }
+
+/** One row of a comparison between two versions (unchanged text is collapsed into a "gap" row). */
+export type VersionDiffRow = { kind: 'same' | 'add' | 'del' | 'gap'; text: string };
+
+/** What the versions tab shows for "צפה" (the text) or "השווה לנוכחית" (the rows). */
+export type VersionView = { n: number; at: number; text: string } | { n: number; currentN: number; rows: VersionDiffRow[] };
 
 export function gradeOf(total: number): ScoreGrade {
   if (total >= 85) return 'A';

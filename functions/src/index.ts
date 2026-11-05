@@ -1,5 +1,5 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
-import { onDocumentCreated } from 'firebase-functions/v2/firestore';
+import { onDocumentCreated, onDocumentUpdated } from 'firebase-functions/v2/firestore';
 import { setGlobalOptions } from 'firebase-functions/v2';
 import {
   createTenderInput,
@@ -27,6 +27,9 @@ import {
   searchSuppliersInput,
   refreshTenderDocumentInput,
   runSupervisionInput,
+  decideFindingInput,
+  withFindingKeys,
+  withEmptyFieldsPrinted,
   recomputeCaseScoreInput,
   updateScoringTargetsInput,
   submitFeedbackInput,
@@ -35,17 +38,31 @@ import {
   assignTeamMemberInput,
   setRequiredRolesInput,
   approveTenderInput,
+  claimTeamSlotInput,
+  autoRunOnCreate,
+  documentBecameReady,
+  isUnitRole,
+  unitRequestsFor,
+  type UnitQueueItem,
+  planApproval,
+  APPROVAL_DENIAL_HE,
+  APPROVAL_PERMISSION_DENIALS,
+  finalApprovalDenial,
+  FINAL_APPROVAL_DENIAL_HE,
+  documentBlockers,
   REQUIRE_APPROVALS,
   requiredRolesFor,
   TENDER_TYPE_LABELS_HE,
   missingRoles,
   missingApprovals,
+  blockingApproverRoles,
   memberUidsOf,
   REQUIRED_ROLES_BY_TYPE,
   TEAM_ROLES,
   ROLE_LABELS_HE,
   isSupplierVisible,
   canTransition,
+  manualTransitionDenial,
   templateIdFor,
   toG9Flag,
   parseDocId,
@@ -68,6 +85,9 @@ import {
   hasDocument,
   updateTenderDraftInput,
   generateDocumentInput,
+  reopenTenderInput,
+  getVersionViewInput,
+  type VersionView,
   rerunRequestResearchInput,
   researchDraftInput,
   RESEARCH_DRAFT_MAX_AGE_MS,
@@ -111,6 +131,8 @@ import {
   answersRepo,
   auditRepo,
   usersRepo,
+  supervisionRepo,
+  versionsRepo,
   suppliersRepo,
   submissionsRepo,
   bidDraftsRepo,
@@ -136,6 +158,9 @@ import {
   removeDocumentPermission,
   discardGeneratedDocument,
   readTenderDocText,
+  lockDocument,
+  copyTenderDocument,
+  readVersionSnapshot,
   type GeneratedDoc,
 } from './services/docsService.js';
 import {
@@ -151,11 +176,13 @@ import { findCandidates } from './services/supplierSearch.js';
 import { requiredSkillsFor, skillsCatalog } from './services/skillsRegistry.js';
 import {
   superviseTender,
+  SupervisionBusyError,
   splitConfidential,
   currentDraftDataHash,
   recordVersion,
 } from './services/supervisorService.js';
 import { documentGate, DOCUMENT_GATE_MESSAGE_HE } from './services/draftCalc.js';
+import { contextDiff } from './services/versionDiff.js';
 import { runDraftResearch, runRequestResearch } from './services/requestResearch.js';
 import { publicServiceSummary } from './services/publicSummary.js';
 import { docHash } from './services/supervisorChecks.js';
@@ -236,14 +263,9 @@ function validateParams(
     if (isSystemParam(p) || isFormHidden(p)) continue; // filled by the system / the requester (or not asked at all)
     const v = params[p.key];
     const blank = v === undefined || String(v).trim() === '';
-    if (blank) {
-      const defaulted =
-        p.defaultFrom === 'guarantee_pct' && guaranteeDefault(annualEstimate ?? params[SERVICE_KEYS.estimate]) !== null;
-      if (p.required && !defaulted) {
-        throw new HttpsError('invalid-argument', `שדה חובה חסר: ${hebrewLabel(p.key, p.labelHe)}`);
-      }
-      continue;
-    }
+    // A blank field — required or not — is completed in the draft (plan D4/D7): the supervisor lists it, the
+    // document prints a blank line (a required one with its label) and the publish gate blocks while it stays.
+    if (blank) continue;
     if (p.type === 'number' && !Number.isFinite(Number(v))) {
       throw new HttpsError('invalid-argument', `השדה "${hebrewLabel(p.key, p.labelHe)}" חייב להיות מספר.`);
     }
@@ -625,10 +647,8 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
     throw new HttpsError('invalid-argument', 'טיוטת ה-AI לא נמצאה.');
   }
 
-  // Template fields that are the submission date come from the form's deadline — one source.
-  if (template.params.some(isAutoDeadlineParam) && !input.submissionDeadline) {
-    throw new HttpsError('invalid-argument', 'יש לקבוע מועד הגשה — הוא ממולא אוטומטית במסמך המכרז.');
-  }
+  // The submission deadline (which fills the template's date fields) may still be empty in the draft
+  // (plan D4/D7): it is set in the draft editor, and publishing requires it.
 
   // The case team: one user per required role, validated against the users' actual roles.
   const requiredRoles = requiredRolesFor(input.type, input.extraRoles ?? []);
@@ -679,6 +699,8 @@ export const createTender = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 
     awardedSupplierId: null,
     domainTags: input.domainTags ?? [],
     evaluationCriteria: input.evaluationCriteria ?? [],
+    // Legal and finance (and security if asked) assign their own contact from their home (plan D3).
+    unitRequests: unitRequestsFor(team, input.unitRequests ?? []),
     createdAt: now(),
     updatedAt: now(),
   };
@@ -822,6 +844,12 @@ export const updateTenderDraft = onCall(async (req) => {
   if (!template) throw new HttpsError('failed-precondition', `אין תבנית לסוג המכרז: ${tender.type}`);
   // The public service description already on the draft is kept (it is regenerated only on request).
   const { draftDataHash, changed } = await applyDraftData(caller, tender, template, input, currentPublicBrief(template, tender.params));
+  // The rules check the new data at once (plan B3), so what blocks is always current and no full re-run is
+  // needed before "יצירת מסמך". Only once a first check ran, and not while a run is going.
+  const after = await tendersRepo.get(tender.id);
+  if (changed.length && after?.lastSupervision?.basis === 'draft' && after.supervisionRun?.state !== 'running') {
+    await superviseTender(caller, tender.id, 'edit').catch((e) => console.error('edit re-check failed', e));
+  }
   return { ok: true, draftDataHash, changed };
 });
 
@@ -837,11 +865,9 @@ async function applyDraftData(
   publicBrief: string | undefined,
 ): Promise<{ draftDataHash: string; changed: string[] }> {
 
+  // The deadline may stay empty while drafting (plan D4/D7); publishing requires it.
   const submissionDeadline =
     input.submissionDeadline !== undefined ? input.submissionDeadline : tender.submissionDeadline;
-  if (template.params.some(isAutoDeadlineParam) && !submissionDeadline) {
-    throw new HttpsError('invalid-argument', 'יש לקבוע מועד הגשה — הוא ממולא אוטומטית במסמך המכרז.');
-  }
   const internalBefore = await internalRepo.getParams(tender.id);
   // The edit overlays the current values (public + confidential); validation is the create form's.
   const asked = validateParams(template, { ...tender.params, ...internalBefore, ...(input.params ?? {}) });
@@ -906,6 +932,36 @@ async function applyDraftData(
   return { draftDataHash, changed };
 }
 
+/**
+ * Share a case's Google Doc: the owner writes, the rest of the case team comments or writes by role. Best-effort —
+ * a bad address must not fail the action. Returns the team members without a Google account (skipped).
+ */
+async function grantCaseDocPermissions(
+  tender: TenderDoc,
+  googleDocId: string | null,
+  caller: Pick<Caller, 'uid' | 'email'>,
+): Promise<string[]> {
+  try {
+    const owner = await usersRepo.get(tender.ownerUid);
+    const ownerAddress = googleIdentityOf(owner ?? {}) ?? (caller.uid === tender.ownerUid ? caller.email : undefined);
+    if (ownerAddress) await setDocumentPermissions(googleDocId, { writerEmails: [ownerAddress] });
+    const teamUsers = (await Promise.all(Object.values(tender.team ?? {}).map((uid) => usersRepo.get(uid!)))).filter(
+      (u): u is UserDoc => !!u,
+    );
+    const recipients = splitDocsRecipients(teamUsers);
+    if (recipients.writerEmails.length || recipients.commenterEmails.length) {
+      await setDocumentPermissions(googleDocId, {
+        writerEmails: recipients.writerEmails,
+        commenterEmails: recipients.commenterEmails,
+      });
+    }
+    return recipients.skipped;
+  } catch (err) {
+    console.error(`Docs permissions failed for ${tender.serial}`, err);
+    return [];
+  }
+}
+
 // Draft-first: create the case's document — manager only, and only when the latest inspector check
 // covered exactly the current draft data with no blocking finding (no override).
 export const generateDocument = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 120 }, async (req) => {
@@ -922,9 +978,16 @@ export const generateDocument = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 
     throw new HttpsError('failed-precondition', 'המסמך כבר נוצר או נמצא ביצירה.');
   }
 
+  // Fields still empty are printed as blank lines to complete in the document (plan D7); a required one
+  // carries its label, so the publish gate blocks until it is completed.
+  const printed = withEmptyFieldsPrinted(tender.params, template.params);
+  const toPrint: TenderDoc = { ...tender, params: printed };
   let gen: GeneratedDoc | null = null;
   try {
-    gen = await generateTenderDocument(tender, template);
+    if (JSON.stringify(printed) !== JSON.stringify(tender.params)) {
+      await tendersRepo.replaceDraftData(tender.id, { params: printed });
+    }
+    gen = await generateTenderDocument(toPrint, template);
     await tendersRepo.update(tender.id, {
       googleDocId: gen.googleDocId,
       docExportPath: gen.exportPath,
@@ -934,36 +997,20 @@ export const generateDocument = onCall({ secrets: DOCS_SECRETS, timeoutSeconds: 
     });
   } catch (err) {
     if (gen) await discardGeneratedDocument(tender.id, gen);
+    // Back to the draft as it was: blank lines are only for the created document.
+    await tendersRepo.replaceDraftData(tender.id, { params: tender.params });
     await tendersRepo.update(tender.id, { documentStatus: 'none' });
     console.error(`generateDocument failed for ${tender.serial}`, err);
     throw new HttpsError('internal', 'יצירת המסמך נכשלה — הטיוטה לא השתנתה. ניתן לנסות שוב.');
   }
-  const withDoc: TenderDoc = { ...tender, googleDocId: gen.googleDocId, docExportPath: gen.exportPath, documentStatus: 'generated' };
+  const withDoc: TenderDoc = { ...toPrint, googleDocId: gen.googleDocId, docExportPath: gen.exportPath, documentStatus: 'generated' };
 
   // Docs permissions: owner (writer) + the case team (writer/commenter by role). Best-effort.
-  let skipped: string[] = [];
-  try {
-    const owner = await usersRepo.get(tender.ownerUid);
-    const ownerAddress = googleIdentityOf(owner ?? {}) ?? (caller.uid === tender.ownerUid ? caller.email : undefined);
-    if (ownerAddress) await setDocumentPermissions(gen.googleDocId, { writerEmails: [ownerAddress] });
-    const teamUsers = (await Promise.all(Object.values(tender.team ?? {}).map((uid) => usersRepo.get(uid!)))).filter(
-      (u): u is UserDoc => !!u,
-    );
-    const recipients = splitDocsRecipients(teamUsers);
-    skipped = recipients.skipped;
-    if (recipients.writerEmails.length || recipients.commenterEmails.length) {
-      await setDocumentPermissions(gen.googleDocId, {
-        writerEmails: recipients.writerEmails,
-        commenterEmails: recipients.commenterEmails,
-      });
-    }
-  } catch (err) {
-    console.error(`generateDocument ${tender.serial}: Docs permissions failed`, err);
-  }
+  const skipped = await grantCaseDocPermissions(tender, gen.googleDocId, caller);
   // Version 1 = the document as created (the baseline for document-change scoring).
   try {
     const text = await readTenderDocText(withDoc);
-    await recordVersion(withDoc, text, docHash(text), 'created');
+    await recordVersion(withDoc, text, docHash(text), 'created', caller.name);
   } catch (err) {
     console.error(`generateDocument ${tender.serial}: version 1 not recorded`, err);
   }
@@ -995,7 +1042,7 @@ export const regenerateDocument = onCall(
     if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
     if (!hasDocument(tender)) throw new HttpsError('failed-precondition', 'למכרז עדיין אין מסמך.');
     if (tender.status !== 'draft') {
-      throw new HttpsError('failed-precondition', 'ניתן ליצור מסמך מחדש רק לפני שליחה לבדיקה פנימית.');
+      throw new HttpsError('failed-precondition', 'ניתן ליצור מסמך מחדש רק לפני האישור הסופי.');
     }
     const template = await templatesRepo.getForCase(tender.type);
     if (!template) throw new HttpsError('failed-precondition', `אין תבנית לסוג המכרז: ${tender.type}`);
@@ -1010,6 +1057,8 @@ export const regenerateDocument = onCall(
       docExportPath: null,
       replacedDocuments: [...(tender.replacedDocuments ?? []), ...(old ? [old] : [])],
     });
+    // Approvals were given on the old document; the new one starts without them.
+    await tendersRepo.clearApprovals(tender.id);
     await auditRepo.append({
       entityType: 'tender',
       entityId: tender.id,
@@ -1030,6 +1079,10 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
   const input = parseInput(transitionTenderInput, req.data);
   const current = await tendersRepo.get(input.tenderId);
   if (!current) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  // Only the workflow up to publication is the manager's to move; responses, evaluated and awarded follow from
+  // their own actions (a submission, the comparison, choosing the winner).
+  const denial = manualTransitionDenial(current.status, input.to);
+  if (denial) throw new HttpsError('failed-precondition', denial);
 
   // Internal review happens in the document — it must exist (draft-first).
   if (input.to === 'internal_review' && canTransition(current.status, 'internal_review') && !hasDocument(current)) {
@@ -1046,10 +1099,18 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
     }
   }
 
+  // The manager's final approval (plan D1): the document exists and nothing blocks; it locks the case.
+  if (input.to === 'ready' && canTransition(current.status, 'ready')) {
+    const doc = hasDocument(current);
+    const denial = finalApprovalDenial({ hasDocument: doc, blockers: documentBlockers({ hasDocument: doc, lastSupervision: current.lastSupervision }) });
+    if (denial) throw new HttpsError('failed-precondition', FINAL_APPROVAL_DENIAL_HE[denial]);
+  }
+
   // Final approval and publishing: every required role has signed off in this review round.
   if (REQUIRE_APPROVALS && (input.to === 'ready' || input.to === 'published') && canTransition(current.status, input.to)) {
+    // Information security approves as an extra participant; it doesn't block (plan D2).
     const waiting = missingApprovals(
-      current.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[current.type],
+      blockingApproverRoles(current.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[current.type]),
       current.team,
       current.approvals,
     );
@@ -1058,6 +1119,15 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
         'failed-precondition',
         `${input.to === 'published' ? 'לא ניתן לפרסם' : 'לא ניתן לאשר סופית'} — ממתין לאישור: ${waiting.map(roleLabel).join(', ')}.`,
       );
+    }
+  }
+
+  // A template whose date fields come from the submission deadline can't be published without one (the deadline
+  // may stay empty while drafting — plan D7; it used to be required at creation).
+  if (input.to === 'published' && canTransition(current.status, 'published') && !current.submissionDeadline) {
+    const tpl = await templatesRepo.getForCase(current.type);
+    if (tpl?.params.some(isAutoDeadlineParam)) {
+      throw new HttpsError('failed-precondition', 'יש לקבוע מועד הגשת הצעות לפני הפרסום לספקים.');
     }
   }
 
@@ -1075,7 +1145,16 @@ export const transitionTender = onCall(SUPERVISED, async (req) => {
   if (input.to === 'published' && canTransition(current.status, 'published')) {
     gate = await supervisorGate(caller, input.tenderId, 'prepublish', input.overrideReason);
   }
+  const from = current.status;
   await transition(caller, input.tenderId, input.to);
+  // Locked by the final approval; sent back to writing, it is open again.
+  if (input.to === 'ready' && from !== 'ready') {
+    await tendersRepo.update(input.tenderId, { lockedAt: now() });
+    // The Google Doc is locked with the case: from now on everyone, the manager included, can only read it.
+    await lockDocument(current.googleDocId);
+  }
+  if (input.to === 'internal_review' && from === 'ready') await tendersRepo.update(input.tenderId, { lockedAt: null });
+  if (input.to === 'published' && from !== 'published') await tendersRepo.update(input.tenderId, { publishedAt: now() });
 
   if (input.to === 'published' && gate) {
     // Cache the exported HTML at publish so suppliers load it fast (no live Google export).
@@ -1210,23 +1289,28 @@ export const grantAccess = onCall({ secrets: DOCS_SECRETS }, async (req) => {
 
 // Assign (or clear) the user holding one role slot of the case team. The previous holder loses
 // access to the case, its document and its chat. Allowed in any status (people get replaced).
-export const assignTeamMember = onCall({ secrets: DOCS_SECRETS }, async (req) => {
-  const caller = requireManager(req);
-  const input = parseInput(assignTeamMemberInput, req.data);
-  const tender = await tendersRepo.get(input.tenderId);
-  if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+/**
+ * Put one user in a case's team slot (or empty it): access, Docs permission and audit. Shared by the manager's
+ * team edit and a unit assigning its own contact (plan D3).
+ */
+async function setTeamSlot(
+  caller: Caller,
+  tender: TenderDoc,
+  role: TeamRole,
+  uid: string | null,
+): Promise<{ docsSkipped: string[] }> {
   const team: CaseTeam = { ...(tender.team ?? {}) };
-  const prevUid = team[input.role] ?? null;
-  if (prevUid === input.uid) return { ok: true, docsSkipped: [] as string[] };
+  const prevUid = team[role] ?? null;
+  if (prevUid === uid) return { docsSkipped: [] };
 
   let newUser: UserDoc | null = null;
-  if (input.uid) {
+  if (uid) {
     ({
       users: [newUser],
-    } = await resolveTeam({ [input.role]: input.uid }));
-    team[input.role] = input.uid;
+    } = await resolveTeam({ [role]: uid }));
+    team[role] = uid;
   } else {
-    delete team[input.role];
+    delete team[role];
   }
   const memberUids = memberUidsOf(tender.ownerUid, team);
 
@@ -1246,9 +1330,72 @@ export const assignTeamMember = onCall({ secrets: DOCS_SECRETS }, async (req) =>
     actorName: caller.name,
     action: newUser ? 'team_assigned' : 'team_unassigned',
     prevState: prevUid,
-    newState: newUser ? `${input.role}:${newUser.displayName}` : input.role,
+    newState: newUser ? `${role}:${newUser.displayName}` : role,
   });
-  return { ok: true, docsSkipped: skipped };
+  return { docsSkipped: skipped };
+}
+
+export const assignTeamMember = onCall({ secrets: DOCS_SECRETS }, async (req) => {
+  const caller = requireManager(req);
+  const input = parseInput(assignTeamMemberInput, req.data);
+  const tender = await tendersRepo.get(input.tenderId);
+  if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  const { docsSkipped } = await setTeamSlot(caller, tender, input.role, input.uid);
+  return { ok: true, docsSkipped };
+});
+
+// The cases waiting for a contact from the caller's unit (plan D3): legal, finance or security users see
+// them on their home with the colleagues who can take each one.
+export const unitQueue = onCall(async (req) => {
+  const caller = requireInternal(req);
+  if (!isUnitRole(caller.role)) return { items: [] as UnitQueueItem[] };
+  const role = caller.role;
+  const open = (await tendersRepo.listUnitRequests(role)).filter(
+    (t) => !t.team?.[role] && (t.status === 'draft' || t.status === 'internal_review'),
+  );
+  if (!open.length) return { items: [] as UnitQueueItem[] };
+  const colleagues = (await usersRepo.listByRole(role)).map((u) => ({ uid: u.uid, name: u.displayName }));
+  const owners = new Map<string, string>();
+  for (const t of open) {
+    if (!owners.has(t.ownerUid)) owners.set(t.ownerUid, (await usersRepo.get(t.ownerUid))?.displayName ?? '');
+  }
+  const items: UnitQueueItem[] = open
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .map((t) => ({
+      tenderId: t.id,
+      ref: t.serial ?? t.id,
+      name: t.title,
+      ownerName: owners.get(t.ownerUid) ?? '',
+      createdAt: t.createdAt,
+      role,
+      candidates: colleagues,
+    }));
+  return { items };
+});
+
+// A unit assigns its contact on a case that asked for one (plan D3): the caller's own role only, a colleague
+// from the same unit (or themselves), and only while the slot is empty or theirs.
+export const claimTeamSlot = onCall({ secrets: DOCS_SECRETS }, async (req) => {
+  const caller = requireInternal(req);
+  const input = parseInput(claimTeamSlotInput, req.data);
+  if (caller.role !== input.role) {
+    throw new HttpsError('permission-denied', 'אפשר לשייך איש קשר רק מטעם היחידה שלך.');
+  }
+  const tender = await tendersRepo.get(input.tenderId);
+  if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  if (!tender.unitRequests?.includes(input.role)) {
+    throw new HttpsError('failed-precondition', 'המכרז לא ביקש איש קשר מהיחידה שלך.');
+  }
+  const current = tender.team?.[input.role];
+  if (current && current !== caller.uid) {
+    throw new HttpsError('failed-precondition', 'כבר שויך איש קשר מהיחידה שלך למכרז זה.');
+  }
+  const target = await usersRepo.get(input.uid);
+  if (!target || target.role !== input.role) {
+    throw new HttpsError('invalid-argument', 'איש הקשר חייב להיות מאותה יחידה.');
+  }
+  const { docsSkipped } = await setTeamSlot(caller, tender, input.role, input.uid);
+  return { ok: true, docsSkipped };
 });
 
 // The manager may require additional roles on a case; the type's default roles always stay.
@@ -1279,29 +1426,51 @@ export const approveTender = onCall(async (req) => {
   const input = parseInput(approveTenderInput, req.data);
   const tender = await tendersRepo.get(input.tenderId);
   if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
-  if (tender.status !== 'internal_review') {
-    throw new HttpsError('failed-precondition', 'ניתן לאשר רק בזמן בדיקה פנימית.');
-  }
-  const required = tender.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[tender.type];
-  const roles = required.filter((r) => tender.team?.[r] === caller.uid);
-  if (!roles.length) {
-    throw new HttpsError('permission-denied', 'אינך משובץ בתפקיד שנדרש לאשר את המכרז.');
-  }
-  for (const role of roles) {
-    await tendersRepo.setApproval(
-      tender.id,
-      role,
-      input.approve ? { uid: caller.uid, name: caller.name, at: now() } : null,
+  // The rules (order, on-behalf, blocking) live in shared/approvalRules.ts — plan B4, decisions D1/D1a/D1d.
+  const doc = hasDocument(tender);
+  const holderUid = input.onBehalfOf ? tender.team?.[input.onBehalfOf] : undefined;
+  const holderName = holderUid ? (await usersRepo.get(holderUid))?.displayName : undefined;
+  const plan = planApproval(
+    {
+      status: tender.status,
+      hasDocument: doc,
+      ownerUid: tender.ownerUid,
+      team: tender.team,
+      approvals: tender.approvals,
+      requiredRoles: tender.requiredRoles ?? REQUIRED_ROLES_BY_TYPE[tender.type],
+      blockers: documentBlockers({ hasDocument: doc, lastSupervision: tender.lastSupervision }),
+    },
+    {
+      uid: caller.uid,
+      name: caller.name,
+      approve: input.approve,
+      ...(input.onBehalfOf ? { onBehalfOf: input.onBehalfOf } : {}),
+      ...(input.reason !== undefined ? { reason: input.reason } : {}),
+      ...(holderName ? { holderName } : {}),
+    },
+    now(),
+  );
+  if (!plan.ok) {
+    throw new HttpsError(
+      APPROVAL_PERMISSION_DENIALS.includes(plan.denial) ? 'permission-denied' : 'failed-precondition',
+      APPROVAL_DENIAL_HE[plan.denial],
     );
+  }
+  for (const w of plan.writes) {
+    await tendersRepo.setApproval(tender.id, w.role, w.approval);
     await auditRepo.append({
       entityType: 'tender',
       entityId: tender.id,
       tenderId: tender.id,
       actorUid: caller.uid,
       actorName: caller.name,
-      action: input.approve ? 'approve_tender' : 'withdraw_approval',
+      action: plan.audit,
       prevState: null,
-      newState: role,
+      newState: w.role,
+      // On behalf: whose approval it stands for and why (shown in the activity tab).
+      ...(input.onBehalfOf
+        ? { detail: `${holderName ?? w.role}${w.approval?.reason ? ` · ${w.approval.reason}` : ''}` }
+        : {}),
     });
   }
   return { ok: true };
@@ -1681,14 +1850,23 @@ export const awardTender = onCall(async (req) => {
   const input = parseInput(awardTenderInput, req.data);
   const tender = await tendersRepo.get(input.tenderId);
   if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  // Everything is checked before anything is written: a refused award leaves no winner behind.
+  if (tender.status === 'awarded') throw new HttpsError('failed-precondition', 'כבר נבחר זוכה במכרז הזה.');
+  if (!canTransition(tender.status, 'awarded')) {
+    throw new HttpsError('failed-precondition', 'ניתן לבחור זוכה רק לאחר השוואת ההצעות.');
+  }
   const supplier = await suppliersRepo.get(input.supplierId);
   if (!supplier) throw new HttpsError('not-found', 'ספק לא נמצא.');
+  // The winner is one of the bidders.
+  if (!(await submissionsRepo.get(input.tenderId, input.supplierId))) {
+    throw new HttpsError('failed-precondition', 'הספק לא הגיש הצעה במכרז הזה.');
+  }
 
-  await tendersRepo.update(input.tenderId, {
+  // The winner and the status are written together, in the transaction that checks the move once more.
+  await transition(caller, input.tenderId, 'awarded', {
     awardedSupplierId: input.supplierId,
     awardDate: now(),
   });
-  await transition(caller, input.tenderId, 'awarded');
   await auditRepo.append({
     entityType: 'tender',
     entityId: input.tenderId,
@@ -1773,10 +1951,161 @@ export const runSupervision = onCall(SUPERVISED, async (req) => {
   if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
   requireCaseAccess(caller, tender);
   // Two tabs opening a new case must not run the initial check twice.
-  if (input.initial && tender.lastSupervision) return { skipped: true as const };
-  const report = await superviseTender(caller, input.tenderId, input.initial ? 'created' : 'manual');
+  if (input.initial && (tender.lastSupervision || tender.supervisionRun?.state === 'running')) {
+    return { skipped: true as const };
+  }
+  let report: SupervisionReport;
+  try {
+    report = await superviseTender(caller, input.tenderId, input.initial ? 'created' : 'manual');
+  } catch (e) {
+    // Someone else's run is still going (plan B1): the initial check is then simply not needed.
+    if (e instanceof SupervisionBusyError) {
+      if (input.initial) return { skipped: true as const };
+      throw new HttpsError('failed-precondition', e.message);
+    }
+    throw e;
+  }
   await refreshCaseScore(SYSTEM, input.tenderId);
   return report;
+});
+
+// A stored version of the document: its text ("צפה"), or its comparison with the current version
+// ("השווה לנוכחית") — internal case members only (plan B6).
+export const getVersionView = onCall(async (req) => {
+  const caller = requireInternal(req);
+  const input = parseInput(getVersionViewInput, req.data);
+  const tender = await tendersRepo.get(input.tenderId);
+  if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  requireCaseAccess(caller, tender);
+  const list = await versionsRepo.list(tender.id);
+  const version = list.find((v) => v.n === input.n);
+  if (!version) throw new HttpsError('not-found', 'הגרסה לא נמצאה.');
+  const text = await readVersionSnapshot(version.path);
+  if (!input.compare) return { n: version.n, at: version.at, text } satisfies VersionView;
+  const current = list[list.length - 1];
+  const currentText = current.n === version.n ? text : await readVersionSnapshot(current.path);
+  return { n: version.n, currentN: current.n, rows: contextDiff(text, currentText) } satisfies VersionView;
+});
+
+// Reopen a locked case (plan B5): a new, editable copy of its document and a clean round of approvals. The
+// locked original stays as approved (listed in `lockedDocuments`). Only the case owner, and only before
+// publication — a published document is amended, not reopened.
+export const reopenTender = onCall({ ...SUPERVISED, secrets: [...DOCS_SECRETS, 'ANTHROPIC_API_KEY'] }, async (req) => {
+  const caller = requireManager(req);
+  const input = parseInput(reopenTenderInput, req.data);
+  const tender = await tendersRepo.get(input.tenderId);
+  if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  if (tender.status !== 'ready') {
+    throw new HttpsError('failed-precondition', 'ניתן לפתוח מחדש רק מסמך נעול, לפני הפרסום לספקים.');
+  }
+  const copy = await copyTenderDocument(tender);
+  try {
+    await transition(caller, tender.id, 'internal_review'); // ready → internal_review (audited)
+    await tendersRepo.clearApprovals(tender.id);
+    await tendersRepo.update(tender.id, {
+      googleDocId: copy.googleDocId,
+      docExportPath: copy.exportPath,
+      documentGeneratedAt: now(),
+      documentGeneratedBy: caller.uid,
+      lockedAt: null,
+      lockedDocuments: [
+        ...(tender.lockedDocuments ?? []),
+        {
+          googleDocId: tender.googleDocId,
+          docExportPath: tender.docExportPath,
+          lockedAt: tender.lockedAt ?? null,
+          reopenedAt: now(),
+          reopenedBy: caller.uid,
+          approvals: tender.approvals ?? {},
+        },
+      ],
+    });
+  } catch (err) {
+    await discardGeneratedDocument(tender.id, copy); // the copy is not used: undo it, the case stays locked
+    throw err;
+  }
+  const reopened = (await tendersRepo.get(tender.id)) ?? tender;
+  const skipped = await grantCaseDocPermissions(reopened, copy.googleDocId, caller);
+  await auditRepo.append({
+    entityType: 'tender',
+    entityId: tender.id,
+    tenderId: tender.id,
+    actorUid: caller.uid,
+    actorName: caller.name,
+    action: 'tender_reopened',
+    prevState: 'ready',
+    newState: 'internal_review',
+    detail: 'נוצרה גרסה חדשה מקושרת. המקור נשאר נעול',
+  });
+  await autoSupervise(tender.id); // the agent checks the new document right away
+  return { ok: true as const, docsSkipped: skipped };
+});
+
+// The supervising agent starts by itself (plan B1): the first check of a new draft, and the check of its
+// document once created — exactly once, whoever opens the case and even with no browser open. A run someone
+// already started covers it (this one then skips). "↻ הרץ בדיקה" stays for manual runs.
+async function autoSupervise(tenderId: string): Promise<void> {
+  try {
+    await superviseTender(SYSTEM, tenderId, 'created');
+    await refreshCaseScore(SYSTEM, tenderId);
+  } catch (err) {
+    if (err instanceof SupervisionBusyError) return;
+    console.error(`auto supervision ${tenderId} failed`, err);
+  }
+}
+
+export const superviseOnTenderCreated = onDocumentCreated(
+  { document: 'tenders/{tenderId}', ...SUPERVISED },
+  async (event) => {
+    const data = event.data?.data() as TenderDoc | undefined;
+    if (!data || !autoRunOnCreate(data)) return; // already checked (event redelivery)
+    await autoSupervise(event.params.tenderId);
+  },
+);
+
+export const superviseOnDocumentReady = onDocumentUpdated(
+  { document: 'tenders/{tenderId}', ...SUPERVISED },
+  async (event) => {
+    const before = event.data?.before.data() as TenderDoc | undefined;
+    const after = event.data?.after.data() as TenderDoc | undefined;
+    if (!before || !after || !documentBecameReady(before, after)) return; // any other update: nothing to do
+    await autoSupervise(event.params.tenderId);
+  },
+);
+
+// The manager decides on findings of the latest check (plan B2): incorporated — the next check verifies it —
+// or left as is. Warnings only: a blocking finding goes away when a check no longer finds it, never by a mark.
+export const decideFinding = onCall(async (req) => {
+  const caller = requireManager(req);
+  const input = parseInput(decideFindingInput, req.data);
+  const tender = await tendersRepo.get(input.tenderId);
+  if (!tender) throw new HttpsError('not-found', 'מכרז לא נמצא.');
+  if (!['draft', 'internal_review', 'ready'].includes(tender.status)) {
+    throw new HttpsError('failed-precondition', 'ניתן להחליט על ממצאים רק לפני הפרסום.');
+  }
+  const last = tender.lastSupervision ? await supervisionRepo.get(tender.id, tender.lastSupervision.runId) : null;
+  if (!last) throw new HttpsError('failed-precondition', 'הסוכן המפקח טרם בדק את המכרז.');
+  const findings = withFindingKeys(last.findings, last.basis ?? 'document');
+  const decisions = { ...(tender.findingDecisions ?? {}) };
+  for (const key of input.keys) {
+    const f = findings.find((x) => x.key === key);
+    if (!f) throw new HttpsError('failed-precondition', 'הממצא אינו בבדיקה האחרונה. יש לרענן את הדף.');
+    if (f.severity === 'block') throw new HttpsError('failed-precondition', 'ממצא חוסם מטופל בתיקון, לא בסימון.');
+    decisions[key] = { action: input.action, by: caller.uid, byName: caller.name, at: now() };
+  }
+  await tendersRepo.setFindingDecisions(tender.id, decisions);
+  await auditRepo.append({
+    entityType: 'tender',
+    entityId: tender.id,
+    tenderId: tender.id,
+    actorUid: caller.uid,
+    actorName: caller.name,
+    action: input.action === 'applied' ? 'finding_applied' : 'finding_skipped',
+    prevState: null,
+    newState: String(input.keys.length),
+    detail: input.keys.slice(0, 10).join(', '),
+  });
+  return { ok: true as const };
 });
 
 // Read-only catalog of the skills framework the system enforces (Templates page).

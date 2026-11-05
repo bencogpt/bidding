@@ -34,6 +34,10 @@ import type {
   DeleteInternalUserInput,
   RefreshTenderDocumentInput,
   RunSupervisionInput,
+  DecideFindingInput,
+  ReopenTenderInput,
+  GetVersionViewInput,
+  VersionView,
   SetTemplateInternalFieldsInput,
   RecomputeCaseScoreInput,
   UpdateScoringTargetsInput,
@@ -45,6 +49,8 @@ import type {
   SkillTipsRun,
   SkillsCatalog,
   AssignTeamMemberInput,
+  ClaimTeamSlotInput,
+  UnitQueueItem,
   AnalyzeTemplateFieldsInput,
   ApplyTemplateConversionInput,
   ConversionRun,
@@ -98,6 +104,9 @@ export const api = {
     }
   >('createTender'),
   assignTeamMember: call<AssignTeamMemberInput, { ok: true; docsSkipped: string[] }>('assignTeamMember'),
+  // A unit's cases waiting for its contact, and assigning one (plan D3).
+  unitQueue: call<Record<string, never>, { items: UnitQueueItem[] }>('unitQueue'),
+  claimTeamSlot: call<ClaimTeamSlotInput, { ok: true; docsSkipped: string[] }>('claimTeamSlot'),
   setRequiredRoles: call<SetRequiredRolesInput, { requiredRoles: TeamRole[] }>('setRequiredRoles'),
   approveTender: call<ApproveTenderInput, { ok: true }>('approveTender'),
   backfillSerials: call<Record<string, never>, { assigned: number; total: number }>('backfillSerials'),
@@ -111,6 +120,12 @@ export const api = {
     'refreshTenderDocument',
   ),
   runSupervision: call<RunSupervisionInput, SupervisionReport | { skipped: true }>('runSupervision'),
+  // Incorporate / leave as is a warning of the latest check (plan B2).
+  decideFinding: call<DecideFindingInput, { ok: true }>('decideFinding'),
+  // Reopen a locked case: a new editable copy of the document, a clean round of approvals (plan B5).
+  reopenTender: call<ReopenTenderInput, { ok: true; docsSkipped: string[] }>('reopenTender'),
+  // A stored version of the document, or its comparison with the current one (the versions tab).
+  getVersionView: call<GetVersionViewInput, VersionView>('getVersionView'),
   recomputeCaseScore: call<RecomputeCaseScoreInput, CaseScore>('recomputeCaseScore'),
   backfillCaseScores: call<Record<string, never>, { scored: number; failed: string[] }>(
     'backfillCaseScores',

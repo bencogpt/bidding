@@ -11,6 +11,13 @@ import type { SystemFill } from './templates.js';
 
 export const BLANK_LINE = '__________';
 
+/**
+ * A required field still empty when the document is created (plan D7): printed as a blank line with its
+ * label, completed by hand in the document. The publish gate blocks while any is left.
+ */
+export const requiredBlank = (labelHe: string) => `${BLANK_LINE} (להשלמה: ${labelHe})`;
+export const REQUIRED_BLANK_RE = /_{10} \(להשלמה: ([^)\n]+)\)/g;
+
 /** Keys the formulas read. */
 export const OPTION_KEYS = { count: 'option_periods_count', months: 'option_period_months' } as const;
 
