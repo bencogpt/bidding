@@ -451,6 +451,29 @@ export default function TenderCreate() {
               );
             })}
           </div>
+          {swapTo && (
+            <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-accent bg-accent-soft px-3.5 py-2.5 text-[13px]">
+              <span className="flex-1">{t('create.swapWarn', { type: t(`type.${swapTo}`) })}</span>
+              <button
+                type="button"
+                className="btn btn-gold btn-sm"
+                onClick={() => {
+                  pickType(swapTo);
+                  setSwapTo(null);
+                }}
+              >
+                {t('create.swapOk')}
+              </button>
+              <button type="button" className="btn btn-sm" onClick={() => setSwapTo(null)}>
+                {t('create.swapNo')}
+              </button>
+            </div>
+          )}
+          {!type && (
+            <div className="mt-3 rounded-lg border border-dashed border-black/10 p-3.5 text-center text-[13px] text-tx-soft">
+              {suggested ? t('create.suggestHint', { type: t(`type.${suggested}`) }) : t('create.pickHint')}
+            </div>
+          )}
           {drafting && (
             <div
               role="status"
